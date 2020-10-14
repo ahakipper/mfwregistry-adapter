@@ -11,6 +11,11 @@ import (
     "time"
 )
 
+const (
+    CampainTimeout     = 10
+    LeaderChangePeriod = 2
+)
+
 // Indicates the prefix key for participating in the campaign, store in etcd
 var campaignCenter = "/paas/mfwregistry-k8sadapter"
 
@@ -84,7 +89,7 @@ func NewCandidate(ctx context.Context, etcdclient *clientv3.Client) (can Candida
     cd.election = concurrency.NewElection(session, campaignCenter)
 
     // sleep a while
-    time.Sleep(time.Millisecond * 1000)
+    // time.Sleep(time.Millisecond * 1000)
 
     return cd, nil
 }
@@ -108,7 +113,7 @@ func (c *candidate) NewElectionSession(timeout time.Duration) {
     }
     c.election = concurrency.NewElection(session, campaignCenter)
     // sleep a while
-    time.Sleep(time.Millisecond * 1000)
+    // time.Sleep(time.Millisecond * 1000)
 }
 
 func (c *candidate) Wait() {
@@ -120,14 +125,15 @@ func (c *candidate) Wait() {
         default:
             isLeader := c.IsLeader()
             for _, call := range c.callBackFuncs {
-                // here: must use goroutine for asynchronous notification to prevent it from blocking elections
+                // Here note!!!!
+                // must use goroutine for asynchronous notification to prevent it from blocking elections
                 go call(isLeader)
             }
             if !isLeader {
-                c.NewElectionSession(2 * time.Second)
-                c.Campaign(2 * time.Second)
+                c.NewElectionSession(CampainTimeout * time.Second)
+                c.Campaign(CampainTimeout * time.Second)
             }
-            time.Sleep(2 * time.Second)
+            time.Sleep(LeaderChangePeriod * time.Second)
         }
     }
 }

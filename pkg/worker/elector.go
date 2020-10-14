@@ -53,7 +53,7 @@ func NewElector(ctx context.Context, leaderChCh chan bool) (Elector, error) {
 // of leader changes
 func (w *ElectWorker) ElectWait() {
     // start election campaign
-    w.candidate.Campaign(10 * time.Second)
+    w.candidate.Campaign(election.CampainTimeout * time.Second)
 
     go w.syncStoppedState()
 

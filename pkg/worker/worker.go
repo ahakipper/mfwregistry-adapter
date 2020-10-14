@@ -2,6 +2,7 @@ package worker
 
 import (
     "context"
+    "github.com/k0kubun/pp"
     v2 "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
 )
 
@@ -48,15 +49,15 @@ func (w *Worker) AddEventHandler(opt OperateType, handler EventResourceHandler) 
 func (w *Worker) InitEventHandlers() {
     w.Handlers = make(map[OperateType]EventResourceHandler)
     w.AddEventHandler(OperateTypeADD, func(e Event) (err error) {
-        // pp.Println(e.Operate, e.Data.InstanceId)
+        pp.Println(e.Operate, e.Data.InstanceId)
         return
     })
     w.AddEventHandler(OperateTypeDELETE, func(e Event) (err error) {
-        // pp.Println(e.Operate, e.Data.InstanceId)
+        pp.Println(e.Operate, e.Data.InstanceId)
         return
     })
     w.AddEventHandler(OperateTypeUPDATE, func(e Event) (err error) {
-        // pp.Println(e.Operate, e.Data.InstanceId)
+        pp.Println(e.Operate, e.Data.InstanceId)
         return
     })
 }

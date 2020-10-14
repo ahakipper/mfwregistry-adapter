@@ -7,7 +7,6 @@ import (
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/resource"
     worker "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/worker"
     "sync"
-    "time"
 )
 
 // Distribute Core Server configuration resource provider
@@ -35,12 +34,14 @@ type Server struct {
 
 // Server Init
 func NewServer() (*Server, error) {
+
     // new master elector
     ectx, ecancel := context.WithCancel(context.Background())
     // this channel must have a buffer, otherwise, the operation of leader change notification of the elector that sendting to
     // the channel may be blocked.
     leaderChanges := make(chan bool, 2048)
     elector, err := worker.NewElector(ectx, leaderChanges)
+
     if err != nil {
         return nil, err
     }
@@ -105,7 +106,6 @@ func (s *Server) Run() {
             // break the loop
             breaked = true
         }
-        time.Sleep(2 * time.Second)
     }
 
     //

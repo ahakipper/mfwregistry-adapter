@@ -47,7 +47,7 @@ to quickly create a Cobra application.`,
         }
 
         // run
-        server.Run()
+        go server.Run()
         // notify signal
         c := make(chan os.Signal)
         signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGTERM)

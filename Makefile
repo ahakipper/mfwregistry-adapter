@@ -8,9 +8,6 @@ ENV ?= dev
 OS ?= linux
 DOCKER_VERSION ?= latest
 
-packstatic:
-	go-bindata -pkg config -o config/bindata.go config/*
-
 build:
 	GOOS=$(OS) go build -v 
 

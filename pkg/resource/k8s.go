@@ -128,7 +128,6 @@ func (k *k8s) eventAdd(key string, triggerTime int64) {
     if ok && len(items) > 0 {
         pod := items[0].(*v1.Pod)
         instance := formatInstance(pod)
-        instance = instance
         // callback
         k.worker.Handle(worker.Event{
             Trigger: triggerTime,
@@ -368,6 +367,7 @@ func formatCpuSize(r *resource.Quantity) (count float32) {
     return
 }
 
+// formatMemorySize is responsible for formatting the memory value of the instance
 func formatMemorySize(r *resource.Quantity) (memory int32) {
     memoryInt, _ := r.AsInt64()
     memoryStr := r.String()
@@ -379,6 +379,7 @@ func formatMemorySize(r *resource.Quantity) (memory int32) {
     return
 }
 
+// formatState is responsible for formatting the state of the instance
 func formatState(pod *v1.Pod) (state string) {
 
     if formatContainerEnabled(pod) {
