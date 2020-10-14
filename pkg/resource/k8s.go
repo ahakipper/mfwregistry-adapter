@@ -3,8 +3,8 @@ package resource
 import (
     "context"
     sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/worker"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/tools/log"
     client "gitlab.mfwdev.com/servicemesh/robot"
     v1 "k8s.io/api/core/v1"
     "k8s.io/apimachinery/pkg/api/resource"
@@ -72,7 +72,7 @@ func (k *k8s) Start() {
     // make sure all task done
     k.monitor()
 
-    log.Info("k8s resource worker stopped")
+    log.Logger.Info("k8s resource worker stopped")
 }
 
 // monitor k8s pod changes
@@ -87,7 +87,7 @@ func (k *k8s) monitor() {
             // get pod changes from k8s client
             obj, err := k.robot.Pop()
             if err != nil {
-                log.Error("K8S watch error: ", err)
+                log.Logger.Error("K8S watch error: ", err)
                 return
             }
             //
@@ -106,7 +106,7 @@ func (k *k8s) monitor() {
     }
 
 monitorEnd:
-    log.Info("exit the k8s monitor")
+    log.Logger.Info("exit the k8s monitor")
 }
 
 // eventAdd get pod info by key, find an instance from mysql where health_state != Running
@@ -133,12 +133,12 @@ func (k *k8s) eventUpdate(key string, triggerTime int64) {
         pod := items[0].(*v1.Pod)
         // populate pod info to instance
         if pod == nil {
-            log.Errorf("time [%d] delete error due to nil instance", triggerTime)
+            log.Logger.Errorf("time [%d] delete error due to nil instance", triggerTime)
             return
         }
         instance := formatInstance(pod)
         instance = instance
-        log.Infof("time [%d] delete instance: %s", triggerTime, pod.Name)
+        log.Logger.Infof("time [%d] delete instance: %s", triggerTime, pod.Name)
         // TODO Callback
     }
 }
@@ -150,7 +150,7 @@ func (k *k8s) eventDelete(key string, triggerTime int64) {
         Enabled:    false,
         State:      InstanceOffline,
     }
-    log.Info("delete instance to subject", string(instance.InstanceId))
+    log.Logger.Info("delete instance to subject", string(instance.InstanceId))
     // TODO callback
 }
 
@@ -299,7 +299,7 @@ func formatCpuSize(r *resource.Quantity) (count float32) {
         reg := regexp.MustCompile(`\d+`)
         c, err := strconv.Atoi(string(reg.Find([]byte(cpuStr))))
         if err != nil {
-            log.Error("format cpu error: cpu=", cpuStr)
+            log.Logger.Error("format cpu error: cpu=", cpuStr)
         }
         count = float32(c) / 1000
     } else {

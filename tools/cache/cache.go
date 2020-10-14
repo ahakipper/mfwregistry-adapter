@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/tools/log"
+	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
 )
 
 // Table is a cache with sync.Map

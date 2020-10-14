@@ -6,7 +6,7 @@ import (
     "github.com/coreos/etcd/clientv3"
     "github.com/coreos/etcd/clientv3/concurrency"
     uuid "github.com/satori/go.uuid"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/tools/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
     "sync"
     "time"
 )
@@ -115,7 +115,7 @@ func (c *candidate) Wait() {
     for {
         select {
         case <-c.ctx.Done():
-            log.Info("exit the candidate")
+            log.Logger.Info("exit the candidate")
             return
         default:
             isLeader := c.IsLeader()
@@ -143,7 +143,7 @@ func (c *candidate) Campaign(timeout time.Duration) (err error) {
         }
         return
     }
-    log.Info("Campaign finish, I`m leader")
+    log.Logger.Info("Campaign finish, I`m leader")
 
     return nil
 }
@@ -160,7 +160,7 @@ func (c *candidate) Resign() (err error) {
     if err = c.election.Resign(c.ctx); err != nil {
         return
     }
-    log.Info("leader resign")
+    log.Logger.Info("leader resign")
 
     return
 }

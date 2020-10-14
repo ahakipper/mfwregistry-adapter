@@ -18,7 +18,7 @@ import (
     "fmt"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/core"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/tools/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
     "os"
     "os/signal"
     "syscall"
@@ -38,19 +38,8 @@ This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
     Run: func(cmd *cobra.Command, args []string) {
         fmt.Println("starting k8sadapter")
-        // env init
-        env, err := cmd.Flags().GetString("env")
-        if err != nil {
-            panic(err)
-        }
-        switch env {
-        case "prod":
-            config.InitProd()
-        case "dev":
-            config.InitDev()
-        default:
-            config.InitTest()
-        }
+        // init flags
+        initAdapterFlags(cmd)
         // server init
         server, err := core.NewServer()
         if err != nil {
@@ -64,7 +53,7 @@ to quickly create a Cobra application.`,
         signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGTERM)
         // wait for stop
         quit := <-c
-        log.Info("receive quit signal: ", quit)
+        log.Logger.Info("receive quit signal: ", quit)
         server.Stop()
     },
 }
@@ -80,6 +69,33 @@ func init() {
 
     // Cobra supports local flags which will only run when this command
     // is called directly, e.g.:
-    k8sadapterCmd.Flags().BoolP("leader-elect", "t", true, "多节点开启选举保证")
-    k8sadapterCmd.Flags().StringP("env", "e", "test", "指定环境，枚举值：test、dev、prod")
+    k8sadapterCmd.Flags().BoolP("leader-elect", "t", true, "whether to enable node election")
+    k8sadapterCmd.Flags().StringP("env", "e", "test", "the environment，e.g：test、dev、prod")
+}
+
+func initAdapterFlags(cmd *cobra.Command) {
+    // env init
+    env, err := cmd.Flags().GetString("env")
+    if err != nil {
+        panic(err)
+    }
+    switch env {
+    case "prod":
+        config.InitProd()
+    case "dev":
+        config.InitDev()
+    default:
+        config.InitTest()
+    }
+    // log init
+    config.LogFilePath, _ = cmd.Flags().GetString("log-file-path")
+    config.LogSize, _ = cmd.Flags().GetInt("log-maxsize")
+    config.LogLevel, _ = cmd.Flags().GetInt("log-level")
+    config.LogBackups, _ = cmd.Flags().GetInt("log-backup-number")
+    config.LogAge, _ = cmd.Flags().GetInt("log-age")
+    config.LogToStd, _ = cmd.Flags().GetBool("log-to-std")
+    config.LogEncoding, _ = cmd.Flags().GetString("log-encoding")
+    if err = log.LoggerInit(); err != nil {
+        panic(err)
+    }
 }

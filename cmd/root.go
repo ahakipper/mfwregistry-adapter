@@ -55,7 +55,14 @@ func init() {
     // Here you will define your flags and configuration settings.
     // Cobra supports persistent flags, which, if defined here,
     // will be global for your application.
-    rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.mfwregistry-k8sadapter.yaml)")
+    // rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.mfwregistry-k8sadapter.yaml)")
+    rootCmd.PersistentFlags().StringP("log-file-path", "p", "./logfiles/", "the log path")
+    rootCmd.PersistentFlags().IntP("log-maxsize", "m", 100, "max log size (MB)")
+    rootCmd.PersistentFlags().IntP("log-backup-number", "n", 10, "log backup numbers")
+    rootCmd.PersistentFlags().IntP("log-level", "l", -1, "-1 debug, 0 info, 1 warnning")
+    rootCmd.PersistentFlags().IntP("log-age", "a", 7, "max expired time (day)")
+    rootCmd.PersistentFlags().BoolP("log-to-std", "s", true, "whether to output the log to standard output")
+    rootCmd.PersistentFlags().StringP("log-encoding", "c", "log", "output log format, options: log, json")
 }
 
 // initConfig reads in config file and ENV variables if set.

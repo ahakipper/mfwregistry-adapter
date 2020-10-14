@@ -3,9 +3,9 @@ package core
 import (
     "context"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/resource"
     worker "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/worker"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/tools/log"
     "sync"
     "time"
 )
@@ -67,7 +67,7 @@ func NewServer() (*Server, error) {
 func (s *Server) Run() {
 
     // start and process leader election
-    log.Info("trying to become to master through election")
+    log.Logger.Info("trying to become to master through election")
     go s.elector.ElectWait()
 
     for {
@@ -83,7 +83,7 @@ func (s *Server) Run() {
             }
             // if current leader is true, but changes to false, then stop the worker
             if !isLeader && isLeader != s.isLeader {
-                log.Warn("i am lossing the leader state")
+                log.Logger.Warn("i am lossing the leader state")
                 s.isLeader = isLeader
                 // if the current node is not the leader, stop the work of the worker (the election work will continue)
                 s.stopWorkerFunc()
@@ -91,7 +91,7 @@ func (s *Server) Run() {
             }
             // if current leader is false, but changes to true, then start the worker agian
             if !s.isLeader && isLeader != s.isLeader {
-                log.Info("i successfully competed for the leader")
+                log.Logger.Info("i successfully competed for the leader")
                 // set current sate
                 s.isLeader = isLeader
                 // if is leader agin, create worker again
@@ -115,13 +115,13 @@ func (s *Server) Run() {
 // Stop server and release resources
 func (s *Server) Stop() {
     s.stop <- struct{}{}
-    log.Info("core server stop background context")
+    log.Logger.Info("core server stop background context")
 }
 
 func (s *Server) stopAndStartWroker() (err error) {
     s.Lock()
     defer s.Unlock()
-    log.Info("stop and create worker")
+    log.Logger.Info("stop and create worker")
 
     // stop the previous worker
     if s.stopWorkerFunc != nil {

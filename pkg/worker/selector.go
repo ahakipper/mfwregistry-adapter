@@ -5,7 +5,7 @@ import (
     "github.com/coreos/etcd/clientv3"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/distribute/election"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/etcd"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/tools/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
     "time"
 )
 
@@ -75,7 +75,7 @@ func (w *ElectWorker) setLeaderChangeNotifyCall(ch chan bool) {
 // Stop the worker, if the worker`s identity is leader
 func (w *ElectWorker) Stop() {
     w.stopped = true
-    log.Info("distribute worker stop")
+    log.Logger.Info("distribute worker stop")
 }
 
 func (w *ElectWorker) syncStoppedState() {

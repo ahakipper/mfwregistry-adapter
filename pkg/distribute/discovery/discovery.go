@@ -9,7 +9,7 @@ import (
     "github.com/coreos/etcd/mvcc/mvccpb"
 
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/tools/cache"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/tools/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
 )
 
 var (

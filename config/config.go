@@ -1,11 +1,19 @@
 package config
 
 var (
-    EtcdEndpoints  = []string{} // etcd 节点列表
-    CertFile       string       // etcd 证书
-    KeyFile        string       // etcd 证书
-    CAFile         string       // etcd 证书
-    KubeConfigPath string       // K8s kubeconfig 配置文件地址
+    EtcdEndpoints  = []string{} // etcd members
+    CertFile       string       // etcd cert file
+    KeyFile        string       // etcd key file
+    CAFile         string       // etcd ca file
+    KubeConfigPath string       // K8s kubeconfig files path
+    // log
+    LogFilePath string // log file path
+    LogLevel    int    // log level
+    LogBackups  int    // log back numbers
+    LogSize     int    // log size
+    LogAge      int    // log age
+    LogEncoding string // log encoding, log, or json
+    LogToStd    bool   // log to std
 )
 
 func InitTest() {
