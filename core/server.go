@@ -49,7 +49,7 @@ func NewServer() (*Server, error) {
     // create worker
     w := worker.NewResourceWorker(wctx)
     // pass the worker to the providers
-    k8sProvider, err := resource.NewK8SProvider(wctx, w, config.KubeConfigPath)
+    k8sProvider, err := resource.NewK8SProvider(wctx, w, config.PushAllInterval, config.KubeConfigPath)
     if err != nil {
         return nil, err
     }
@@ -136,7 +136,7 @@ func (s *Server) stopAndStartWroker() (err error) {
     // create and start the worker
     w := worker.NewResourceWorker(wctx)
     var k8sProvider resource.K8SProvider
-    if k8sProvider, err = resource.NewK8SProvider(wctx, w, config.KubeConfigPath); err != nil {
+    if k8sProvider, err = resource.NewK8SProvider(wctx, w, config.PushAllInterval, config.KubeConfigPath); err != nil {
         return err
     }
     //

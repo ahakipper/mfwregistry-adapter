@@ -14,6 +14,8 @@ var (
     LogAge      int    // log age
     LogEncoding string // log encoding, log, or json
     LogToStd    bool   // log to std
+    // push
+    PushAllInterval int // The time interval of full push（seconds）
 )
 
 func InitTest() {

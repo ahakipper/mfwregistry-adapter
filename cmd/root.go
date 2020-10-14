@@ -62,7 +62,7 @@ func init() {
     rootCmd.PersistentFlags().IntP("log-level", "l", -1, "-1 debug, 0 info, 1 warnning")
     rootCmd.PersistentFlags().IntP("log-age", "a", 7, "max expired time (day)")
     rootCmd.PersistentFlags().BoolP("log-to-std", "s", true, "whether to output the log to standard output")
-    rootCmd.PersistentFlags().StringP("log-encoding", "c", "log", "output log format, options: log, json")
+    rootCmd.PersistentFlags().StringP("log-encoding", "c", "json", "output log format, options: log, json")
 }
 
 // initConfig reads in config file and ENV variables if set.

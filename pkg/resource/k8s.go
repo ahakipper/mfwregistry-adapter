@@ -5,20 +5,25 @@ import (
     sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/worker"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/tools/unit"
     client "gitlab.mfwdev.com/servicemesh/robot"
     v1 "k8s.io/api/core/v1"
     "k8s.io/apimachinery/pkg/api/resource"
     "regexp"
     "strconv"
     "strings"
+    "sync"
+    "time"
 )
 
 // K8S provider implement
 type k8s struct {
-    robot   client.Robot    // K8s 多集群聚合器
-    ctx     context.Context // 上下文
-    worker  *worker.Worker
-    stopped bool
+    robot      client.Robot    // the K8s multi-cluster aggregator
+    ctx        context.Context // context
+    worker     *worker.Worker  // the role of worker is to synchronize provider changes to the discovery center
+    stopped    bool            // whether the current provider has stopped
+    sync.Mutex                 // lock mutex
+    interval   int             // the time interval for full synchronization. default 600s(10m)
 }
 
 const (
@@ -36,7 +41,7 @@ type RuntimeConfig struct {
 }
 
 // Init k8s provider
-func NewK8SProvider(ctx context.Context, worker *worker.Worker, configPath ...string) (provider K8SProvider, err error) {
+func NewK8SProvider(ctx context.Context, worker *worker.Worker, pushInterval int, configPath ...string) (provider K8SProvider, err error) {
     clusters := make([]client.Cluster, len(configPath))
     for idx, path := range configPath {
         clusters[idx] = client.Cluster{
@@ -57,9 +62,10 @@ func NewK8SProvider(ctx context.Context, worker *worker.Worker, configPath ...st
     }
 
     provider = &k8s{
-        robot:  kr,
-        ctx:    ctx,
-        worker: worker,
+        robot:    kr,
+        ctx:      ctx,
+        worker:   worker,
+        interval: pushInterval,
     }
 
     return
@@ -77,6 +83,11 @@ func (k *k8s) Start() {
 
 // monitor k8s pod changes
 func (k *k8s) monitor() {
+    // first we should flush all the instances
+    k.flushInstances()
+    // synchronize periodically
+    go k.processIntervalFullPush()
+    // monitor instance changes
     for {
         select {
         case <-k.ctx.Done():
@@ -118,8 +129,12 @@ func (k *k8s) eventAdd(key string, triggerTime int64) {
         pod := items[0].(*v1.Pod)
         instance := formatInstance(pod)
         instance = instance
-
-        // TODO Callback
+        // callback
+        k.worker.Handle(worker.Event{
+            Trigger: triggerTime,
+            Data:    instance,
+            Operate: worker.OperateTypeADD,
+        })
     } else {
         // log error
     }
@@ -133,25 +148,43 @@ func (k *k8s) eventUpdate(key string, triggerTime int64) {
         pod := items[0].(*v1.Pod)
         // populate pod info to instance
         if pod == nil {
-            log.Logger.Errorf("time [%d] delete error due to nil instance", triggerTime)
+            log.Logger.Errorf("time [%d] update error due to nil instance", triggerTime)
             return
         }
         instance := formatInstance(pod)
         instance = instance
-        log.Logger.Infof("time [%d] delete instance: %s", triggerTime, pod.Name)
-        // TODO Callback
+        // callback
+        k.worker.Handle(worker.Event{
+            Trigger: triggerTime,
+            Data:    instance,
+            Operate: worker.OperateTypeUPDATE,
+        })
     }
 }
 
 // delete instance by pod name in mysql
 func (k *k8s) eventDelete(key string, triggerTime int64) {
-    instance := sv.Instance{
+    instance := &sv.Instance{
         InstanceId: strings.Split(key, "/")[1],
         Enabled:    false,
         State:      InstanceOffline,
     }
-    log.Logger.Info("delete instance to subject", string(instance.InstanceId))
-    // TODO callback
+    // callback
+    k.worker.Handle(worker.Event{
+        Trigger: triggerTime,
+        Data:    instance,
+        Operate: worker.OperateTypeDELETE,
+    })
+}
+
+// delete instance by pod name in mysql
+func (k *k8s) flushInstances() {
+    if all := k.GetAll(); all != nil && len(all) > 0 {
+        for _, ins := range all {
+            event := worker.Event{Trigger: time.Now().Unix(), Data: ins, Operate: worker.OperateTypeADD}
+            k.worker.Handle(event)
+        }
+    }
 }
 
 func (k *k8s) GetAll() (result []*sv.Instance) {
@@ -166,6 +199,25 @@ func (k *k8s) GetAll() (result []*sv.Instance) {
     }
 
     return
+}
+
+func (k *k8s) processIntervalFullPush() {
+    interval := 600
+    if k.interval != 0 {
+        interval = k.interval
+    }
+    ticker := time.NewTicker(time.Second * time.Duration(interval))
+    for {
+        select {
+        case <-ticker.C:
+            before := time.Now()
+            k.flushInstances()
+            log.Logger.Infof("the synchronization operation is completed periodically, interval: %d, time spend: %s", interval, unit.RelTime(before, time.Now(), "", ""))
+        case <-k.ctx.Done():
+            ticker.Stop()
+            return
+        }
+    }
 }
 
 func formatInstance(pod *v1.Pod) (ins *sv.Instance) {

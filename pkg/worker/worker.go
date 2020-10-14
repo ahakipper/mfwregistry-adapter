@@ -26,9 +26,9 @@ const (
 )
 
 type Event struct {
-    Trigger int64       // trigger time
-    Data    v2.Instance // data
-    Operate OperateType // operate type
+    Trigger int64        // trigger time
+    Data    *v2.Instance // data
+    Operate OperateType  // operate type
 }
 
 func NewResourceWorker(ctx context.Context) (w *Worker) {
@@ -47,13 +47,16 @@ func (w *Worker) AddEventHandler(opt OperateType, handler EventResourceHandler) 
 
 func (w *Worker) InitEventHandlers() {
     w.Handlers = make(map[OperateType]EventResourceHandler)
-    w.AddEventHandler(OperateTypeADD, func(ins Event) (err error) {
+    w.AddEventHandler(OperateTypeADD, func(e Event) (err error) {
+        // pp.Println(e.Operate, e.Data.InstanceId)
         return
     })
-    w.AddEventHandler(OperateTypeDELETE, func(ins Event) (err error) {
+    w.AddEventHandler(OperateTypeDELETE, func(e Event) (err error) {
+        // pp.Println(e.Operate, e.Data.InstanceId)
         return
     })
-    w.AddEventHandler(OperateTypeUPDATE, func(ins Event) (err error) {
+    w.AddEventHandler(OperateTypeUPDATE, func(e Event) (err error) {
+        // pp.Println(e.Operate, e.Data.InstanceId)
         return
     })
 }
