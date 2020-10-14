@@ -200,6 +200,8 @@ github.com/xiang90/probing v0.0.0-20190116061207-43a291ad63a2/go.mod h1:UETIi67q
 github.com/xordataexchange/crypt v0.0.3-0.20170626215501-b2862e3d0a77/go.mod h1:aYKd//L2LvnjZzWKhF00oedf4jCCReLcmhLdhm1A27Q=
 gitlab.mfwdev.com/mtech/beehive-proto v0.2.49-0.20201012103623-ad940aaa8dee h1:NGqi/CCOqmvSWKZt3GdAJykAbyOzFFRVq6B9JoVYDNY=
 gitlab.mfwdev.com/mtech/beehive-proto v0.2.49-0.20201012103623-ad940aaa8dee/go.mod h1:pTNtEToWZWtnGTEFC7FKtCfEakfkkF4vRaUCJ6KYh2U=
+gitlab.mfwdev.com/mtech/beehive-proto v0.2.49 h1:qnCw8Ty/dPzQBiqeYApNF0s5kLEMJ8fg/pJaUPcrRxE=
+gitlab.mfwdev.com/mtech/beehive-proto v0.2.49/go.mod h1:pTNtEToWZWtnGTEFC7FKtCfEakfkkF4vRaUCJ6KYh2U=
 gitlab.mfwdev.com/servicemesh/robot v0.1.1 h1:Icp5oMY3vpVaaGE/tPZTaPRxH0nGiPYeAvGtDKLBkNI=
 gitlab.mfwdev.com/servicemesh/robot v0.1.1/go.mod h1:84cDxJMjpfyz6o56Z9C/uxYWdZq7eN1Gu6549HYAKLY=
 go.etcd.io/bbolt v1.3.2 h1:Z/90sZLPOeCy2PwprqkFa25PdkusRzaj9P8zm/KNyvk=

@@ -279,6 +279,13 @@ func formatInstance(pod *v1.Pod) (ins *sv.Instance) {
     envType = formatEnvType(pod, envType)
     // enable state
     enabled := formatContainerEnabled(pod)
+    // reversion
+    // pay attention. The reversion field is the resource version of the instance, which is strictly self-increasing.
+    // The push behavior of data may not be able to reach the opposite end in an orderly manner under a complex network environment.
+    // Therefore, when the opposite end receives data, it needs to compare the reversion value with the existing value.
+    // If the value is larger, it can be stored in the database. Otherwise, refuse to update.
+    reversion, _ := strconv.ParseInt(pod.ObjectMeta.ResourceVersion, 10, 64)
+
     // convert pod to instance
     ins = &sv.Instance{
         InstanceId:  pod.Name,
@@ -297,6 +304,7 @@ func formatInstance(pod *v1.Pod) (ins *sv.Instance) {
         Memory:      runtimeConfig.Memory,
         Image:       runtimeConfig.Image,
         Idc:         labels["version"],
+        Reversion:   reversion,
     }
 
     return
