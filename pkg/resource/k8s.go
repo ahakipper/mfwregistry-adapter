@@ -105,11 +105,11 @@ func (k *k8s) monitor() {
             triggerTime := obj.CreateAt.Unix()
             switch obj.Event {
             case client.EventAdd:
-                k.eventAdd(obj.Key, triggerTime)
+                go k.eventAdd(obj.Key, triggerTime)
             case client.EventUpdate:
-                k.eventUpdate(obj.Key, triggerTime)
+                go k.eventUpdate(obj.Key, triggerTime)
             case client.EventDelete:
-                k.eventDelete(obj.Key, triggerTime)
+                go k.eventDelete(obj.Key, triggerTime)
             }
 
             k.robot.Finish(obj)
