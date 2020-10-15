@@ -20,7 +20,7 @@ import (
 type k8s struct {
     robot      client.Robot    // the K8s multi-cluster aggregator
     ctx        context.Context // context
-    worker     *worker.Worker  // the role of worker is to synchronize provider changes to the discovery center
+    worker     worker.Worker   // the role of worker is to synchronize provider changes to the discovery center
     stopped    bool            // whether the current provider has stopped
     sync.Mutex                 // lock mutex
     interval   int             // the time interval for full synchronization. default 600s(10m)
@@ -41,7 +41,7 @@ type RuntimeConfig struct {
 }
 
 // Init k8s provider
-func NewK8SProvider(ctx context.Context, worker *worker.Worker, pushInterval int, configPath ...string) (provider K8SProvider, err error) {
+func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int, configPath ...string) (provider K8SProvider, err error) {
     clusters := make([]client.Cluster, len(configPath))
     for idx, path := range configPath {
         clusters[idx] = client.Cluster{
@@ -129,7 +129,7 @@ func (k *k8s) eventAdd(key string, triggerTime int64) {
         pod := items[0].(*v1.Pod)
         instance := formatInstance(pod)
         // callback
-        k.worker.Handle(worker.Event{
+        k.worker.Handle(&worker.Event{
             Trigger: triggerTime,
             Data:    instance,
             Operate: worker.OperateTypeADD,
@@ -153,7 +153,7 @@ func (k *k8s) eventUpdate(key string, triggerTime int64) {
         instance := formatInstance(pod)
         instance = instance
         // callback
-        k.worker.Handle(worker.Event{
+        k.worker.Handle(&worker.Event{
             Trigger: triggerTime,
             Data:    instance,
             Operate: worker.OperateTypeUPDATE,
@@ -169,7 +169,7 @@ func (k *k8s) eventDelete(key string, triggerTime int64) {
         State:      InstanceOffline,
     }
     // callback
-    k.worker.Handle(worker.Event{
+    k.worker.Handle(&worker.Event{
         Trigger: triggerTime,
         Data:    instance,
         Operate: worker.OperateTypeDELETE,
@@ -180,7 +180,7 @@ func (k *k8s) eventDelete(key string, triggerTime int64) {
 func (k *k8s) flushInstances() {
     if all := k.GetAll(); all != nil && len(all) > 0 {
         for _, ins := range all {
-            event := worker.Event{Trigger: time.Now().Unix(), Data: ins, Operate: worker.OperateTypeADD}
+            event := &worker.Event{Trigger: time.Now().Unix(), Data: ins, Operate: worker.OperateTypeADD}
             k.worker.Handle(event)
         }
     }
