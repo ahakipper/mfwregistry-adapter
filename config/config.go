@@ -5,7 +5,7 @@ var (
     CertFile       string       // etcd cert file
     KeyFile        string       // etcd key file
     CAFile         string       // etcd ca file
-    KubeConfigPath string       // K8s kubeconfig files path
+    KubeConfigPath []string       // K8s kubeconfig files path
     // log
     LogFilePath string // log file path
     LogLevel    int    // log level
@@ -16,6 +16,8 @@ var (
     LogToStd    bool   // log to std
     // push
     PushAllInterval int // The time interval of full push（seconds）
+    // grpc
+    GrpcAddr string
 )
 
 func InitTest() {
@@ -23,7 +25,7 @@ func InitTest() {
     CertFile = "./config/certs/etcdtest/etcd.pem"
     KeyFile = "./config/certs/etcdtest/etcd-key.pem"
     CAFile = "./config/certs/etcdtest/ca.pem"
-    KubeConfigPath = "./config/kubeconfigs/k8s-test"
+    KubeConfigPath = []string{"./config/kubeconfigs/k8s-test"}
 }
 
 func InitDev() {
@@ -31,7 +33,7 @@ func InitDev() {
     CertFile = "./config/certs/etcdtest/etcd.pem"
     KeyFile = "./config/certs/etcdtest/etcd-key.pem"
     CAFile = "./config/certs/etcdtest/ca.pem"
-    KubeConfigPath = ""
+    KubeConfigPath = []string{"./config/kubeconfigs/k8s-hull"}
 }
 
 func InitProd() {
@@ -41,4 +43,5 @@ func InitProd() {
     CertFile = "/go/workspace/tools/screct/client.pem"
     KeyFile = "/go/workspace/tools/screct/client-key-pem"
     CAFile = "/go/workspace/tools/screct/ca.pem"
+    KubeConfigPath = []string{"./config/kubeconfigs/k8s-hull","./config/kubeconfigs/k8s-deck","./config/kubeconfigs/k8s-kraken"}
 }

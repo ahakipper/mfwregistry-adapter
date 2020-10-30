@@ -2,7 +2,7 @@ package worker
 
 import (
     "context"
-    "github.com/k0kubun/pp"
+    v2 "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/mfwregistry"
 )
@@ -38,35 +38,19 @@ func (w *DefaultWorker) AddEventHandler(opt OperateType, handler EventResourceHa
 
 func (w *DefaultWorker) InitEventHandlers() {
     w.Handlers = make(map[OperateType]EventResourceHandler)
-    w.AddEventHandler(OperateTypeADD, func(e *Event) (err error) {
-        pp.Println(e.Operate, e.Data.InstanceId)
+    w.AddEventHandler(OperateTypeSync, func(e *Event) (err error) {
         if err = w.pusher.Push(e.Trigger, e.Data); err != nil {
-            log.Logger.Errorf("failed to push instance, appcode: %s, instance: %s, reversion: %d, err: %s",
-                e.Data.AppCode, e.Data.InstanceId, e.Data.Reversion, err.Error())
             // if the event push fails, add it to UnsyncedService, and the UnsyncedService service completes the push
-            w.unsyncedService.Add(e)
+            log.Logger.Errorf("wokderService sync failed, err:%v instance: %v",err, e.Data[0].InstanceId)
+            w.unsyncedService.Add(e.Trigger, e.Data)
         }
         return
     })
-    w.AddEventHandler(OperateTypeDELETE, func(e *Event) (err error) {
-        w.pusher.Push(e.Trigger, e.Data)
-        pp.Println(e.Operate, e.Data.InstanceId)
-        if err = w.pusher.Push(e.Trigger, e.Data); err != nil {
-            log.Logger.Errorf("failed to push instance, appcode: %s, instance: %s, reversion: %d, err: %s",
-                e.Data.AppCode, e.Data.InstanceId, e.Data.Reversion, err.Error())
+    w.AddEventHandler(OperateTypeSyncAll, func(e *Event) (err error) {
+        if err = w.pusher.PushAll(e.Trigger, e.Data); err != nil {
             // if the event push fails, add it to UnsyncedService, and the UnsyncedService service completes the push
-            w.unsyncedService.Add(e)
-        }
-        return
-    })
-    w.AddEventHandler(OperateTypeUPDATE, func(e *Event) (err error) {
-        w.pusher.Push(e.Trigger, e.Data)
-        pp.Println(e.Operate, e.Data.InstanceId)
-        if err = w.pusher.Push(e.Trigger, e.Data); err != nil {
-            log.Logger.Errorf("failed to push instance, appcode: %s, instance: %s, reversion: %d, err: %s",
-                e.Data.AppCode, e.Data.InstanceId, e.Data.Reversion, err.Error())
-            // if the event push fails, add it to UnsyncedService, and the UnsyncedService service completes the push
-            w.unsyncedService.Add(e)
+            log.Logger.Errorf("wokderService syncAll failed, instance: %v", e.Data)
+            w.unsyncedService.Add(e.Trigger, e.Data)
         }
         return
     })
@@ -83,4 +67,9 @@ func (w *DefaultWorker) Handle(d *Event) {
 // ProcessUnsynced process instances that have not been successfully pushed before
 func (w *DefaultWorker) ProcessUnsynced() {
     w.unsyncedService.Sync()
+}
+
+func (w *DefaultWorker) GetAll(enable int32) (r *v2.InstanceList,err error) {
+    r,err = w.pusher.GetAll(enable)
+    return
 }

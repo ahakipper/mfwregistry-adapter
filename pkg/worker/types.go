@@ -6,6 +6,7 @@ type Worker interface {
     AddEventHandler(opt OperateType, handler EventResourceHandler)
     Handle(d *Event)
     ProcessUnsynced() // ProcessUnsynced process instances that have not been successfully pushed before
+    GetAll(enable int32)(r *v2.InstanceList,err error)
 }
 
 type EventResourceHandler func(ins *Event) (err error)
@@ -13,14 +14,13 @@ type EventResourceHandler func(ins *Event) (err error)
 type OperateType string
 
 const (
-    OperateTypeADD    OperateType = "ADD"
-    OperateTypeDELETE OperateType = "DELETE"
-    OperateTypeUPDATE OperateType = "UPDATE"
+    OperateTypeSync    OperateType = "Sync"
+    OperateTypeSyncAll OperateType = "SyncAll"
 )
 
 type Event struct {
     Trigger int64        // trigger time
-    Data    *v2.Instance // data
+    Data    []*v2.Instance // data
     Operate OperateType  // operate type
 }
 

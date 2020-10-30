@@ -1,0 +1,88 @@
+package resource
+
+import (
+    "github.com/google/btree"
+    sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
+    "strings"
+    "sync"
+)
+
+// The internal implementation of the cache can use data structures such as map and btree
+// The reason why map is not used is because golang map does not release memory space as elements
+// are deleted.（In fact, there is no problem under normal circumstances）
+// Therefore, if the current adapter runs for a long time, its memory may continue to increase (unless the map is cleared at the right time)
+type Cache struct {
+    btree *btree.BTree
+    sync.RWMutex
+}
+
+// NewCache init a Cache
+// if degree is 2, it is a bit like a binary tree
+func NewCache(degree int) *Cache {
+    if degree < 2 {
+        degree = 2
+    }
+    return &Cache{
+        btree: btree.New(degree),
+    }
+}
+
+func (cache *Cache) Get(id string) *sv.Instance {
+    cache.RLock()
+    defer cache.RUnlock()
+    key := &InstanceCacheItem{
+        Instance: &sv.Instance{
+            InstanceId: id,
+        },
+    }
+    // avoid generate npe
+    if item := cache.btree.Get(key); item != nil {
+        return item.(*InstanceCacheItem).Instance
+    }
+    return nil
+}
+
+func (cache *Cache) Delete(id string) *sv.Instance {
+    cache.Lock()
+    defer cache.Unlock()
+    key := &InstanceCacheItem{
+        Instance: &sv.Instance{
+            InstanceId: id,
+        },
+    }
+    item := cache.btree.Delete(key)
+
+    return item.(*InstanceCacheItem).Instance
+}
+
+func (cache *Cache) ReplaceOrInsert(ins *sv.Instance) *sv.Instance {
+    cache.Lock()
+    defer cache.Unlock()
+    if ins == nil {
+        return nil
+    }
+    item := &InstanceCacheItem{
+        Instance: ins,
+    }
+    cache.btree.ReplaceOrInsert(item)
+
+    return ins
+}
+
+func (cache *Cache) Clear() {
+    cache.Lock()
+    defer cache.Unlock()
+    cache.btree.Clear(false)
+}
+
+type InstanceCacheItem struct {
+    Instance *sv.Instance
+}
+
+func (ins *InstanceCacheItem) Less(item btree.Item) bool {
+    if strings.Compare(ins.Instance.InstanceId, item.(*InstanceCacheItem).Instance.InstanceId) < 0 {
+        return true
+    } else {
+        return false
+    }
+}

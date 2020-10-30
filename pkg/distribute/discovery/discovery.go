@@ -74,7 +74,7 @@ func (n *node) keepalive() (<-chan *clientv3.LeaseKeepAliveResponse, error) {
         ip = "none"
     }
     if _, err := n.etcdclient.Put(ctx, registerCenter+n.key, ip, clientv3.WithLease(n.leaseID)); err != nil {
-        log.Error("keepAlive error:", err)
+        log.Logger.Error("keepAlive error:", err)
         return nil, err
     }
     cancel()
@@ -86,7 +86,7 @@ func (n *node) revoke() {
     ctx, cancel := context.WithTimeout(n.ctx, timeout)
     defer cancel()
     if _, err := n.etcdclient.Revoke(ctx, n.leaseID); err != nil {
-        log.Error("revoke error", err)
+        log.Logger.Error("revoke error", err)
     }
 }
 
@@ -94,14 +94,14 @@ func (n *node) revoke() {
 func (n *node) Keepalive() (e error) {
     resp, err := n.keepalive()
     if err != nil {
-        log.Error("Start error", err)
+        log.Logger.Error("Start error", err)
         return e
     }
 
     for range resp {
         //log.Info("Node is alive key:%s, ttl:%d", n.key)
     }
-    log.Info("node has dead")
+    log.Logger.Info("node has dead")
 
     return nil
 }
@@ -112,7 +112,7 @@ func (n *node) Watch() (e error) {
     ctx, cancel := context.WithTimeout(n.ctx, timeout)
     resp, err := n.etcdclient.Get(ctx, registerCenter, clientv3.WithPrefix())
     if err != nil {
-        log.Error("WatchCenter error:", err)
+        log.Logger.Error("WatchCenter error:", err)
         return e
     }
     cancel()
@@ -139,7 +139,7 @@ func (n *node) Watch() (e error) {
             }
         }
     }
-    log.Info("node stop watch cluster changes")
+    log.Logger.Info("node stop watch cluster changes")
 
     return nil
 }
