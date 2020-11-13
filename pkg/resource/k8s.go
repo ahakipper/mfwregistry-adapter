@@ -467,6 +467,7 @@ func formatInstance(obj *client.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
 
 // format lable info
 func formatLableInfo(envs map[string]string) (lable map[string]string) {
+	lable = make(map[string]string)
 	if envs != nil && len(envs) > 0 {
 		if san, exist := envs["spring.application.name"]; exist {
 			lable["env:san"] = san
