@@ -435,7 +435,7 @@ func formatInstance(obj *client.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
 	envCode := envType + "#" + envGroup
 
 	// set application.name
-	label := formatLableInfo(runtimeConfig.Environments)
+	label := formatLableInfo(labels, runtimeConfig.Environments)
 
 
 	// convert pod to instance
@@ -466,11 +466,18 @@ func formatInstance(obj *client.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
 }
 
 // format lable info
-func formatLableInfo(envs map[string]string) (lable map[string]string) {
-	lable = make(map[string]string)
+func formatLableInfo(originLables map[string]string, envs map[string]string) (lable map[string]string) {
+	if lable == nil {
+		lable = make(map[string]string)
+	}
 	if envs != nil && len(envs) > 0 {
 		if san, exist := envs["spring.application.name"]; exist {
 			lable["env:san"] = san
+		}
+	}
+	if originLables != nil && len(originLables) > 0 {
+		if lapp, exist := originLables["app"]; exist {
+			lable["compatibility:aos_app"] = lapp
 		}
 	}
 	return
