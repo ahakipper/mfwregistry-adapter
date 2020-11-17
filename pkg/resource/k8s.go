@@ -435,7 +435,7 @@ func formatInstance(obj *client.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
 	envCode := envType + "#" + envGroup
 
 	// set application.name
-	label := formatLableInfo(labels, runtimeConfig.Environments)
+	label := formatLableInfo(pod, labels, runtimeConfig.Environments)
 
 
 	// convert pod to instance
@@ -466,20 +466,39 @@ func formatInstance(obj *client.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
 }
 
 // format lable info
-func formatLableInfo(originLables map[string]string, envs map[string]string) (lable map[string]string) {
+func formatLableInfo(pod *v1.Pod, originLables map[string]string, envs map[string]string) (lable map[string]string) {
 	if lable == nil {
 		lable = make(map[string]string)
 	}
+	// for Java SDK
 	if envs != nil && len(envs) > 0 {
 		if san, exist := envs["spring.application.name"]; exist {
 			lable["env:san"] = san
 		}
 	}
+	// for namespace
+	lable["compatibility:aos_namespace"] = ""
+	if pod != nil {
+		lable["compatibility:aos_namespace"] = pod.Namespace
+	}
 	if originLables != nil && len(originLables) > 0 {
+		// for specific label
+		lable["compatibility:aos_app"] = ""
 		if lapp, exist := originLables["app"]; exist {
 			lable["compatibility:aos_app"] = lapp
 		}
+		// for destination rule and virtual service
+		var drHost string
+		// in case of FengXiao
+		if _, exist := originLables["deploy-id"]; exist {
+			drHost = lable["compatibility:aos_app"] + "." + lable["compatibility:aos_namespace"]
+		} else {
+			// in case of AosMicroservice
+			drHost = lable["compatibility:aos_app"]
+		}
+		lable["compatibility:aos_dr_host"] = drHost
 	}
+
 	return
 }
 
