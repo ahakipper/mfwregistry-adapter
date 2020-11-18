@@ -93,7 +93,7 @@ func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int,
 // Monitor k8s cluster pod changes
 func (k *k8s) Start() {
 	go k.robot.Run()
-	//TODO make sure all task done
+	// TODO make sure all task done
 	time.Sleep(time.Second * 5)
 	k.monitor()
 
@@ -437,7 +437,6 @@ func formatInstance(obj *client.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
 	// set application.name
 	label := formatLableInfo(pod, labels, runtimeConfig.Environments)
 
-
 	// convert pod to instance
 	ins = &sv.Instance{
 		InstanceId:  pod.Name,
@@ -497,6 +496,10 @@ func formatLableInfo(pod *v1.Pod, originLables map[string]string, envs map[strin
 			drHost = lable["compatibility:aos_app"]
 		}
 		lable["compatibility:aos_dr_host"] = drHost
+		// in case of WebIDE
+		if mark, exist := originLables["mark"]; exist {
+			lable["compatibility:aos_mark"] = mark
+		}
 	}
 
 	return
