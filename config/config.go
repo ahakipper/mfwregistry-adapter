@@ -37,11 +37,11 @@ func InitDev() {
 }
 
 func InitProd() {
-    EtcdEndpoints = []string{"192.168.11.100:2379", "192.168.11.101:2379", "192.168.11.102:2379"}
+    EtcdEndpoints = []string{"192.168.11.100:2479", "192.168.11.101:2479", "192.168.11.102:2479"}
 
     // this dir depend on Dockerfile
-    CertFile = "/go/workspace/tools/screct/client.pem"
-    KeyFile = "/go/workspace/tools/screct/client-key-pem"
-    CAFile = "/go/workspace/tools/screct/ca.pem"
+    CertFile = "./config/certs/etcdprod/etcd.pem"
+    KeyFile = "./config/certs/etcdprod/etcd-key.pem"
+    CAFile = "./config/certs/etcdprod/ca.pem"
     KubeConfigPath = []string{"./config/kubeconfigs/k8s-hull","./config/kubeconfigs/k8s-deck","./config/kubeconfigs/k8s-kraken"}
 }
