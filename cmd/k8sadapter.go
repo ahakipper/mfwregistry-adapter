@@ -71,7 +71,8 @@ func init() {
     // is called directly, e.g.:
     k8sadapterCmd.Flags().BoolP("leader-elect", "t", true, "whether to enable node election")
     k8sadapterCmd.Flags().StringP("env", "e", "test", "the environment，e.g：test、dev、prod")
-    k8sadapterCmd.Flags().IntP("push-interval", "i", 600, "the time interval for full synchronization. the unit is seconds")
+    k8sadapterCmd.Flags().IntP("push-interval", "i", 7200, "the time interval for full synchronization. the unit is seconds")
+    k8sadapterCmd.Flags().StringP("grpc-addr", "g", "172.18.18.214:50051", "grpc address")
 }
 
 func initAdapterFlags(cmd *cobra.Command) {
@@ -101,4 +102,7 @@ func initAdapterFlags(cmd *cobra.Command) {
     }
     // push
     config.PushAllInterval, _ = cmd.Flags().GetInt("push-interval")
+    // grpc
+    config.GrpcAddr,_ = cmd.Flags().GetString("grpc-addr")
+
 }
