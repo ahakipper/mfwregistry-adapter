@@ -43,5 +43,5 @@ func InitProd() {
     CertFile = "./config/certs/etcdprod/etcd.pem"
     KeyFile = "./config/certs/etcdprod/etcd-key.pem"
     CAFile = "./config/certs/etcdprod/ca.pem"
-    KubeConfigPath = []string{"./config/kubeconfigs/k8s-hull","./config/kubeconfigs/k8s-deck","./config/kubeconfigs/k8s-kraken"}
+    KubeConfigPath = []string{"./config/kubeconfigs/k8s-deck","./config/kubeconfigs/k8s-kraken"}
 }
