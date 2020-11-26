@@ -2,6 +2,7 @@ package mfwregistry
 
 import (
 	"context"
+	"encoding/json"
 	v2 "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
 	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
 	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
@@ -30,6 +31,12 @@ func NewInstance() (ins *Client, err error) {
 }
 
 func (c *Client) Sync(instance []*v2.Instance) (r *v2.CommonResponse, err error) {
+	if instance != nil {
+		if d, e := json.Marshal(instance); e == nil {
+			log.Logger.Infof("rsyncing instance: %s", string(d))
+
+		}
+	}
 	ctx,_ := context.WithTimeout(context.TODO(),time.Second * readTimeout)
 	req := new(v2.SynInstancesRequest)
 	req.Instance = instance

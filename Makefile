@@ -9,7 +9,7 @@ OS ?= linux
 DOCKER_VERSION ?= latest
 
 build:
-	GOOS=$(OS) go build -v --race
+	CGO_ENABLED=1 GOOS=$(OS) go build -v --race
 
 docker:
 	docker build docker build -t hub.mfwdev.com/paas/mkube:$(DOCKER_VERSION) .

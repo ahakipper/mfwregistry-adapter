@@ -557,7 +557,9 @@ func formatInstanceStatus(obj *client.QueueObject, pod *v1.Pod) (status int32) {
 	if obj != nil && obj.Event == client.EventDelete {
 		status = 2
 	} else {
-		if pod != nil && pod.Status.Phase == v1.PodRunning {
+		if pod.DeletionTimestamp != nil {
+			status = 3
+		} else if pod != nil && pod.Status.Phase == v1.PodRunning {
 			var ready = true
 			for _, c := range pod.Status.ContainerStatuses {
 				if c.Ready == false || c.State.Running == nil {
@@ -594,6 +596,9 @@ func formatContainerEnabled(pod *v1.Pod, ) (enabled bool) {
 			if c.Ready == false || c.State.Running == nil {
 				ready = false
 			}
+		}
+		if pod.DeletionTimestamp != nil {
+			ready = false
 		}
 		if ready == true {
 			enabled = true
