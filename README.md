@@ -4,6 +4,8 @@
 
 ## 构建方式
 
+#### 本地构建二进制
+
 ```
 # 构建 mac 格式
 make OS=darwin
@@ -11,6 +13,20 @@ make OS=darwin
 # 构建 Linux 格式
 make OS=linux
 ```
+
+#### 正式构建
+
+正式构建，采用的是 docker 镜像构建方式，只需要在 gitlab 上，针对目标分支，打 tag 即可。
+
+构建过程：https://drone-pub.mfwdev.com/PaaS/mfwregistry-k8sadapter （私有界面，切勿修改相关内容，页面后续会对接 CAS 登录）
+
+构建结束后，会生成镜像
+
+> 举例来说，打的 tag 为 v0.0.1 则生成的镜像为：hub.mfwdev.com/paas/mfwregistry-k8sadapter:v0.0.1
+
+## 部署方式
+
+地址：https://wiki.mafengwo.cn/pages/viewpage.action?pageId=63422398
 
 ## 使用方式
 
