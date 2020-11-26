@@ -1,0 +1,34 @@
+workspace:
+  base: /go/
+
+clone:
+  git:
+    image: hub.mfwdev.com/paas/drone-plugin-git:latest
+    network_mode: host
+    auth_config:
+      innerid: hub.mfwdev.com
+
+pipeline:
+
+  go-build:
+    image: hub.mfwdev.com/paas/golang:1.15.3
+    auth_config:
+      innerid: hub.mfwdev.com
+    commands:
+      - make OS=linux
+    network_mode: host
+    volumes:
+      - /DATA/golang-mod/mod:/go/pkg/mod
+
+  docker-build-pilot-discovery:
+    image: hub.mfwdev.com/paas/drone-docker:v0.5.8
+    repo: hub.mfwdev.com/paas/mfwregistry-k8sadapter
+    auth_config:
+      innerid: hub.mfwdev.com
+    auth_config_innerid: hub.mfwdev.com
+    dockerfile: Dockerfile
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    when:
+      event: tag
