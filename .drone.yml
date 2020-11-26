@@ -17,10 +17,13 @@ pipeline:
     commands:
       - make OS=linux
     network_mode: host
+    environment:
+      GOPROXY: https://goproxy.cn
+      GOPRIVATE: gitlab.mfwdev.com
     volumes:
       - /DATA/golang-mod/mod:/go/pkg/mod
 
-  docker-build-pilot-discovery:
+  docker-build:
     image: hub.mfwdev.com/paas/drone-docker:v0.5.8
     repo: hub.mfwdev.com/paas/mfwregistry-k8sadapter
     auth_config:
