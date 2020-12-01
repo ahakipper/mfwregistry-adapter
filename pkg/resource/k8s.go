@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/metrics"
 )
 
 // K8S provider implement
@@ -354,6 +355,9 @@ func (k *k8s) processIntervalFullPush() {
 		case <-ticker.C:
 			before := time.Now()
 			k.compareAndFlush()
+			after := time.Now()
+			offset := after.Sub(before).Milliseconds()
+			metrics.SyncAllDurationsHistogram.Observe(float64(offset))
 			log.Logger.Infof("the synchronization operation is completed periodically, interval: %d, time spend: %s", interval, unit.RelTime(before, time.Now(), "", ""))
 		case <-k.ctx.Done():
 			ticker.Stop()

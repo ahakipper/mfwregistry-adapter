@@ -7,6 +7,7 @@ import (
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/resource"
     worker "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/worker"
     "sync"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/metrics"
 )
 
 // Distribute Core Server configuration resource provider
@@ -28,6 +29,9 @@ type Server struct {
 
     // current server election state
     isLeader bool
+
+    // prometheus server
+    promesvr *metrics.PrometheusService
 
     sync.Mutex
 }
@@ -61,6 +65,7 @@ func NewServer() (*Server, error) {
         elector:         elector,
         leaderChCh:      leaderChanges,
         stop:            make(chan struct{}),
+        promesvr:        metrics.NewPrometheusServer(),
     }, nil
 }
 
@@ -97,12 +102,16 @@ func (s *Server) Run() {
                 s.isLeader = isLeader
                 // if is leader agin, create worker again
                 go s.stopAndStartWroker()
+                // start prometheus service
+                s.promesvr.Start()
             }
             continue
         case <-s.stop:
             // stop background context
             s.stopElectorFunc()
             s.stopWorkerFunc()
+            // stop prometheus service
+            s.promesvr.Stop()
             // break the loop
             breaked = true
         }

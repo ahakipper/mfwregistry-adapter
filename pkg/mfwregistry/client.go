@@ -6,6 +6,7 @@ import (
 	v2 "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
 	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
 	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
+	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/metrics"
 	"google.golang.org/grpc"
 	"time"
 )
@@ -40,7 +41,11 @@ func (c *Client) Sync(instance []*v2.Instance) (r *v2.CommonResponse, err error)
 	ctx,_ := context.WithTimeout(context.TODO(),time.Second * readTimeout)
 	req := new(v2.SynInstancesRequest)
 	req.Instance = instance
+	before := time.Now()
 	r, err = c.service.SynInstance(ctx, req)
+	after := time.Now()
+	offset := after.Sub(before).Milliseconds()
+	metrics.SyncOnceDurationsHistogram.Observe(float64(offset))
 	if err != nil {
 		log.Logger.Errorf("Sync fail: %v instance: %v", err,req.Instance)
 	}
