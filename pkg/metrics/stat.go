@@ -10,13 +10,13 @@ var (
 		prometheus.HistogramOpts{
 			Name: "sync_all_durations_histogram",
 			Help: "",
-			Buckets: prometheus.LinearBuckets(1.0,20.0,10),
+			Buckets: prometheus.LinearBuckets(0.0,1000,10),
 		})
 	SyncOnceDurationsHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Name: "sync_once_durations_histogram",
 			Help: "",
-			Buckets: prometheus.LinearBuckets(0.0,1.0,10),
+			Buckets: prometheus.LinearBuckets(0.0,1000,10),
 		})
 )
 
