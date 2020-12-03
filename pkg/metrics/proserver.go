@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"time"
+	_ "net/http/pprof"
 )
 
 type PrometheusService struct {}
