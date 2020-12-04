@@ -114,6 +114,7 @@ func (c *candidate) NewElectionSession(timeout time.Duration) {
         // log
         return
     }
+    c.session = session
     c.election = concurrency.NewElection(session, campaignCenter)
     // sleep a while
     // time.Sleep(time.Millisecond * 1000)
@@ -191,7 +192,8 @@ func (c *candidate) LeaseID() clientv3.LeaseID {
     return c.leaseID
 }
 
-
 func (c *candidate) Close() {
-    c.session.Close()
+    if c.session != nil {
+        c.session.Close()
+    }
 }
