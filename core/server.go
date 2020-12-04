@@ -75,6 +75,8 @@ func (s *Server) Run() {
     // start and process leader election
     log.Logger.Info("trying to become to master through election")
     go s.elector.ElectWait()
+    // start prome and pprof http server
+    s.promesvr.Start()
 
     for {
         breaked := false
@@ -102,16 +104,12 @@ func (s *Server) Run() {
                 s.isLeader = isLeader
                 // if is leader agin, create worker again
                 go s.stopAndStartWroker()
-                // start prometheus service
-                s.promesvr.Start()
             }
             continue
         case <-s.stop:
             // stop background context
             s.stopElectorFunc()
             s.stopWorkerFunc()
-            // stop prometheus service
-            s.promesvr.Stop()
             // break the loop
             breaked = true
         }

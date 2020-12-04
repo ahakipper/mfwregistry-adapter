@@ -16,14 +16,10 @@ package cmd
 
 import (
     "fmt"
+    "github.com/spf13/cobra"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/core"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
-    "os"
-    "os/signal"
-    "syscall"
-
-    "github.com/spf13/cobra"
 )
 
 // k8sadapterCmd represents the k8sadapter command
@@ -47,14 +43,15 @@ to quickly create a Cobra application.`,
         }
 
         // run
-        go server.Run()
+        server.Run()
+
         // notify signal
-        c := make(chan os.Signal)
-        signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGTERM)
-        // wait for stop
-        quit := <-c
-        log.Logger.Info("receive quit signal: ", quit)
-        server.Stop()
+        // c := make(chan os.Signal)
+        // signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGTERM)
+        // // wait for stop
+        // quit := <-c
+        // log.Logger.Info("receive quit signal: ", quit)
+        // server.Stop()
     },
 }
 
