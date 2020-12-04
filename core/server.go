@@ -76,7 +76,7 @@ func (s *Server) Run() {
     log.Logger.Info("trying to become to master through election")
     go s.elector.ElectWait()
     // start prome and pprof http server
-    s.promesvr.Start()
+    go s.promesvr.Start()
 
     for {
         breaked := false
