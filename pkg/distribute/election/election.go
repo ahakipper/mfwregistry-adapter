@@ -49,6 +49,8 @@ type candidate struct {
 
     election *concurrency.Election
 
+    session *concurrency.Session
+
     tag string
 
     client *clientv3.Client
@@ -86,6 +88,7 @@ func NewCandidate(ctx context.Context, etcdclient *clientv3.Client) (can Candida
         // log
         return nil, err
     }
+    cd.session = session
     cd.election = concurrency.NewElection(session, campaignCenter)
 
     // sleep a while
@@ -111,6 +114,7 @@ func (c *candidate) NewElectionSession(timeout time.Duration) {
         // log
         return
     }
+    c.session = session
     c.election = concurrency.NewElection(session, campaignCenter)
     // sleep a while
     // time.Sleep(time.Millisecond * 1000)
@@ -130,6 +134,9 @@ func (c *candidate) Wait() {
                 go call(isLeader)
             }
             if !isLeader {
+                // Relese the candidate resources
+                c.Close()
+                // Assign new candidate resources
                 c.NewElectionSession(CampainTimeout * time.Second)
                 c.Campaign(CampainTimeout * time.Second)
             }
@@ -183,4 +190,10 @@ func (c *candidate) Tag() string {
 
 func (c *candidate) LeaseID() clientv3.LeaseID {
     return c.leaseID
+}
+
+func (c *candidate) Close() {
+    if c.session != nil {
+        c.session.Close()
+    }
 }

@@ -107,6 +107,7 @@ func (k *k8s) monitor() {
 	// k.flushInstances()
 	// synchronize periodically
 	go k.processIntervalFullPush()
+	go k.compareAndFlush()
 	// monitor instance changes
 	for {
 		select {
