@@ -448,7 +448,7 @@ func formatInstance(obj *client.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
 	reversion, _ := strconv.ParseInt(pod.ObjectMeta.ResourceVersion, 10, 64)
 
 	// envgroup
-	envGroup := "default"
+	envGroup := ""
 	if eg, ok := labels["env-group"]; ok && eg != "" {
 		envGroup = eg
 	}
@@ -487,40 +487,40 @@ func formatInstance(obj *client.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
 }
 
 // format lable info
-func formatLableInfo(pod *v1.Pod, originLables map[string]string, envs map[string]string) (lable map[string]string) {
-	if lable == nil {
-		lable = make(map[string]string)
+func formatLableInfo(pod *v1.Pod, originLables map[string]string, envs map[string]string) (lablel map[string]string) {
+	if lablel == nil {
+		lablel = make(map[string]string)
 	}
 	// for Java SDK
 	if envs != nil && len(envs) > 0 {
 		if san, exist := envs["spring.application.name"]; exist {
-			lable["env:san"] = san
+			lablel["env:san"] = san
 		}
 	}
 	// for namespace
-	lable["compatibility:aos_namespace"] = ""
+	lablel["compatibility:aos_namespace"] = ""
 	if pod != nil {
-		lable["compatibility:aos_namespace"] = pod.Namespace
+		lablel["compatibility:aos_namespace"] = pod.Namespace
 	}
 	if originLables != nil && len(originLables) > 0 {
 		// for specific label
-		lable["compatibility:aos_app"] = ""
+		lablel["compatibility:aos_app"] = ""
 		if lapp, exist := originLables["app"]; exist {
-			lable["compatibility:aos_app"] = lapp
+			lablel["compatibility:aos_app"] = lapp
 		}
 		// for destination rule and virtual service
 		var drHost string
 		// in case of FengXiao
 		if _, exist := originLables["deploy-id"]; exist {
-			drHost = lable["compatibility:aos_app"] + "." + lable["compatibility:aos_namespace"]
+			drHost = lablel["compatibility:aos_app"] + "." + lablel["compatibility:aos_namespace"]
 		} else {
 			// in case of AosMicroservice
-			drHost = lable["compatibility:aos_app"]
+			drHost = lablel["compatibility:aos_app"]
 		}
-		lable["compatibility:aos_dr_host"] = drHost
+		lablel["compatibility:aos_dr_host"] = drHost
 		// in case of WebIDE
 		if mark, exist := originLables["mark"]; exist {
-			lable["compatibility:aos_mark"] = mark
+			lablel["compatibility:aos_mark"] = mark
 		}
 	}
 
