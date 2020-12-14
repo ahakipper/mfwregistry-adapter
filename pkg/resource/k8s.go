@@ -6,6 +6,7 @@ import (
 	"github.com/k0kubun/pp"
 	sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
 	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
+	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/metrics"
 	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/worker"
 	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/tools/unit"
 	client "gitlab.mfwdev.com/servicemesh/robot"
@@ -16,7 +17,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/metrics"
 )
 
 // K8S provider implement
@@ -208,12 +208,19 @@ func (k *k8s) convertK8sPod2Instance(obj client.QueueObject) (ins *sv.Instance) 
 	if ok && len(items) > 0 {
 		pod := items[0].(*v1.Pod)
 		instance := formatInstance(&obj, pod)
-		// put all exist instance to cache, purpose for get cache don't make npe
-		k.ProcessCache(obj, instance)
-		if k.VerifyInstance(instance) {
-			ins = instance
-		} else {
-			log.Logger.Warnf("invalid instance: %s", instance.InstanceId)
+		// if instance status is 0 or cache is nil and cache status not equals current status ,send sync event, otherwise don't repeat send
+		if instance.Status == 0 {
+			return nil
+		}
+		cacheInstance := k.cache.Get(instance.InstanceId)
+		if cacheInstance == nil || cacheInstance.Status != instance.Status {
+			// put all exist instance to cache, purpose for get cache don't make npe
+			k.ProcessCache(obj, instance)
+			if k.VerifyInstance(instance) {
+				ins = instance
+			} else {
+				log.Logger.Warnf("invalid instance: %s", instance.InstanceId)
+			}
 		}
 	} else {
 		// If we cannot get the instance data, it means that this may be a DELETE event. At this point, the data in the
@@ -229,11 +236,13 @@ func (k *k8s) convertK8sPod2Instance(obj client.QueueObject) (ins *sv.Instance) 
 			instanceId := k.formatObjToInstanceId(obj)
 			pp.Println(fmt.Sprintf("delete event, instanceid: %s", instanceId))
 			if instance := k.cache.Get(instanceId); instance != nil {
-				// set instance status
-				instance.Status = 2
-				// delete cache
-				k.cache.Delete(instance.InstanceId)
-				ins = instance
+				if instance.Status != 2 {
+					// set instance status
+					instance.Status = 2
+					// delete cache
+					k.cache.Delete(instance.InstanceId)
+					ins = instance
+				}
 			}
 		}
 	}
@@ -308,6 +317,14 @@ func (k *k8s) compareAndFlush() {
 }
 
 func (k *k8s) buildAndSendEvent(instance *sv.Instance) {
+	// if instance status is 0 or cached instance exist and status equals current status, don't send event
+	if instance.Status == 0 {
+		return
+	}
+	cacheInstance := k.cache.Get(instance.InstanceId)
+	if cacheInstance != nil && cacheInstance.Status == instance.Status {
+		return
+	}
 	ins := make([]*sv.Instance, 1)
 	ins[0] = instance
 	triggerTime := time.Now().Unix()
@@ -563,7 +580,8 @@ func formatInstanceStatus(obj *client.QueueObject, pod *v1.Pod) (status int32) {
 		status = 2
 	} else {
 		if pod.DeletionTimestamp != nil {
-			status = 3
+			// modify 3 to 2
+			status = 2
 		} else if pod != nil && pod.Status.Phase == v1.PodRunning {
 			var ready = true
 			for _, c := range pod.Status.ContainerStatuses {
@@ -594,7 +612,7 @@ func formatEnvType(pod *v1.Pod, envType string) string {
 	return envType
 }
 
-func formatContainerEnabled(pod *v1.Pod, ) (enabled bool) {
+func formatContainerEnabled(pod *v1.Pod) (enabled bool) {
 	if pod != nil && pod.Status.Phase == v1.PodRunning {
 		var ready = true
 		for _, c := range pod.Status.ContainerStatuses {
