@@ -11,10 +11,10 @@ import (
 	"time"
 )
 
-const(
-	connectTimeout = 5
-	readTimeout = 10
-	sleepTime = 5
+const (
+	connectTimeout    = 5
+	readTimeout       = 10
+	sleepTime         = 5
 	connectRetryCount = 3
 )
 
@@ -38,7 +38,7 @@ func (c *Client) Sync(instance []*v2.Instance) (r *v2.CommonResponse, err error)
 
 		}
 	}
-	ctx,_ := context.WithTimeout(context.TODO(),time.Second * readTimeout)
+	ctx, _ := context.WithTimeout(context.TODO(), time.Second*readTimeout)
 	req := new(v2.SynInstancesRequest)
 	req.Instance = instance
 	before := time.Now()
@@ -46,30 +46,31 @@ func (c *Client) Sync(instance []*v2.Instance) (r *v2.CommonResponse, err error)
 	after := time.Now()
 	offset := after.Sub(before).Milliseconds()
 	metrics.SyncOnceDurationsHistogram.Observe(float64(offset))
+	metrics.SyncOnceGauge.WithLabelValues("sync_once_gauge").Set(1)
 	if err != nil {
-		log.Logger.Errorf("Sync fail: %v instance: %v", err,req.Instance)
+		log.Logger.Errorf("Sync fail: %v instance: %v", err, req.Instance)
 	}
 	return
 }
 
 func (c *Client) SyncAll(instance []*v2.Instance) (r *v2.CommonResponse, err error) {
-	ctx,_ := context.WithTimeout(context.TODO(),time.Second * readTimeout)
+	ctx, _ := context.WithTimeout(context.TODO(), time.Second*readTimeout)
 	req := new(v2.SynAllInstancesRequest)
 	req.Instance = instance
 	r, err = c.service.SynAllInstance(ctx, req)
 	if err != nil {
-		log.Logger.Errorf("SyncAll fail: %v instance: %v", err,req.Instance)
+		log.Logger.Errorf("SyncAll fail: %v instance: %v", err, req.Instance)
 	}
 	return
 }
 
 func (c *Client) GetAll(status int32) (r *v2.InstanceList, err error) {
-	ctx,_ := context.WithTimeout(context.TODO(),time.Second * readTimeout)
+	ctx, _ := context.WithTimeout(context.TODO(), time.Second*readTimeout)
 	req := new(v2.GetAllInstancesRequest)
 	req.Status = status
-	r,err = c.service.GetAllInstance(ctx,req)
+	r, err = c.service.GetAllInstance(ctx, req)
 	if err != nil {
-		log.Logger.Errorf("GetAll fail: %v req: %v", err,req)
+		log.Logger.Errorf("GetAll fail: %v req: %v", err, req)
 	}
 	return
 }
