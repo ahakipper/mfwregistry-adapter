@@ -25,8 +25,15 @@ var (
 		},
 		[]string{"syncgauge"},
 	)
+	SyncErrorGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "sync_error_gauge",
+			Help: "",
+		},
+		[]string{"syncgauge"},
+	)
 )
 
 func init() {
-	prometheus.MustRegister(SyncAllDurationsHistogram, SyncOnceDurationsHistogram, SyncOnceGauge)
+	prometheus.MustRegister(SyncAllDurationsHistogram, SyncOnceDurationsHistogram, SyncOnceGauge,SyncErrorGauge)
 }

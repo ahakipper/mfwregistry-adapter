@@ -4,6 +4,7 @@ import (
     "context"
     v2 "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/metrics"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/mfwregistry"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/tools"
     "sync"
@@ -66,6 +67,7 @@ func (us *UnsyncedService) Sync() {
                 defer us.Unlock()
                 // call with WithRecover is to prevent subsequent function calls from panic
                 log.Logger.Infof("unsync service worked count :%d \n",len(us.store))
+                metrics.SyncErrorGauge.WithLabelValues("sync_error_gauge").Set(float64(len(us.store)))
                 for k, v := range us.store {
                     // if the push is successful, delete the event
                     if err := us.pusher.Push(v.Trigger, v.Data); err == nil {
