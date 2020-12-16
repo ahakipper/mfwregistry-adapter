@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/k0kubun/pp"
+	"github.com/panjf2000/ants/v2"
 	sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
 	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
 	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/metrics"
@@ -29,6 +30,7 @@ type k8s struct {
 	interval   int              // the time interval for full synchronization. default 600s(10m)
 	filters    []InstanceFilter // finters is a collection of functions used to filter invalid instances
 	cache      *Cache           // pod cache
+	pool	   *ants.Pool		// goroutine pool
 }
 
 const (
@@ -44,6 +46,8 @@ const (
 	ProtoGRPC      = "grpc"
 	ProtoWebSocket = "websocket"
 	ProtoDubbo     = "dubbo"
+	PoolBenchSize  = 100
+	PoolExpireTime = 100
 )
 
 type RuntimeConfig struct {
@@ -54,6 +58,13 @@ type RuntimeConfig struct {
 }
 
 type InstanceFilter func(ins *sv.Instance) bool
+
+// WithExpiryDuration sets up the interval time of cleaning up goroutines.
+func WithExpiryDuration(expiryDuration time.Duration) ants.Option {
+	return func(opts *ants.Options) {
+		opts.ExpiryDuration = expiryDuration
+	}
+}
 
 // Init k8s provider
 func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int, configPath []string) (provider K8SProvider, err error) {
@@ -84,6 +95,8 @@ func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int,
 		interval: pushInterval,
 		cache:    NewCache(2),
 	}
+	p, _ := ants.NewPool(PoolBenchSize, WithExpiryDuration(time.Second * PoolExpireTime))
+	k.pool = p
 	k.initInstanceFilters()
 
 	provider = k
@@ -131,14 +144,7 @@ func (k *k8s) monitor() {
 				continue
 			}
 			// rsync
-			switch obj.Event {
-			case client.EventAdd:
-				go k.eventSync(ins, triggerTime)
-			case client.EventUpdate:
-				go k.eventSync(ins, triggerTime)
-			case client.EventDelete:
-				go k.eventSync(ins, triggerTime)
-			}
+			go k.eventSync(ins, triggerTime)
 			k.robot.Finish(obj)
 		}
 	}
@@ -318,22 +324,24 @@ func (k *k8s) compareAndFlush() {
 
 func (k *k8s) buildAndSendEvent(instance *sv.Instance) {
 	// if instance status is 0 or cached instance exist and status equals current status, don't send event
-	if instance.Status == 0 {
-		return
-	}
-	cacheInstance := k.cache.Get(instance.InstanceId)
-	if cacheInstance != nil && cacheInstance.Status == instance.Status {
-		return
-	}
-	ins := make([]*sv.Instance, 1)
-	ins[0] = instance
-	triggerTime := time.Now().Unix()
-	event := &worker.Event{
-		Trigger: triggerTime,
-		Data:    ins,
-		Operate: worker.OperateTypeSync,
-	}
-	k.worker.Handle(event)
+	k.pool.Submit(func() {
+		if instance.Status == 0 {
+			return
+		}
+		cacheInstance := k.cache.Get(instance.InstanceId)
+		if cacheInstance != nil && cacheInstance.Status == instance.Status {
+			return
+		}
+		ins := make([]*sv.Instance, 1)
+		ins[0] = instance
+		triggerTime := time.Now().Unix()
+		event := &worker.Event{
+			Trigger: triggerTime,
+			Data:    ins,
+			Operate: worker.OperateTypeSync,
+		}
+		k.worker.Handle(event)
+	})
 }
 
 func (k *k8s) listToMap(ins []*sv.Instance) (m map[string]*sv.Instance) {
