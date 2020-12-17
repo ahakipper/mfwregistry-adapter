@@ -81,7 +81,7 @@ func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int,
 		}
 	}
 	var kr client.Robot
-	kr, err = client.NewRobot(clusters...)
+	kr, err = client.NewRobot(clusters, false)
 	if err != nil {
 		// If walk here, server init failed
 		return nil, err
@@ -106,19 +106,14 @@ func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int,
 
 // Monitor k8s cluster pod changes
 func (k *k8s) Start() {
-	go k.robot.Run()
-	// TODO make sure all task done
-	time.Sleep(time.Second * 5)
+	k.robot.Run()
+	defer k.robot.Stop()
 	k.monitor()
-
 	log.Logger.Info("k8s resource worker stopped")
 }
 
 // monitor k8s pod changes
 func (k *k8s) monitor() {
-	// first we should flush all the instances
-	// k.flushInstances()
-	// synchronize periodically
 	go k.processIntervalFullPush()
 	go k.compareAndFlush()
 	// monitor instance changes
@@ -144,7 +139,9 @@ func (k *k8s) monitor() {
 				continue
 			}
 			// rsync
-			go k.eventSync(ins, triggerTime)
+			k.pool.Submit(func() {
+				k.eventSync(ins, triggerTime)
+			})
 			k.robot.Finish(obj)
 		}
 	}
@@ -289,6 +286,13 @@ func (k *k8s) flushInstances() {
 // compare and find diff instances then flush
 func (k *k8s) compareAndFlush() {
 	if all := k.GetAll(); all != nil && len(all) > 0 {
+		// 处理缓存
+		k.cache.Clear()
+		for _, item := range all {
+			k.cache.ReplaceOrInsert(item)
+		}
+
+		// 对比差异并增量同步
 		list, err := k.worker.GetAll(InstanceStatus)
 		if err != nil || list == nil || len(list.GetInstance()) <= 0 {
 			log.Logger.Errorf("get all instances from atlas failed")
@@ -323,13 +327,9 @@ func (k *k8s) compareAndFlush() {
 }
 
 func (k *k8s) buildAndSendEvent(instance *sv.Instance) {
-	// if instance status is 0 or cached instance exist and status equals current status, don't send event
+	// if instance status is 0 , don't send event
 	k.pool.Submit(func() {
 		if instance.Status == 0 {
-			return
-		}
-		cacheInstance := k.cache.Get(instance.InstanceId)
-		if cacheInstance != nil && cacheInstance.Status == instance.Status {
 			return
 		}
 		ins := make([]*sv.Instance, 1)
