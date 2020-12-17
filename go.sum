@@ -242,6 +242,8 @@ gitlab.mfwdev.com/mtech/beehive-proto v0.2.51 h1:NANPQgNLDq1Ps3KaFc1G396GmfHj4m/
 gitlab.mfwdev.com/mtech/beehive-proto v0.2.51/go.mod h1:pTNtEToWZWtnGTEFC7FKtCfEakfkkF4vRaUCJ6KYh2U=
 gitlab.mfwdev.com/servicemesh/robot v0.1.1 h1:Icp5oMY3vpVaaGE/tPZTaPRxH0nGiPYeAvGtDKLBkNI=
 gitlab.mfwdev.com/servicemesh/robot v0.1.1/go.mod h1:84cDxJMjpfyz6o56Z9C/uxYWdZq7eN1Gu6549HYAKLY=
+gitlab.mfwdev.com/servicemesh/robot v0.1.2 h1:g1EP+maRBvurqjX1XLDzfRZrDESjtwUUOY7VGIoIp7M=
+gitlab.mfwdev.com/servicemesh/robot v0.1.2/go.mod h1:agzkjQB20HK2IkVZ+dSAQb+VAy+y8vC7bGN5sTa/vEM=
 go.etcd.io/bbolt v1.3.2 h1:Z/90sZLPOeCy2PwprqkFa25PdkusRzaj9P8zm/KNyvk=
 go.etcd.io/bbolt v1.3.2/go.mod h1:IbVyRI1SCnLcuJnV2u8VeU0CEYM7e686BmAb1XKL+uU=
 go.uber.org/atomic v1.4.0 h1:cxzIVoETapQEqDhQu3QfnvXAV4AlzcvUCxkVUFw3+EU=

@@ -288,19 +288,27 @@ func (k *k8s) compareAndFlush() {
 	if all := k.GetAll(); all != nil && len(all) > 0 {
 		// 处理缓存
 		k.cache.Clear()
+		onlineCount := 0
 		for _, item := range all {
 			k.cache.ReplaceOrInsert(item)
+			if item.Status == 1 {
+				onlineCount ++
+			}
 		}
-
 		// 对比差异并增量同步
 		list, err := k.worker.GetAll(InstanceStatus)
-		if err != nil || list == nil || len(list.GetInstance()) <= 0 {
+		if err != nil {
 			log.Logger.Errorf("get all instances from atlas failed")
+		}
+		if list == nil || list.Instance == nil || len(list.Instance) == 0 {
+			for _, ins := range all {
+				k.buildAndSendEvent(ins)
+			}
 			return
 		}
 		servMap := k.listToMap(list.GetInstance())
 		k8sMap := k.listToMap(all)
-		log.Logger.Infof("atlas server instance size :%d  k8s instance size :%d", len(servMap), len(k8sMap))
+		log.Logger.Infof("atlas online instance size :%d  k8s online instance size :%d  total :%d", len(servMap), onlineCount, len(k8sMap))
 		for k8sKey, k8sIns := range k8sMap {
 			if servIns, exist := servMap[k8sKey]; exist {
 				if k8sIns.Reversion > servIns.Reversion {
@@ -309,7 +317,7 @@ func (k *k8s) compareAndFlush() {
 				delete(k8sMap, k8sKey)
 				delete(servMap, k8sKey)
 			} else {
-				log.Logger.Infof("k8s match much : %v \n", k8sIns.InstanceId)
+				log.Logger.Infof("k8s match much id : %v , status : %v \n", k8sIns.InstanceId, k8sIns.Status)
 				if k8sIns.Status == 1 {
 					k.buildAndSendEvent(k8sIns)
 				}
@@ -599,6 +607,8 @@ func formatInstanceStatus(obj *client.QueueObject, pod *v1.Pod) (status int32) {
 			}
 			if ready == true {
 				status = 1
+			} else {
+				status = 2
 			}
 		}
 	}
