@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/k0kubun/pp"
+	"github.com/panjf2000/ants/v2"
 	sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
 	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
 	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/metrics"
@@ -29,6 +30,7 @@ type k8s struct {
 	interval   int              // the time interval for full synchronization. default 600s(10m)
 	filters    []InstanceFilter // finters is a collection of functions used to filter invalid instances
 	cache      *Cache           // pod cache
+	pool	   *ants.Pool		// goroutine pool
 }
 
 const (
@@ -44,6 +46,8 @@ const (
 	ProtoGRPC      = "grpc"
 	ProtoWebSocket = "websocket"
 	ProtoDubbo     = "dubbo"
+	PoolBenchSize  = 100
+	PoolExpireTime = 100
 )
 
 type RuntimeConfig struct {
@@ -54,6 +58,13 @@ type RuntimeConfig struct {
 }
 
 type InstanceFilter func(ins *sv.Instance) bool
+
+// WithExpiryDuration sets up the interval time of cleaning up goroutines.
+func WithExpiryDuration(expiryDuration time.Duration) ants.Option {
+	return func(opts *ants.Options) {
+		opts.ExpiryDuration = expiryDuration
+	}
+}
 
 // Init k8s provider
 func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int, configPath []string) (provider K8SProvider, err error) {
@@ -70,7 +81,7 @@ func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int,
 		}
 	}
 	var kr client.Robot
-	kr, err = client.NewRobot(clusters...)
+	kr, err = client.NewRobot(clusters, false)
 	if err != nil {
 		// If walk here, server init failed
 		return nil, err
@@ -84,6 +95,8 @@ func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int,
 		interval: pushInterval,
 		cache:    NewCache(2),
 	}
+	p, _ := ants.NewPool(PoolBenchSize, WithExpiryDuration(time.Second * PoolExpireTime))
+	k.pool = p
 	k.initInstanceFilters()
 
 	provider = k
@@ -93,19 +106,14 @@ func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int,
 
 // Monitor k8s cluster pod changes
 func (k *k8s) Start() {
-	go k.robot.Run()
-	// TODO make sure all task done
-	time.Sleep(time.Second * 5)
+	k.robot.Run()
+	defer k.robot.Stop()
 	k.monitor()
-
 	log.Logger.Info("k8s resource worker stopped")
 }
 
 // monitor k8s pod changes
 func (k *k8s) monitor() {
-	// first we should flush all the instances
-	// k.flushInstances()
-	// synchronize periodically
 	go k.processIntervalFullPush()
 	go k.compareAndFlush()
 	// monitor instance changes
@@ -131,14 +139,9 @@ func (k *k8s) monitor() {
 				continue
 			}
 			// rsync
-			switch obj.Event {
-			case client.EventAdd:
-				go k.eventSync(ins, triggerTime)
-			case client.EventUpdate:
-				go k.eventSync(ins, triggerTime)
-			case client.EventDelete:
-				go k.eventSync(ins, triggerTime)
-			}
+			k.pool.Submit(func() {
+				k.eventSync(ins, triggerTime)
+			})
 			k.robot.Finish(obj)
 		}
 	}
@@ -283,14 +286,29 @@ func (k *k8s) flushInstances() {
 // compare and find diff instances then flush
 func (k *k8s) compareAndFlush() {
 	if all := k.GetAll(); all != nil && len(all) > 0 {
+		// 处理缓存
+		k.cache.Clear()
+		onlineCount := 0
+		for _, item := range all {
+			k.cache.ReplaceOrInsert(item)
+			if item.Status == 1 {
+				onlineCount ++
+			}
+		}
+		// 对比差异并增量同步
 		list, err := k.worker.GetAll(InstanceStatus)
-		if err != nil || list == nil || len(list.GetInstance()) <= 0 {
+		if err != nil {
 			log.Logger.Errorf("get all instances from atlas failed")
+		}
+		if list == nil || list.Instance == nil || len(list.Instance) == 0 {
+			for _, ins := range all {
+				k.buildAndSendEvent(ins)
+			}
 			return
 		}
 		servMap := k.listToMap(list.GetInstance())
 		k8sMap := k.listToMap(all)
-		log.Logger.Infof("atlas server instance size :%d  k8s instance size :%d", len(servMap), len(k8sMap))
+		log.Logger.Infof("atlas online instance size :%d  k8s online instance size :%d  total :%d", len(servMap), onlineCount, len(k8sMap))
 		for k8sKey, k8sIns := range k8sMap {
 			if servIns, exist := servMap[k8sKey]; exist {
 				if k8sIns.Reversion > servIns.Reversion {
@@ -299,7 +317,7 @@ func (k *k8s) compareAndFlush() {
 				delete(k8sMap, k8sKey)
 				delete(servMap, k8sKey)
 			} else {
-				log.Logger.Infof("k8s match much : %v \n", k8sIns.InstanceId)
+				log.Logger.Infof("k8s match much id : %v , status : %v \n", k8sIns.InstanceId, k8sIns.Status)
 				if k8sIns.Status == 1 {
 					k.buildAndSendEvent(k8sIns)
 				}
@@ -317,23 +335,21 @@ func (k *k8s) compareAndFlush() {
 }
 
 func (k *k8s) buildAndSendEvent(instance *sv.Instance) {
-	// if instance status is 0 or cached instance exist and status equals current status, don't send event
-	if instance.Status == 0 {
-		return
-	}
-	cacheInstance := k.cache.Get(instance.InstanceId)
-	if cacheInstance != nil && cacheInstance.Status == instance.Status {
-		return
-	}
-	ins := make([]*sv.Instance, 1)
-	ins[0] = instance
-	triggerTime := time.Now().Unix()
-	event := &worker.Event{
-		Trigger: triggerTime,
-		Data:    ins,
-		Operate: worker.OperateTypeSync,
-	}
-	k.worker.Handle(event)
+	// if instance status is 0 , don't send event
+	k.pool.Submit(func() {
+		if instance.Status == 0 {
+			return
+		}
+		ins := make([]*sv.Instance, 1)
+		ins[0] = instance
+		triggerTime := time.Now().Unix()
+		event := &worker.Event{
+			Trigger: triggerTime,
+			Data:    ins,
+			Operate: worker.OperateTypeSync,
+		}
+		k.worker.Handle(event)
+	})
 }
 
 func (k *k8s) listToMap(ins []*sv.Instance) (m map[string]*sv.Instance) {
@@ -591,6 +607,8 @@ func formatInstanceStatus(obj *client.QueueObject, pod *v1.Pod) (status int32) {
 			}
 			if ready == true {
 				status = 1
+			} else {
+				status = 2
 			}
 		}
 	}
