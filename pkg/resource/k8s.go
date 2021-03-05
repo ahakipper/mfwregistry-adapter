@@ -30,7 +30,7 @@ type k8s struct {
 	interval   int              // the time interval for full synchronization. default 600s(10m)
 	filters    []InstanceFilter // finters is a collection of functions used to filter invalid instances
 	cache      *Cache           // pod cache
-	pool	   *ants.Pool		// goroutine pool
+	pool       *ants.Pool       // goroutine pool
 }
 
 const (
@@ -95,7 +95,7 @@ func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int,
 		interval: pushInterval,
 		cache:    NewCache(2),
 	}
-	p, _ := ants.NewPool(PoolBenchSize, WithExpiryDuration(time.Second * PoolExpireTime))
+	p, _ := ants.NewPool(PoolBenchSize, WithExpiryDuration(time.Second*PoolExpireTime))
 	k.pool = p
 	k.initInstanceFilters()
 
@@ -292,7 +292,7 @@ func (k *k8s) compareAndFlush() {
 		for _, item := range all {
 			k.cache.ReplaceOrInsert(item)
 			if item.Status == 1 {
-				onlineCount ++
+				onlineCount++
 			}
 		}
 		// 对比差异并增量同步
@@ -618,7 +618,7 @@ func formatInstanceStatus(obj *client.QueueObject, pod *v1.Pod) (status int32) {
 
 func formatEnvType(pod *v1.Pod, envType string) string {
 	labels := pod.Labels
-	if env, ok := labels["env-type"]; ok && envType == "" {
+	if env, ok := labels["env-type"]; ok && envType != "" {
 		envType = env
 	} else if env, ok := labels["K8S_CLUSTER_TYPE"]; ok && envType == "" {
 		envType = env
