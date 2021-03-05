@@ -311,7 +311,20 @@ func (k *k8s) compareAndFlush() {
 		log.Logger.Infof("atlas online instance size :%d  k8s online instance size :%d  total :%d", len(servMap), onlineCount, len(k8sMap))
 		for k8sKey, k8sIns := range k8sMap {
 			if servIns, exist := servMap[k8sKey]; exist {
+				diff := false
+				// If K8s instance Version > Finder instance version
 				if k8sIns.Reversion > servIns.Reversion {
+					diff = true
+				}
+				// If env-type not equal
+				if k8sIns.EnvType != servIns.EnvType {
+					diff = true
+				}
+				// If env-group not equal
+				if k8sIns.EnvGroup != servIns.EnvGroup {
+					diff = true
+				}
+				if diff {
 					k.buildAndSendEvent(k8sIns)
 				}
 				delete(k8sMap, k8sKey)
