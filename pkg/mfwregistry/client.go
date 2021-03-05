@@ -3,6 +3,8 @@ package mfwregistry
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	v2 "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
 	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
 	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
@@ -50,6 +52,11 @@ func (c *Client) Sync(instance []*v2.Instance) (r *v2.CommonResponse, err error)
 	if err != nil {
 		log.Logger.Errorf("Sync fail: %v instance: %v", err, req.Instance)
 	}
+	// for compatibility: If no error is returned, check that if the code in the return value is 0
+	if r != nil && r.Code != 0 {
+		return r, errors.New(fmt.Sprintf("SynInstance failed with code: %d,error: %s", r.Code, r.Msg))
+	}
+
 	return
 }
 
@@ -61,6 +68,11 @@ func (c *Client) SyncAll(instance []*v2.Instance) (r *v2.CommonResponse, err err
 	if err != nil {
 		log.Logger.Errorf("SyncAll fail: %v instance: %v", err, req.Instance)
 	}
+	// for compatibility: If no error is returned, check that if the code in the return value is 0
+	if r != nil && r.Code != 0 {
+		return r, errors.New(fmt.Sprintf("SynAllInstance failed with code: %d,error: %s", r.Code, r.Msg))
+	}
+
 	return
 }
 
@@ -72,6 +84,7 @@ func (c *Client) GetAll(status int32) (r *v2.InstanceList, err error) {
 	if err != nil {
 		log.Logger.Errorf("GetAll fail: %v req: %v", err, req)
 	}
+
 	return
 }
 
