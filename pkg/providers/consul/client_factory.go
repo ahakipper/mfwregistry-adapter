@@ -3,6 +3,7 @@ package consul
 import (
     "github.com/hashicorp/consul/api"
     "github.com/pkg/errors"
+    "sync"
 )
 
 type ConsulClientFactory interface {
@@ -14,6 +15,7 @@ var DefaultConsulClientFactory ConsulClientFactory
 type ClientFactorySimple struct {
     addrs   []string
     clients map[string]*api.Client
+    sync.RWMutex
 }
 
 func NeweClientFacotorySimple(addrs []string) (*ClientFactorySimple, error) {
@@ -30,6 +32,8 @@ func NeweClientFacotorySimple(addrs []string) (*ClientFactorySimple, error) {
 // Here you need to known is that consul client is based on HTTP, and it closes the connection at the end of the call internally,
 // so we don't need to care about connection closure.
 func (cfs *ClientFactorySimple) ConsulClientFactory() (client *api.Client, err error) {
+    cfs.Lock()
+    defer cfs.Unlock()
     if len(cfs.addrs) == 0 {
         err = errors.New("none consul addresses")
         return nil, err

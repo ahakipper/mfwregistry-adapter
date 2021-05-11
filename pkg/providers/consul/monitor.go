@@ -112,7 +112,6 @@ func (m *consulMonitor) watchConsul(ctx context.Context, change chan struct{}) (
 func (m *consulMonitor) updateRecord(ctx context.Context, change <-chan struct{}) (err error) {
     lastChange := int64(0)
     ticker := time.NewTicker(periodicCheckTime)
-
     for {
         select {
         case <-ctx.Done():

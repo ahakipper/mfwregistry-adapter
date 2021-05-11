@@ -14,9 +14,9 @@ func init() {
 func TestRegisterService(t *testing.T) {
     var err error
     config := api.DefaultConfig()
-    config.Address = "http://172.16.129.35:8520"
+    config.Address = "http://172.16.129.34:8520"
     client, err := api.NewClient(config)
-    hostName := "knode172-16-129-35"
+    hostName := "knode172-16-129-34"
     service := &api.AgentServiceRegistration{
         Name: "redis",
         Port: 12311,
@@ -50,7 +50,7 @@ func TestDeRegisterService(t *testing.T) {
     var err error
     config := api.DefaultConfig()
     var client *api.Client
-    config.Address = "172.16.129.39:8520"
+    config.Address = "172.16.129.37:8520"
     client, err = api.NewClient(config)
     serviceId := "redis"
     if err = client.Agent().ServiceDeregister(serviceId); err != nil {

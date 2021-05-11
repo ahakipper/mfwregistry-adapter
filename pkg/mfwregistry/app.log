@@ -1,0 +1,13 @@
+2021-05-11T17:15:00.803+0800	ERROR	mfwregistry/client.go:108	connect fail: context deadline exceeded
+2021-05-11T17:15:05.809+0800	ERROR	mfwregistry/client.go:108	connect fail: context deadline exceeded
+2021-05-11T17:15:10.814+0800	ERROR	mfwregistry/client.go:108	connect fail: context deadline exceeded
+2021-05-11T17:15:15.817+0800	ERROR	mfwregistry/client.go:30	get instance err:context deadline exceeded
+2021-05-11T17:27:45.877+0800	ERROR	mfwregistry/client.go:110	connect fail: context deadline exceeded
+2021-05-11T17:28:23.771+0800	INFO	mfwregistry/client.go:39	rsyncing instance: [{"instanceId":"350461-atlasprovider-msp-98ff7cd8-rd2j9","appCode":"test-test","provider":"ecs"}]
+2021-05-11T17:28:55.248+0800	INFO	mfwregistry/client.go:39	rsyncing instance: [{"instanceId":"350461-atlasprovider-msp-98ff7cd8-rd2j9","appCode":"test-test","provider":"ecs"}]
+2021-05-11T17:29:17.527+0800	INFO	mfwregistry/client.go:39	rsyncing instance: [{"instanceId":"350461-atlasprovider-msp-98ff7cd8-rd2j9","enabled":true,"appCode":"test-test","provider":"ecs","status":1}]
+2021-05-11T17:29:55.502+0800	INFO	mfwregistry/client.go:39	rsyncing instance: [{"instanceId":"350461-atlasprovider-msp-98ff7cd8-rd2j9","enabled":true,"appCode":"test-test","provider":"ecs","status":1}]
+2021-05-11T17:30:27.083+0800	INFO	mfwregistry/client.go:39	rsyncing instance: [{"instanceId":"350461-atlasprovider-msp-98ff7cd8-rd2j9","envCode":"dev","envGroup":"inter111","enabled":true,"appCode":"test-test","provider":"ecs","status":1}]
+2021-05-11T17:32:01.829+0800	INFO	mfwregistry/client.go:39	rsyncing instance: [{"instanceId":"350461-atlasprovider-msp-98ff7cd8-rd2j9","ports":[{"name":"http0","protocol":"http","port":80}],"ip":"172.18.18.18","envCode":"dev","envGroup":"inter111","enabled":true,"appCode":"test-test","provider":"ecs","status":1}]
+2021-05-11T17:38:01.383+0800	INFO	mfwregistry/client.go:40	rsyncing instance: [{"instanceId":"350461-atlasprovider-msp-98ff7cd8-rd2j9","ports":[{"name":"http0","protocol":"http","port":80}],"ip":"172.18.18.18","envCode":"dev","envGroup":"inter111","enabled":true,"appCode":"test-test","provider":"ecs","status":1}]
+2021-05-11T18:00:11.102+0800	INFO	mfwregistry/client.go:40	rsyncing instance: [{"instanceId":"350461-test-mtest-98ff7cd8-rd2j9","ports":[{"name":"http0","protocol":"http","port":80}],"ip":"172.18.18.18","envCode":"dev","envGroup":"inter111","enabled":true,"appCode":"test-test","provider":"ecs","status":1}]

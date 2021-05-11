@@ -1,109 +1,126 @@
 package mfwregistry
 
 import (
-	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
-	v2 "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
-	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
-	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
-	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/metrics"
-	"google.golang.org/grpc"
-	"time"
+    "context"
+    "encoding/json"
+    "errors"
+    "fmt"
+    "github.com/k0kubun/pp"
+    v2 "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/metrics"
+    "google.golang.org/grpc"
+    "time"
 )
 
 const (
-	connectTimeout    = 5
-	readTimeout       = 10
-	sleepTime         = 5
-	connectRetryCount = 3
+    connectTimeout    = 5
+    readTimeout       = 10
+    sleepTime         = 5
+    connectRetryCount = 3
 )
 
 type Client struct {
-	service v2.InstanceServiceClient
+    service v2.InstanceServiceClient
 }
 
 func NewInstance() (ins *Client, err error) {
-	c := &Client{}
-	if err = c.getConnect(); err != nil {
-		log.Logger.Errorf("get instance err:%s", err)
-		return nil, err
-	}
-	return c, err
+    c := &Client{}
+    if err = c.getConnect(); err != nil {
+        log.Logger.Errorf("get instance err:%s", err)
+        return nil, err
+    }
+    return c, err
 }
 
 func (c *Client) Sync(instance []*v2.Instance) (r *v2.CommonResponse, err error) {
-	if instance != nil {
-		if d, e := json.Marshal(instance); e == nil {
-			log.Logger.Infof("rsyncing instance: %s", string(d))
+    if instance != nil {
+        if d, e := json.Marshal(instance); e == nil {
+            log.Logger.Infof("rsyncing instance: %s", string(d))
 
-		}
-	}
-	ctx, _ := context.WithTimeout(context.TODO(), time.Second*readTimeout)
-	req := new(v2.SynInstancesRequest)
-	req.Instance = instance
-	before := time.Now()
-	r, err = c.service.SynInstance(ctx, req)
-	after := time.Now()
-	offset := after.Sub(before).Milliseconds()
-	metrics.SyncOnceDurationsHistogram.Observe(float64(offset))
-	metrics.SyncOnceGauge.WithLabelValues("sync_once_gauge").Set(1)
-	if err != nil {
-		log.Logger.Errorf("Sync fail: %v instance: %v", err, req.Instance)
-	}
-	// for compatibility: If no error is returned, check that if the code in the return value is 0
-	if r != nil && r.Code != 0 {
-		return r, errors.New(fmt.Sprintf("SynInstance failed with code: %d,error: %s", r.Code, r.Msg))
-	}
+        }
+    }
+    ctx, _ := context.WithTimeout(context.TODO(), time.Second*readTimeout)
+    req := new(v2.SynInstancesRequest)
+    req.Instance = instance
+    before := time.Now()
+    r, err = c.service.SynInstance(ctx, req)
+    after := time.Now()
+    offset := after.Sub(before).Milliseconds()
+    metrics.SyncOnceDurationsHistogram.Observe(float64(offset))
+    metrics.SyncOnceGauge.WithLabelValues("sync_once_gauge").Set(1)
+    if err != nil {
+        log.Logger.Errorf("Sync fail: %v instance: %v", err, req.Instance)
+    }
+    // for compatibility: If no error is returned, check that if the code in the return value is 0
+    if r != nil && r.Code != 0 {
+        return r, errors.New(fmt.Sprintf("SynInstance failed with code: %d,error: %s", r.Code, r.Msg))
+    }
 
-	return
+    return
 }
 
 func (c *Client) SyncAll(instance []*v2.Instance) (r *v2.CommonResponse, err error) {
-	ctx, _ := context.WithTimeout(context.TODO(), time.Second*readTimeout)
-	req := new(v2.SynAllInstancesRequest)
-	req.Instance = instance
-	r, err = c.service.SynAllInstance(ctx, req)
-	if err != nil {
-		log.Logger.Errorf("SyncAll fail: %v instance: %v", err, req.Instance)
-	}
-	// for compatibility: If no error is returned, check that if the code in the return value is 0
-	if r != nil && r.Code != 0 {
-		return r, errors.New(fmt.Sprintf("SynAllInstance failed with code: %d,error: %s", r.Code, r.Msg))
-	}
+    ctx, _ := context.WithTimeout(context.TODO(), time.Second*readTimeout)
+    req := new(v2.SynAllInstancesRequest)
+    req.Instance = instance
+    r, err = c.service.SynAllInstance(ctx, req)
+    if err != nil {
+        log.Logger.Errorf("SyncAll fail: %v instance: %v", err, req.Instance)
+    }
+    // for compatibility: If no error is returned, check that if the code in the return value is 0
+    if r != nil && r.Code != 0 {
+        return r, errors.New(fmt.Sprintf("SynAllInstance failed with code: %d,error: %s", r.Code, r.Msg))
+    }
 
-	return
+    return
 }
 
-func (c *Client) GetAll(status int32) (r *v2.InstanceList, err error) {
-	ctx, _ := context.WithTimeout(context.TODO(), time.Second*readTimeout)
-	req := new(v2.GetAllInstancesRequest)
-	req.Status = status
-	r, err = c.service.GetAllInstance(ctx, req)
-	if err != nil {
-		log.Logger.Errorf("GetAll fail: %v req: %v", err, req)
-	}
+func (c *Client) GetAll(status int32, provider string) (inss *v2.InstanceList, err error) {
+    ctx, _ := context.WithTimeout(context.TODO(), time.Second*readTimeout)
+    req := new(v2.GetAllInstancesRequest)
+    req.Status = status
+    var list *v2.InstanceList
+    list, err = c.service.GetAllInstance(ctx, req)
+    if err != nil {
+        log.Logger.Errorf("GetAll fail: %v req: %v", err, req)
+        return nil, err
+    }
+    if provider != "" && list != nil && len(list.Instance) > 0 {
+        inss = &v2.InstanceList{}
+        inss.Instance = []*v2.Instance{}
+        for _, ins := range list.Instance {
+            if ins.InstanceId == "350461-atlasprovider-msp-98ff7cd8-rd2j9" {
+                pp.Println("350461-atlasprovider-msp-98ff7cd8-rd2j9")
+            }
+            if ins.Provider == provider {
+                inss.Instance = append(inss.Instance, ins)
+            }
+        }
+    } else {
+        inss = list
+    }
 
-	return
+    return inss, err
 }
 
 func (c *Client) getConnect() (err error) {
-	ctx, _ := context.WithTimeout(context.Background(), time.Second*connectTimeout)
-	var conn *grpc.ClientConn
-	for i := 0; i < connectRetryCount; i++ {
-		conn, err = grpc.DialContext(ctx, config.GrpcAddr, grpc.WithInsecure(), grpc.WithBlock())
-		if err != nil {
-			log.Logger.Errorf("connect fail: %s", err)
-			time.Sleep(time.Second * sleepTime)
-		} else {
-			break
-		}
-	}
-	if err != nil {
-		return err
-	}
-	service := v2.NewInstanceServiceClient(conn)
-	c.service = service
-	return nil
+    ctx, _ := context.WithTimeout(context.Background(), time.Second*connectTimeout)
+    var conn *grpc.ClientConn
+    for i := 0; i < connectRetryCount; i++ {
+        conn, err = grpc.DialContext(ctx, config.GrpcAddr, grpc.WithInsecure(), grpc.WithBlock())
+        if err != nil {
+            log.Logger.Errorf("connect fail: %s", err)
+            time.Sleep(time.Second * sleepTime)
+        } else {
+            break
+        }
+    }
+    if err != nil {
+        return err
+    }
+    service := v2.NewInstanceServiceClient(conn)
+    c.service = service
+    return nil
 }

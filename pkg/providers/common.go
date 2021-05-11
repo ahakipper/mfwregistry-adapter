@@ -23,6 +23,11 @@ const (
 )
 
 const (
+    ProviderK8s = "k8s"
+    ProviderEcs = "ecs"
+)
+
+const (
     FullPushInterval = 7200 * time.Second
 )
 
@@ -41,4 +46,26 @@ func ListToMap(ins []*sv.Instance) (m map[string]*sv.Instance) {
         m[value.InstanceId] = value
     }
     return
+}
+
+func InitInstanceFilters() (filters []InstanceFilter) {
+    filters = []InstanceFilter{}
+    // init a default instance filter
+    filters = append(filters, func(ins *sv.Instance) bool {
+        if ins == nil {
+            return false
+        }
+        // appcode
+        if ins.AppCode == "" {
+            return false
+        }
+        // env_type
+        if ins.EnvType == "" {
+            return false
+        }
+        // ...
+        return true
+    })
+
+    return filters
 }

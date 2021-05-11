@@ -1211,3 +1211,666 @@
 
 2021-05-11T14:09:42.281+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
 
+2021-05-11T16:06:32.007+0800	INFO	consul/consul.go:159	consul getAll size: 3 
+
+2021-05-11T16:06:32.008+0800	INFO	worker/worker_fack.go:28	implement me
+2021-05-11T16:11:33.689+0800	INFO	consul/consul.go:164	consul getAll size: 3 
+
+2021-05-11T16:11:33.690+0800	INFO	worker/worker_fack.go:28	implement me
+2021-05-11T16:11:34.008+0800	INFO	consul/monitor.go:124	Consul service changed
+2021-05-11T16:11:34.149+0800	INFO	consul/consul.go:164	consul getAll size: 3 
+
+2021-05-11T16:11:38.658+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:11:43.662+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:11:48.658+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:12:37.884+0800	INFO	consul/consul.go:164	consul getAll size: 3 
+
+2021-05-11T16:12:37.884+0800	INFO	worker/worker_fack.go:28	implement me
+2021-05-11T16:12:38.027+0800	INFO	consul/monitor.go:124	Consul service changed
+2021-05-11T16:12:38.056+0800	INFO	consul/consul.go:164	consul getAll size: 3 
+
+2021-05-11T16:12:42.825+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:12:47.825+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:13:18.014+0800	INFO	consul/monitor.go:124	Consul service changed
+2021-05-11T16:13:18.169+0800	INFO	consul/consul.go:164	consul getAll size: 3 
+
+2021-05-11T16:13:18.169+0800	INFO	worker/worker_fack.go:18	implement me
+2021-05-11T16:13:18.169+0800	INFO	worker/worker_fack.go:18	implement me
+2021-05-11T16:13:18.169+0800	INFO	worker/worker_fack.go:18	implement me
+2021-05-11T16:13:22.661+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:13:58.076+0800	INFO	consul/consul.go:164	consul getAll size: 3 
+
+2021-05-11T16:13:58.077+0800	INFO	worker/worker_fack.go:28	implement me
+2021-05-11T16:13:59.040+0800	INFO	consul/monitor.go:125	Consul service changed
+2021-05-11T16:13:59.068+0800	INFO	consul/consul.go:164	consul getAll size: 3 
+
+2021-05-11T16:14:35.232+0800	INFO	consul/consul.go:166	consul getAll size: 3 
+
+2021-05-11T16:14:35.234+0800	INFO	worker/worker_fack.go:28	implement me
+2021-05-11T16:14:36.007+0800	INFO	consul/monitor.go:123	Consul service changed
+2021-05-11T16:14:36.076+0800	INFO	consul/consul.go:166	consul getAll size: 3 
+
+2021-05-11T16:16:54.351+0800	INFO	consul/consul.go:167	consul getAll size: 3 
+
+2021-05-11T16:16:54.352+0800	INFO	worker/worker_fack.go:28	implement me
+2021-05-11T16:16:55.007+0800	INFO	consul/monitor.go:123	Consul service changed
+2021-05-11T16:16:55.049+0800	INFO	consul/consul.go:167	consul getAll size: 3 
+
+2021-05-11T16:16:59.303+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:17:04.303+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:17:18.807+0800	INFO	consul/consul.go:165	consul getAll size: 3 
+
+2021-05-11T16:17:18.808+0800	INFO	worker/worker_fack.go:28	implement me
+2021-05-11T16:17:19.028+0800	INFO	consul/monitor.go:123	Consul service changed
+2021-05-11T16:17:19.074+0800	INFO	consul/consul.go:165	consul getAll size: 3 
+
+2021-05-11T16:17:23.725+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:17:28.724+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:17:33.726+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:17:38.725+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:17:43.119+0800	INFO	consul/consul.go:166	consul getAll size: 3 
+
+2021-05-11T16:17:43.120+0800	INFO	worker/worker_fack.go:28	implement me
+2021-05-11T16:17:44.016+0800	INFO	consul/monitor.go:123	Consul service changed
+2021-05-11T16:17:44.054+0800	INFO	consul/consul.go:166	consul getAll size: 3 
+
+2021-05-11T16:17:48.061+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:17:53.061+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:17:58.062+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:18:14.703+0800	INFO	consul/consul.go:165	consul getAll size: 3 
+
+2021-05-11T16:18:14.704+0800	INFO	worker/worker_fack.go:28	implement me
+2021-05-11T16:18:15.019+0800	INFO	consul/monitor.go:123	Consul service changed
+2021-05-11T16:18:15.069+0800	INFO	consul/consul.go:165	consul getAll size: 3 
+
+2021-05-11T16:18:19.620+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:18:24.620+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:18:29.620+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:18:34.619+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:18:39.619+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:18:44.619+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:18:49.620+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:18:54.620+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:18:59.619+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:19:04.619+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:19:10.653+0800	INFO	consul/consul.go:165	consul getAll size: 3 
+
+2021-05-11T16:19:10.654+0800	INFO	worker/worker_fack.go:28	implement me
+2021-05-11T16:19:11.029+0800	INFO	consul/monitor.go:123	Consul service changed
+2021-05-11T16:19:11.159+0800	INFO	consul/consul.go:165	consul getAll size: 3 
+
+2021-05-11T16:19:15.577+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:19:20.578+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:19:25.577+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:19:30.578+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:19:35.577+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:19:40.578+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:19:45.578+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:19:50.578+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:19:55.578+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:20:02.461+0800	INFO	consul/consul.go:165	consul getAll size: 3 
+
+2021-05-11T16:20:02.462+0800	INFO	worker/worker_fack.go:28	implement me
+2021-05-11T16:20:03.007+0800	INFO	consul/monitor.go:123	Consul service changed
+2021-05-11T16:20:03.050+0800	INFO	consul/consul.go:165	consul getAll size: 3 
+
+2021-05-11T16:20:07.354+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:20:12.354+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:20:17.353+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:20:22.353+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:20:27.354+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:20:32.354+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:20:37.354+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:20:41.008+0800	INFO	consul/monitor.go:123	Consul service changed
+2021-05-11T16:20:41.112+0800	INFO	consul/consul.go:165	consul getAll size: 4 
+
+2021-05-11T16:20:41.119+0800	INFO	worker/worker_fack.go:18	implement me
+2021-05-11T16:20:42.353+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:20:47.354+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:20:52.355+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:20:57.354+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:20:58.005+0800	INFO	consul/monitor.go:123	Consul service changed
+2021-05-11T16:20:58.055+0800	INFO	consul/consul.go:165	consul getAll size: 3 
+
+2021-05-11T16:20:58.060+0800	INFO	worker/worker_fack.go:18	implement me
+2021-05-11T16:21:02.354+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:21:07.355+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:21:12.355+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:21:17.354+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:21:18.004+0800	INFO	consul/monitor.go:123	Consul service changed
+2021-05-11T16:21:18.084+0800	INFO	consul/consul.go:165	consul getAll size: 2 
+
+2021-05-11T16:21:18.088+0800	INFO	worker/worker_fack.go:18	implement me
+2021-05-11T16:21:22.355+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:21:27.355+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:21:32.355+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:21:37.355+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:21:42.355+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:21:47.354+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:21:49.005+0800	INFO	consul/monitor.go:123	Consul service changed
+2021-05-11T16:21:49.040+0800	INFO	consul/consul.go:165	consul getAll size: 1 
+
+2021-05-11T16:21:49.045+0800	INFO	worker/worker_fack.go:18	implement me
+2021-05-11T16:21:52.355+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:21:57.355+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:22:02.354+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:22:07.356+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:22:12.355+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:22:17.356+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:22:22.356+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:22:27.355+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:22:32.355+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:22:37.356+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:22:42.356+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:22:47.356+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:22:52.355+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:22:57.356+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:23:02.355+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:23:07.356+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:23:12.355+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:23:17.357+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:23:22.355+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:23:27.357+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:23:32.355+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:23:37.360+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:23:42.357+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:23:47.356+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:23:52.359+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:23:57.361+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:24:02.360+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:24:07.359+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:24:12.356+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:24:17.358+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:24:22.363+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:24:27.361+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:24:32.359+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:24:37.362+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:24:42.360+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:24:47.357+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:24:52.360+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:24:57.362+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:25:02.359+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:25:07.363+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:25:12.361+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:25:17.357+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:25:22.357+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:25:27.358+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:25:32.362+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:25:37.362+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:25:42.361+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:25:47.361+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:25:52.358+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:25:57.357+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:26:02.360+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:26:07.360+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:26:12.362+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:26:17.357+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:26:22.359+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:26:27.361+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:26:32.360+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:26:37.358+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:26:42.358+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:26:47.358+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:26:52.363+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:26:57.358+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:27:02.364+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:27:07.360+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:27:12.361+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:27:17.361+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:27:22.363+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:27:27.359+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:27:32.364+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:27:37.363+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:27:42.360+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:27:47.360+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:27:52.364+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:27:57.358+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:28:02.358+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:28:07.362+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:28:12.363+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:28:17.364+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:28:22.360+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:28:27.360+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:28:32.358+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:28:37.358+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:28:42.358+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:28:47.360+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:28:52.360+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:28:57.362+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:29:02.364+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:29:07.360+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:29:12.359+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:29:17.360+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:29:22.364+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:29:27.360+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:29:32.363+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:29:37.361+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:29:42.362+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:29:47.362+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:29:52.360+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:29:57.361+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:30:02.361+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:56:03.182+0800	INFO	consul/consul.go:165	consul getAll size: 3 
+
+2021-05-11T16:56:03.183+0800	INFO	worker/worker_fack.go:28	implement me
+2021-05-11T16:56:04.029+0800	INFO	consul/monitor.go:123	Consul service changed
+2021-05-11T16:56:04.080+0800	INFO	consul/consul.go:165	consul getAll size: 3 
+
+2021-05-11T16:56:08.125+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:56:13.129+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:56:18.125+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:56:23.125+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:56:28.125+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:56:33.126+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:56:38.126+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:56:43.125+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:56:48.126+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:56:56.045+0800	INFO	consul/consul.go:165	consul getAll size: 3 
+
+2021-05-11T16:56:56.046+0800	INFO	worker/worker_fack.go:28	implement me
+2021-05-11T16:56:57.011+0800	INFO	consul/monitor.go:123	Consul service changed
+2021-05-11T16:56:57.043+0800	INFO	consul/consul.go:165	consul getAll size: 3 
+
+2021-05-11T16:57:01.011+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:57:06.011+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:57:11.012+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:57:16.011+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:57:21.012+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:57:26.011+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:57:31.019+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:57:36.012+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:57:41.012+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:57:46.012+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:57:51.012+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:57:56.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:58:01.012+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:58:06.012+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:58:11.015+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:58:16.012+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:58:21.012+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:58:26.012+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:58:31.015+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:58:36.012+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:58:41.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:58:46.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:58:51.012+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:58:56.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:59:01.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:59:06.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:59:11.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:59:16.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:59:21.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:59:26.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:59:31.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:59:36.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:59:41.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:59:46.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:59:51.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T16:59:56.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:00:01.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:00:06.014+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:00:11.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:00:16.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:00:21.014+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:00:26.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:00:31.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:00:36.014+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:00:41.014+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:00:46.013+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:00:51.014+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:00:56.014+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:01:01.014+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:01:06.014+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:01:11.014+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:01:16.014+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:01:21.015+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:01:26.014+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:01:31.014+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:01:36.014+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:01:41.015+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:01:46.015+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:01:51.014+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:01:56.014+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:02:01.014+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:02:06.015+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:02:11.014+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:02:16.014+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:02:21.015+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:02:26.015+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:02:31.015+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:02:36.015+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:02:41.015+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:02:46.015+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:02:51.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:02:56.015+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:03:01.015+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:03:06.015+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:03:11.015+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:03:16.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:03:21.015+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:03:26.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:03:31.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:03:36.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:03:41.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:03:46.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:03:51.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:03:56.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:04:01.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:04:06.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:04:11.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:04:16.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:04:21.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:04:26.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:04:31.023+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:04:36.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:04:41.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:04:46.017+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:04:51.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:04:56.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:05:01.017+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:05:06.017+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:05:11.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:05:16.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:05:21.017+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:05:26.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:05:31.016+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:05:36.017+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:05:41.017+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:05:46.017+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:05:51.017+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:05:56.017+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:06:01.017+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:06:06.017+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:06:11.017+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:06:16.017+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:06:21.017+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:06:26.017+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:06:31.025+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:06:36.018+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:06:41.018+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:06:46.017+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:06:51.017+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+
+2021-05-11T17:06:56.017+0800	INFO	worker/unsynced_service.go:69	unsync service worked count :0 
+

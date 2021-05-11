@@ -63,7 +63,7 @@ func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int,
     }
     p, _ := ants.NewPool(providers.PoolBenchSize, withExpiryDuration(time.Second*providers.PoolExpireTime))
     k.pool = p
-    k.initInstanceFilters()
+    k.filters = providers.InitInstanceFilters()
 
     provider = k
 
@@ -128,26 +128,6 @@ func (k *k8s) ProcessCache(obj client.QueueObject, ins *sv.Instance) {
     case client.EventDelete:
         k.cache.Delete(ins.InstanceId)
     }
-}
-
-func (k *k8s) initInstanceFilters() {
-    k.filters = []providers.InstanceFilter{}
-    // init a default instance filter
-    k.filters = append(k.filters, func(ins *sv.Instance) bool {
-        if ins == nil {
-            return false
-        }
-        // appcode
-        if ins.AppCode == "" {
-            return false
-        }
-        // env_type
-        if ins.EnvType == "" {
-            return false
-        }
-        // ...
-        return true
-    })
 }
 
 // VerifyInstance checks wether the instance is valid
@@ -263,7 +243,7 @@ func (k *k8s) compareAndFlush() {
             }
         }
         // 对比差异并增量同步
-        list, err := k.worker.GetAll(providers.InstanceStatus)
+        list, err := k.worker.GetAll(providers.InstanceStatus, providers.ProviderK8s)
         if err != nil {
             log.Logger.Errorf("get all instances from atlas failed")
         }

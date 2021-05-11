@@ -3,6 +3,7 @@ package consul
 import (
     "context"
     "github.com/hashicorp/consul/api"
+    "github.com/k0kubun/pp"
     "github.com/panjf2000/ants/v2"
     "github.com/pkg/errors"
     "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
@@ -45,20 +46,25 @@ func NewConsulProvider(ctx context.Context, worker worker.Worker, pushInterval i
     if monitor, err = NewConsulMonitor(cf); err != nil {
         return nil, err
     }
-    consul := &consul{
+    consulProvider := &consul{
         ctx:           ctx,
         monitor:       monitor,
         worker:        worker,
         clientFactory: cf,
         cache:         providers.NewCache(8),
     }
+    // Create pool for sending instance events to MfwRegistry
+    p, _ := ants.NewPool(providers.PoolBenchSize, withExpiryDuration(time.Second*providers.PoolExpireTime))
+    consulProvider.pool = p
+    // Init instance fiter
+    consulProvider.filters = providers.InitInstanceFilters()
 
-    //Watch the change events to refresh local caches
+    // Watch the change events to refresh local caches
     // monitor.AppendServiceHandler(provider.ServiceChanged)
-    monitor.AppendInstanceHandler(consul.InstanceChanged)
+    monitor.AppendInstanceHandler(consulProvider.InstanceChanged)
 
     //return &controller, err
-    return consul, nil
+    return consulProvider, nil
 }
 
 func (c *consul) Run() (err error) {
@@ -101,7 +107,7 @@ func (c *consul) syncInstance() (err error) {
     }
     // Compare to generate events
     addEvents, updateEvents, deleteEvents := c.extractDiff(oldCache, newCache)
-    // pp.Println(map[string][]*sv.Instance{"add": addEvents, "update": updateEvents, "delete": deleteEvents})
+    pp.Println(map[string][]*sv.Instance{"add": addEvents, "update": updateEvents, "delete": deleteEvents})
     // push events
     c.EventsSync(addEvents, updateEvents, deleteEvents)
     // Update cache
@@ -172,6 +178,8 @@ func (c *consul) ServiceChanged(instances []*api.CatalogService) (err error) {
 }
 
 func (c *consul) extractDiff(old, new providers.CacheIterface) (add []*v2.Instance, update []*sv.Instance, del []*sv.Instance) {
+    pp.Println(new)
+    pp.Println(len(old.List()), len(new.List()))
     add = []*sv.Instance{}
     update = []*sv.Instance{}
     del = []*sv.Instance{}
@@ -299,7 +307,7 @@ func (c *consul) compareAndFlush() {
             }
         }
         // 对比差异并增量同步
-        registryList, err := c.worker.GetAll(providers.InstanceStatus)
+        registryList, err := c.worker.GetAll(providers.InstanceStatus, providers.ProviderEcs)
         if err != nil {
             log.Logger.Errorf("get all instances from atlas failed")
             return
@@ -367,4 +375,11 @@ func (c *consul) buildAndSendEvent(instance *sv.Instance) {
         }
         c.worker.Handle(event)
     })
+}
+
+// withExpiryDuration sets up the interval time of cleaning up goroutines.
+func withExpiryDuration(expiryDuration time.Duration) ants.Option {
+    return func(opts *ants.Options) {
+        opts.ExpiryDuration = expiryDuration
+    }
 }

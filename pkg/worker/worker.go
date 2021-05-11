@@ -41,7 +41,7 @@ func (w *DefaultWorker) InitEventHandlers() {
     w.AddEventHandler(OperateTypeSync, func(e *Event) (err error) {
         if err = w.pusher.Push(e.Trigger, e.Data); err != nil {
             // if the event push fails, add it to UnsyncedService, and the UnsyncedService service completes the push
-            log.Logger.Errorf("wokderService sync failed, err:%v instance: %v",err, e.Data[0].InstanceId)
+            log.Logger.Errorf("wokderService sync failed, err:%v instance: %v", err, e.Data[0].InstanceId)
             w.unsyncedService.Add(e.Trigger, e.Data)
         }
         return
@@ -69,7 +69,7 @@ func (w *DefaultWorker) ProcessUnsynced() {
     w.unsyncedService.Sync()
 }
 
-func (w *DefaultWorker) GetAll(enable int32) (r *v2.InstanceList,err error) {
-    r,err = w.pusher.GetAll(enable)
+func (w *DefaultWorker) GetAll(enable int32, provider string) (r *v2.InstanceList, err error) {
+    r, err = w.pusher.GetAll(enable, provider)
     return
 }
