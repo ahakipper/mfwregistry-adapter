@@ -4,21 +4,24 @@ import (
     "context"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/resource"
-    worker "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/worker"
-    "sync"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/metrics"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/providers"
+    consul2 "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/providers/consul"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/providers/k8s"
+    worker "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/worker"
+    "golang.org/x/sync/errgroup"
+    "sync"
 )
 
-// Distribute Core Server configuration resource provider
+// Distribute Core Server configuration providers provider
 type Server struct {
 
     // When server stop need to call this funcs
     stopWorkerFunc  context.CancelFunc
     stopElectorFunc context.CancelFunc
 
-    // k8s resource provider
-    K8sProvider resource.K8SProvider
+    // providers providers
+    Providers []providers.Provider
 
     elector worker.Elector
 
@@ -53,15 +56,19 @@ func NewServer() (*Server, error) {
     wctx, wcancel := context.WithCancel(context.Background())
     // create worker
     w := worker.NewResourceWorker(wctx)
-    // pass the worker to the providers
-    k8sProvider, err := resource.NewK8SProvider(wctx, w, config.PushAllInterval, config.KubeConfigPath)
+    // create k8s provider and pass the worker to the providers
+    k8sProvider, err := k8s.NewK8SProvider(wctx, w, config.PushAllInterval, config.KubeConfigPath)
+    if err != nil {
+        return nil, err
+    }
+    consulProvider, err := consul2.NewConsulProvider(wctx, w, config.PushAllInterval, config.KubeConfigPath)
     if err != nil {
         return nil, err
     }
     return &Server{
         stopElectorFunc: ecancel,
         stopWorkerFunc:  wcancel,
-        K8sProvider:     k8sProvider,
+        Providers:       []providers.Provider{k8sProvider, consulProvider},
         elector:         elector,
         leaderChCh:      leaderChanges,
         stop:            make(chan struct{}),
@@ -135,22 +142,39 @@ func (s *Server) stopAndStartWroker() (err error) {
         s.stopWorkerFunc()
         s.stopWorkerFunc = nil
     }
-    s.K8sProvider = nil
+    s.Providers = nil
 
     // init cancel context
     wctx, wcancel := context.WithCancel(context.Background())
+    s.stopWorkerFunc = wcancel
 
     // create and start the worker
     w := worker.NewResourceWorker(wctx)
-    var k8sProvider resource.K8SProvider
-    if k8sProvider, err = resource.NewK8SProvider(wctx, w, config.PushAllInterval, config.KubeConfigPath); err != nil {
+    eg := errgroup.Group{}
+
+    // create k8s provider
+    var k8sProvider providers.Provider
+    if k8sProvider, err = k8s.NewK8SProvider(wctx, w, config.PushAllInterval, config.KubeConfigPath); err != nil {
         return err
     }
-    //
-    s.stopWorkerFunc = wcancel
-    s.K8sProvider = k8sProvider
-    // start
-    k8sProvider.Start()
 
-    return
+    // create consul provider
+    var consulProvider providers.Provider
+    consulProvider, err = consul2.NewConsulProvider(wctx, w, config.PushAllInterval, config.KubeConfigPath)
+    if err != nil {
+        return err
+    }
+
+    //
+    s.Providers = []providers.Provider{k8sProvider, consulProvider}
+    // start
+    eg.Go(func() error {
+        return k8sProvider.Run()
+    })
+    eg.Go(func() error {
+        return consulProvider.Run()
+    })
+    err = eg.Wait()
+
+    return err
 }

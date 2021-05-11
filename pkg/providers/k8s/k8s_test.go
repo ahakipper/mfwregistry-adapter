@@ -1,4 +1,4 @@
-package resource
+package k8s
 
 import (
 	"fmt"
