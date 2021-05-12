@@ -9,7 +9,7 @@ type Provider interface {
     // Run starts to monitor s subject
     // The Run action should hang utils the monitor stopped.
     Run() error
-
+    CompareAndFlush()
     // GetAll get all the instances from current provider
     GetAll() []*sv.Instance
 }

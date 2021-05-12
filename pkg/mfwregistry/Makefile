@@ -16,12 +16,12 @@ TestClient_Sync:
 
 ## TestClient_GetAllOfProviderK8s:test get all k8s instances from mfwregistry
 TestClient_GetAllOfProviderK8s:
-	@echo "		>  	test get all instances from mfwregistry"
+	@echo "		>  	test get all K8s instances from mfwregistry"
 	go test -v -test.run TestClient_GetAllOfProviderK8s --count=1
 
 ## TestClient_GetAllOfProviderEcs:test get all ecs instances from mfwregistry
 TestClient_GetAllOfProviderEcs:
-	@echo "		>  	test get all instances from mfwregistry"
+	@echo "		>  	test get all Ecs instances from mfwregistry"
 	go test -v -test.run TestClient_GetAllOfProviderEcs --count=1
 
 

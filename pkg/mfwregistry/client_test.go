@@ -8,7 +8,7 @@ import (
     "testing"
 )
 
-var atlasDevAddr = "172.16.130.71:50051"
+var atlasDevAddr = "172.18.27.63:50051"
 
 func TestClient_Sync(t *testing.T) {
     config.GrpcAddr = atlasDevAddr
@@ -36,7 +36,7 @@ func TestClient_Sync(t *testing.T) {
         Status:    1,
         EnvCode:   "dev",
         EnvGroup:  "inter111",
-        Reversion: 123,
+        Reversion: 1234,
     }}
     r, err := client.Sync(instances)
     if err != nil {

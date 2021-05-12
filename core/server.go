@@ -2,6 +2,8 @@ package core
 
 import (
     "context"
+    "fmt"
+    "github.com/pkg/errors"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/metrics"
@@ -41,14 +43,21 @@ type Server struct {
 
 // Server Init
 func NewServer() (*Server, error) {
-
+    var err error
+    // providers check
+    if len(config.Providers) == 0 {
+        err = errors.New("there is none providers configured")
+        return nil, err
+    } else {
+        log.Logger.Infof("configured providers %v", config.Providers)
+    }
     // new master elector
     ectx, ecancel := context.WithCancel(context.Background())
     // this channel must have a buffer, otherwise, the operation of leader change notification of the elector that sendting to
     // the channel may be blocked.
     leaderChanges := make(chan bool, 2048)
-    elector, err := worker.NewElector(ectx, leaderChanges)
-
+    var elector worker.Elector
+    elector, err = worker.NewElector(ectx, leaderChanges)
     if err != nil {
         return nil, err
     }
@@ -56,19 +65,15 @@ func NewServer() (*Server, error) {
     wctx, wcancel := context.WithCancel(context.Background())
     // create worker
     w := worker.NewResourceWorker(wctx)
-    // create k8s provider and pass the worker to the providers
-    k8sProvider, err := k8s.NewK8SProvider(wctx, w, config.PushAllInterval, config.KubeConfigPath)
-    if err != nil {
-        return nil, err
-    }
-    consulProvider, err := consul2.NewConsulProvider(wctx, w, config.PushAllInterval, config.KubeConfigPath)
-    if err != nil {
+    var prs []providers.Provider
+    if prs, err = InitializeProviders(wctx, w); err != nil {
+        err = errors.WithMessagef(err, "new server")
         return nil, err
     }
     return &Server{
         stopElectorFunc: ecancel,
         stopWorkerFunc:  wcancel,
-        Providers:       []providers.Provider{k8sProvider, consulProvider},
+        Providers:       prs,
         elector:         elector,
         leaderChCh:      leaderChanges,
         stop:            make(chan struct{}),
@@ -78,7 +83,6 @@ func NewServer() (*Server, error) {
 
 // Run server
 func (s *Server) Run() {
-
     // start and process leader election
     log.Logger.Info("trying to become to master through election")
     go s.elector.ElectWait()
@@ -137,6 +141,14 @@ func (s *Server) stopAndStartWroker() (err error) {
     defer s.Unlock()
     log.Logger.Info("stop and create worker")
 
+    // providers check
+    if len(config.Providers) == 0 {
+        err = errors.New("there is none providers configured")
+        panic(err)
+    } else {
+        log.Logger.Infof("configured providers %v", config.Providers)
+    }
+
     // stop the previous worker
     if s.stopWorkerFunc != nil {
         s.stopWorkerFunc()
@@ -147,34 +159,60 @@ func (s *Server) stopAndStartWroker() (err error) {
     // init cancel context
     wctx, wcancel := context.WithCancel(context.Background())
     s.stopWorkerFunc = wcancel
-
+    // new error group
+    eg := errgroup.Group{}
     // create and start the worker
     w := worker.NewResourceWorker(wctx)
-    eg := errgroup.Group{}
 
-    // create k8s provider
-    var k8sProvider providers.Provider
-    if k8sProvider, err = k8s.NewK8SProvider(wctx, w, config.PushAllInterval, config.KubeConfigPath); err != nil {
+    prs := []providers.Provider{}
+    if prs, err = InitializeProviders(wctx, w); err != nil {
         return err
     }
+    // assign providers
+    s.Providers = prs
 
-    // create consul provider
-    var consulProvider providers.Provider
-    consulProvider, err = consul2.NewConsulProvider(wctx, w, config.PushAllInterval, config.KubeConfigPath)
-    if err != nil {
-        return err
+    // start and wait
+    for _, p := range s.Providers {
+        eg.Go(func() error {
+            return p.Run()
+        })
+
     }
-
-    //
-    s.Providers = []providers.Provider{k8sProvider, consulProvider}
-    // start
-    eg.Go(func() error {
-        return k8sProvider.Run()
-    })
-    eg.Go(func() error {
-        return consulProvider.Run()
-    })
     err = eg.Wait()
 
     return err
+}
+
+func InitializeProviders(ctx context.Context, w worker.Worker) (prs []providers.Provider, err error) {
+    if len(config.Providers) == 0 {
+        err = errors.New("empty provider names for initializing")
+        return nil, err
+    }
+    prs = []providers.Provider{}
+    for _, pname := range config.Providers {
+        switch pname {
+        case providers.ProviderK8s:
+            // create k8s provider and pass the worker to the providers
+            var k8sProvider providers.Provider
+            k8sProvider, err = k8s.NewK8SProvider(ctx, w, config.PushAllInterval, config.KubeConfigPath)
+            if err != nil {
+                err = errors.WithMessagef(err, "new k8s provider")
+                return nil, err
+            }
+            prs = append(prs, k8sProvider)
+        case providers.ProviderEcs:
+            var consulProvider providers.Provider
+            consulProvider, err = consul2.NewConsulProvider(ctx, w, config.PushAllInterval, config.KubeConfigPath)
+            if err != nil {
+                err = errors.WithMessagef(err, "new consul provider")
+                return nil, err
+            }
+            prs = append(prs, consulProvider)
+        default:
+            err = errors.New(fmt.Sprintf("invalid provider name: %s", pname))
+            return nil, err
+        }
+    }
+
+    return prs, err
 }

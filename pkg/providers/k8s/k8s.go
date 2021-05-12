@@ -72,6 +72,7 @@ func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int,
 
 // Run starts to monitor k8s cluster pod changes
 func (k *k8s) Run() (err error) {
+    log.Logger.Infof("start to run k8s provider")
     k.robot.Run()
     defer k.robot.Stop()
     k.monitor()
@@ -82,8 +83,10 @@ func (k *k8s) Run() (err error) {
 
 // monitor k8s pod changes
 func (k *k8s) monitor() {
-    go k.processIntervalFullPush()
-    go k.compareAndFlush()
+    // Perform full instances synchronization periodically
+    go k.ProcessIntervalFullPush()
+    // Perform instances comparison for single synchronization one by one. Note: this operation will only be executed once.
+    go k.CompareAndFlush()
     // monitor instance changes
     for {
         select {
@@ -230,8 +233,8 @@ func (k *k8s) flushInstances() {
     }
 }
 
-// compare and find diff instances then flush
-func (k *k8s) compareAndFlush() {
+// CompareAndFlush compare and find diff instances then flush
+func (k *k8s) CompareAndFlush() {
     if all := k.GetAll(); all != nil && len(all) > 0 {
         // 处理缓存
         k.cache.Clear()
@@ -331,7 +334,10 @@ func (k *k8s) GetAll() (result []*sv.Instance) {
     return
 }
 
-func (k *k8s) processIntervalFullPush() {
+// ProcessIntervalFullPush will sync all Instances of the current Provider to the MfwRegistry.
+// Note: The current synchronization behavior is not to directly call the SyncAll method of MfwRegistry,
+// but to perform instances comparison and do instance synchronization one by one using Method CompareAndFlush.
+func (k *k8s) ProcessIntervalFullPush() {
     interval := providers.FullPushInterval
     if k.interval != 0 {
         interval = time.Duration(k.interval) * time.Second
@@ -341,10 +347,10 @@ func (k *k8s) processIntervalFullPush() {
         select {
         case <-ticker.C:
             before := time.Now()
-            k.compareAndFlush()
+            k.CompareAndFlush()
             after := time.Now()
             offset := after.Sub(before).Milliseconds()
-            metrics.SyncAllDurationsHistogram.Observe(float64(offset))
+            metrics.SyncAllK8sDurationsHistogram.Observe(float64(offset))
             log.Logger.Infof("the synchronization operation is completed periodically, interval: %d, time spend: %s", interval, unit.RelTime(before, time.Now(), "", ""))
         case <-k.ctx.Done():
             ticker.Stop()

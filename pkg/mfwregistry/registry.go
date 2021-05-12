@@ -2,6 +2,7 @@ package mfwregistry
 
 import (
     v2 "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
 )
 
@@ -26,8 +27,12 @@ func NewMFWRegistry() *MFWRegistry {
 }
 
 func (mr *MFWRegistry) Push(triggerTime int64, instance []*v2.Instance) (err error) {
+    if config.DisablePushWorker {
+        log.Logger.Infof("perform a fake push operation, instances: %v", instance)
+        return nil
+    }
     // simulate push failure
-    //err = errors.New("the registery not exists now")
+    // err = errors.New("the registery not exists now")
     res, err := mr.C.Sync(instance)
     if err != nil {
         return err

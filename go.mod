@@ -22,7 +22,7 @@ require (
 	github.com/spf13/cobra v1.0.0
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/spf13/viper v1.4.0
-	gitlab.mfwdev.com/mtech/beehive-proto v0.2.50-0.20201104072229-87884c833c15
+	gitlab.mfwdev.com/mtech/beehive-proto v0.2.59
 	gitlab.mfwdev.com/servicemesh/robot v0.1.2
 	go.uber.org/zap v1.10.0
 	golang.org/x/net v0.0.0-20200707034311-ab3426394381 // indirect

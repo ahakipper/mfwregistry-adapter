@@ -5,7 +5,7 @@ var (
     CertFile       string       // etcd cert file
     KeyFile        string       // etcd key file
     CAFile         string       // etcd ca file
-    KubeConfigPath []string       // K8s kubeconfig files path
+    KubeConfigPath []string     // K8s kubeconfig files path
     // log
     LogFilePath string // log file path
     LogLevel    int    // log level
@@ -18,6 +18,10 @@ var (
     PushAllInterval int // The time interval of full push（seconds）
     // grpc
     GrpcAddr string
+    // DisablePushWorker will stop the real push action of the worker but only print push info. This configuration is for test use only.
+    DisablePushWorker bool
+    // Providers
+    Providers []string
 )
 
 func InitTest() {
@@ -26,6 +30,7 @@ func InitTest() {
     KeyFile = "./config/certs/etcdtest/etcd-key.pem"
     CAFile = "./config/certs/etcdtest/ca.pem"
     KubeConfigPath = []string{"./config/kubeconfigs/k8s-test"}
+    Providers = []string{}
 }
 
 func InitDev() {
@@ -34,6 +39,7 @@ func InitDev() {
     KeyFile = "./config/certs/etcdtest/etcd-key.pem"
     CAFile = "./config/certs/etcdtest/ca.pem"
     KubeConfigPath = []string{"./config/kubeconfigs/k8s-hull"}
+    Providers = []string{}
 }
 
 func InitProd() {
@@ -43,5 +49,6 @@ func InitProd() {
     CertFile = "./config/certs/etcdprod/etcd.pem"
     KeyFile = "./config/certs/etcdprod/etcd-key.pem"
     CAFile = "./config/certs/etcdprod/ca.pem"
-    KubeConfigPath = []string{"./config/kubeconfigs/k8s-deck","./config/kubeconfigs/k8s-kraken"}
+    KubeConfigPath = []string{"./config/kubeconfigs/k8s-deck", "./config/kubeconfigs/k8s-kraken"}
+    Providers = []string{}
 }

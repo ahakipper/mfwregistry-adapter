@@ -68,8 +68,11 @@ func NewConsulProvider(ctx context.Context, worker worker.Worker, pushInterval i
 }
 
 func (c *consul) Run() (err error) {
-    go c.processIntervalFullPush()
-    go c.compareAndFlush()
+    log.Logger.Infof("start to run ecs provider")
+    // Perform full instances synchronization periodically
+    go c.ProcessIntervalFullPush()
+    // Perform instances comparison for single synchronization one by one. Note: this operation will only be executed once.
+    go c.CompareAndFlush()
     // monitor will hang
     err = c.monitor.Start(c.ctx)
     if err != nil {
@@ -268,7 +271,11 @@ func (c *consul) eventSync(ins *sv.Instance, triggerTime int64) {
     })
 }
 
-func (c *consul) processIntervalFullPush() {
+// ProcessIntervalFullPush will sync all Instances of the current Provider to the MfwRegistry.
+// Note: The current synchronization behavior is not to directly call the SyncAll method of MfwRegistry,
+// but to perform instances comparison and do instance synchronization one by one using Method CompareAndFlush.
+// TODO: 各个 Provider 方法重复，后期需要优化
+func (c *consul) ProcessIntervalFullPush() {
     interval := providers.FullPushInterval
     if c.interval != 0 {
         interval = time.Duration(c.interval) * time.Second
@@ -278,10 +285,10 @@ func (c *consul) processIntervalFullPush() {
         select {
         case <-ticker.C:
             before := time.Now()
-            c.compareAndFlush()
+            c.CompareAndFlush()
             after := time.Now()
             offset := after.Sub(before).Milliseconds()
-            metrics.SyncAllDurationsHistogram.Observe(float64(offset))
+            metrics.SyncAllEcsDurationsHistogram.Observe(float64(offset))
             log.Logger.Infof("the synchronization operation is completed periodically, interval: %d, time spend: %s", interval, unit.RelTime(before, time.Now(), "", ""))
         case <-c.ctx.Done():
             ticker.Stop()
@@ -290,8 +297,8 @@ func (c *consul) processIntervalFullPush() {
     }
 }
 
-// compare and find diff instances then flush
-func (c *consul) compareAndFlush() {
+// CompareAndFlush compare and find diff instances then flush
+func (c *consul) CompareAndFlush() {
     c.Lock()
     defer c.Unlock()
     // Here, we assume that the consul data is impossible to be empty. Once it is empty,

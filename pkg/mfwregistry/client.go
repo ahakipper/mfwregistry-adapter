@@ -5,7 +5,6 @@ import (
     "encoding/json"
     "errors"
     "fmt"
-    "github.com/k0kubun/pp"
     v2 "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
@@ -81,6 +80,7 @@ func (c *Client) GetAll(status int32, provider string) (inss *v2.InstanceList, e
     ctx, _ := context.WithTimeout(context.TODO(), time.Second*readTimeout)
     req := new(v2.GetAllInstancesRequest)
     req.Status = status
+    req.Provider = provider
     var list *v2.InstanceList
     list, err = c.service.GetAllInstance(ctx, req)
     if err != nil {
@@ -91,9 +91,6 @@ func (c *Client) GetAll(status int32, provider string) (inss *v2.InstanceList, e
         inss = &v2.InstanceList{}
         inss.Instance = []*v2.Instance{}
         for _, ins := range list.Instance {
-            if ins.InstanceId == "350461-atlasprovider-msp-98ff7cd8-rd2j9" {
-                pp.Println("350461-atlasprovider-msp-98ff7cd8-rd2j9")
-            }
             if ins.Provider == provider {
                 inss.Instance = append(inss.Instance, ins)
             }

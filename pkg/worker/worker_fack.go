@@ -91,7 +91,7 @@ func (w *FackWorker) ProcessUnsynced() {
     w.unsyncedService.Sync()
 }
 
-func (w *FackWorker) GetAll(enable int32) (r *v2.InstanceList, err error) {
-    r, err = w.pusher.GetAll(enable, "")
+func (w *FackWorker) GetAll(enable int32, provider string) (r *v2.InstanceList, err error) {
+    r, err = w.pusher.GetAll(enable, provider)
     return
 }
