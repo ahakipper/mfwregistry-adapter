@@ -1,4 +1,4 @@
-package resource
+package providers
 
 import (
     "github.com/google/btree"
@@ -7,27 +7,37 @@ import (
     "sync"
 )
 
+type CacheIterface interface {
+    Get(id string) *sv.Instance
+    Delete(id string) *sv.Instance
+    ReplaceOrInsert(ins *sv.Instance) *sv.Instance
+    List() []*sv.Instance
+    Clear()
+}
+
+// Cache
 // The internal implementation of the cache can use data structures such as map and btree
 // The reason why map is not used is because golang map does not release memory space as elements
 // are deleted.（In fact, there is no problem under normal circumstances）
 // Therefore, if the current adapter runs for a long time, its memory may continue to increase (unless the map is cleared at the right time)
-type Cache struct {
-    btree *btree.BTree
-    sync.RWMutex
-}
 
 // NewCache init a Cache
 // if degree is 2, it is a bit like a binary tree
-func NewCache(degree int) *Cache {
+func NewCache(degree int) CacheIterface {
     if degree < 2 {
         degree = 2
     }
-    return &Cache{
+    return &CacheBtree{
         btree: btree.New(degree),
     }
 }
 
-func (cache *Cache) Get(id string) *sv.Instance {
+type CacheBtree struct {
+    btree *btree.BTree
+    sync.RWMutex
+}
+
+func (cache *CacheBtree) Get(id string) *sv.Instance {
     cache.RLock()
     defer cache.RUnlock()
     key := &InstanceCacheItem{
@@ -42,7 +52,27 @@ func (cache *Cache) Get(id string) *sv.Instance {
     return nil
 }
 
-func (cache *Cache) Delete(id string) *sv.Instance {
+// List return all the instances
+func (cache *CacheBtree) List() []*sv.Instance {
+    cache.RLock()
+    defer cache.RUnlock()
+    var all []*sv.Instance
+    cache.btree.Ascend(func(item btree.Item) bool {
+        if all == nil {
+            all = []*sv.Instance{}
+        }
+        if item != nil {
+            ins := item.(*InstanceCacheItem)
+            all = append(all, ins.Instance)
+        }
+
+        return true
+    })
+
+    return all
+}
+
+func (cache *CacheBtree) Delete(id string) *sv.Instance {
     cache.Lock()
     defer cache.Unlock()
     key := &InstanceCacheItem{
@@ -55,7 +85,7 @@ func (cache *Cache) Delete(id string) *sv.Instance {
     return item.(*InstanceCacheItem).Instance
 }
 
-func (cache *Cache) ReplaceOrInsert(ins *sv.Instance) *sv.Instance {
+func (cache *CacheBtree) ReplaceOrInsert(ins *sv.Instance) *sv.Instance {
     cache.Lock()
     defer cache.Unlock()
     if ins == nil {
@@ -69,7 +99,7 @@ func (cache *Cache) ReplaceOrInsert(ins *sv.Instance) *sv.Instance {
     return ins
 }
 
-func (cache *Cache) Clear() {
+func (cache *CacheBtree) Clear() {
     cache.Lock()
     defer cache.Unlock()
     cache.btree.Clear(false)

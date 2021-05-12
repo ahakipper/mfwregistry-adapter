@@ -20,11 +20,12 @@ import (
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/core"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/providers"
 )
 
 // k8sadapterCmd represents the k8sadapter command
-var k8sadapterCmd = &cobra.Command{
-    Use:   "k8sadapter",
+var adapterCmd = &cobra.Command{
+    Use:   "adapter",
     Short: "A brief description of your command",
     Long: `A longer description that spans multiple lines and likely contains examples
 and usage of using your command. For example:
@@ -33,15 +34,15 @@ Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
     Run: func(cmd *cobra.Command, args []string) {
-        fmt.Println("starting k8sadapter")
+        fmt.Println("starting adapter")
         // init flags
         initAdapterFlags(cmd)
         // server init
         server, err := core.NewServer()
         if err != nil {
-            panic(err)
+            fmt.Println(err.Error())
+            return
         }
-
         // run
         server.Run()
 
@@ -56,7 +57,7 @@ to quickly create a Cobra application.`,
 }
 
 func init() {
-    rootCmd.AddCommand(k8sadapterCmd)
+    rootCmd.AddCommand(adapterCmd)
 
     // Here you will define your flags and configuration settings.
 
@@ -66,10 +67,14 @@ func init() {
 
     // Cobra supports local flags which will only run when this command
     // is called directly, e.g.:
-    k8sadapterCmd.Flags().BoolP("leader-elect", "t", true, "whether to enable node election")
-    k8sadapterCmd.Flags().StringP("env", "e", "test", "the environment，e.g：test、dev、prod")
-    k8sadapterCmd.Flags().IntP("push-interval", "i", 7200, "the time interval for full synchronization. the unit is seconds")
-    k8sadapterCmd.Flags().StringP("grpc-addr", "g", "172.18.18.214:50051", "grpc address")
+    adapterCmd.Flags().StringSliceP("providers", "r", []string{},
+        fmt.Sprintf("the providers, e.g: %s、%s. multiple values are separated by commas", providers.ProviderK8s, providers.ProviderEcs),
+    )
+    adapterCmd.Flags().BoolP("leader-elect", "t", true, "whether to enable node election")
+    adapterCmd.Flags().StringP("env", "e", "test", "the environment，e.g：test、dev、prod")
+    adapterCmd.Flags().IntP("push-interval", "i", 7200, "the time interval for full synchronization. the unit is seconds")
+    adapterCmd.Flags().StringP("grpc-addr", "g", "172.16.130.71:50051", "grpc address")
+    adapterCmd.Flags().BoolP("disable-worker", "w", false, "disable push worker, just for testing")
 }
 
 func initAdapterFlags(cmd *cobra.Command) {
@@ -100,6 +105,8 @@ func initAdapterFlags(cmd *cobra.Command) {
     // push
     config.PushAllInterval, _ = cmd.Flags().GetInt("push-interval")
     // grpc
-    config.GrpcAddr,_ = cmd.Flags().GetString("grpc-addr")
-
+    config.GrpcAddr, _ = cmd.Flags().GetString("grpc-addr")
+    // disable push worker action
+    config.DisablePushWorker, _ = cmd.Flags().GetBool("disable-worker")
+    config.Providers, _ = cmd.Flags().GetStringSlice("providers")
 }

@@ -145,7 +145,7 @@ func (n *node) Watch() (e error) {
 }
 
 func (n *node) Quit() {
-    // node quit, release resource
+    // node quit, release providers
     n.table.Clean()
 
     n.revoke()

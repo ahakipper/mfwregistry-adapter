@@ -17,7 +17,7 @@ const (
 )
 
 // Indicates the prefix key for participating in the campaign, store in etcd
-var campaignCenter = "/paas/mfwregistry-k8sadapter"
+var campaignCenter = "/paas/mfwregistry-k8sadapter11"
 
 type Candidate interface {
     // Campaign puts a value as eligible for the election. It blocks until
