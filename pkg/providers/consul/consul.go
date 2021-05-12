@@ -3,7 +3,6 @@ package consul
 import (
     "context"
     "github.com/hashicorp/consul/api"
-    "github.com/k0kubun/pp"
     "github.com/panjf2000/ants/v2"
     "github.com/pkg/errors"
     "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
@@ -110,7 +109,7 @@ func (c *consul) syncInstance() (err error) {
     }
     // Compare to generate events
     addEvents, updateEvents, deleteEvents := c.extractDiff(oldCache, newCache)
-    pp.Println(map[string][]*sv.Instance{"add": addEvents, "update": updateEvents, "delete": deleteEvents})
+    //pp.Println(map[string][]*sv.Instance{"add": addEvents, "update": updateEvents, "delete": deleteEvents})
     // push events
     c.EventsSync(addEvents, updateEvents, deleteEvents)
     // Update cache
@@ -165,7 +164,7 @@ func (c *consul) GetAll() (result []*v2.Instance) {
             }
         }
     }
-    log.Logger.Infof("consul getAll size: %d \n", len(result))
+    log.Logger.Infof("consul getall size: %d", len(result))
 
     return result
 }
@@ -181,8 +180,7 @@ func (c *consul) ServiceChanged(instances []*api.CatalogService) (err error) {
 }
 
 func (c *consul) extractDiff(old, new providers.CacheIterface) (add []*v2.Instance, update []*sv.Instance, del []*sv.Instance) {
-    pp.Println(new)
-    pp.Println(len(old.List()), len(new.List()))
+    // pp.Println(len(old.List()), len(new.List()))
     add = []*sv.Instance{}
     update = []*sv.Instance{}
     del = []*sv.Instance{}
@@ -255,7 +253,7 @@ func (c *consul) EventsSync(add, update, del []*sv.Instance) {
     }
     if len(del) > 0 {
         for _, ins := range del {
-            ins.Status = 0
+            ins.Status = 2
             ins.Enabled = false
             c.eventSync(ins, time.Now().Unix())
         }
@@ -301,6 +299,7 @@ func (c *consul) ProcessIntervalFullPush() {
 func (c *consul) CompareAndFlush() {
     c.Lock()
     defer c.Unlock()
+    log.Logger.Infof("trying to compare and find diff instances then flush")
     // Here, we assume that the consul data is impossible to be empty. Once it is empty,
     // no operation is performed.
     if all := c.GetAll(); all != nil && len(all) > 0 {
@@ -316,7 +315,8 @@ func (c *consul) CompareAndFlush() {
         // 对比差异并增量同步
         registryList, err := c.worker.GetAll(providers.InstanceStatus, providers.ProviderEcs)
         if err != nil {
-            log.Logger.Errorf("get all instances from atlas failed")
+            err = errors.WithMessage(err, "get all instances from mfwregistry")
+            log.Logger.Errorf(err.Error())
             return
         }
         if registryList == nil || registryList.Instance == nil || len(registryList.Instance) == 0 {
@@ -325,41 +325,52 @@ func (c *consul) CompareAndFlush() {
             }
             return
         }
-        remoteRegistryMap := providers.ListToMap(registryList.GetInstance())
-        providerMap := providers.ListToMap(all)
-        log.Logger.Infof("atlas online instance size :%d  k8s online instance size :%d  total :%d", len(remoteRegistryMap), onlineCount, len(providerMap))
-        for consulKey, consulIns := range providerMap {
-            if servIns, exist := remoteRegistryMap[consulKey]; exist {
+        remoteInstances := providers.ListToMap(registryList.GetInstance())
+        currentProviderInstances := providers.ListToMap(all)
+        log.Logger.Infof("mfwregistry online ecs instances size :%d  consul online instance size :%d  total :%d", len(remoteInstances), onlineCount, len(currentProviderInstances))
+
+        for consulKey, consulIns := range currentProviderInstances {
+            // For these instances in both Provider and MfwRegistry, if the information in Provider is newer, push is performed.
+            if servIns, exist := remoteInstances[consulKey]; exist {
                 diff := false
                 // If K8s instance Version > Finder instance version
                 if consulIns.Reversion > servIns.Reversion {
                     diff = true
-                }
-                // If env-type not equal
-                if consulIns.EnvType != servIns.EnvType {
-                    diff = true
-                }
-                // If env-group not equal
-                if consulIns.EnvGroup != servIns.EnvGroup {
-                    diff = true
+                } else if consulIns.Reversion == servIns.Reversion {
+                    // If env-type not equal
+                    if consulIns.EnvType != servIns.EnvType {
+                        diff = true
+                    }
+                    // If env-group not equal
+                    if consulIns.EnvGroup != servIns.EnvGroup {
+                        diff = true
+                    }
+                    if consulIns.Status != servIns.Status {
+                        diff = true
+                    }
                 }
                 if diff {
+                    log.Logger.Infof("the instance: %s of appcode: %s is newer, trigger a push.", consulIns.InstanceId, consulIns.AppCode)
                     c.buildAndSendEvent(consulIns)
                 }
-                delete(providerMap, consulKey)
-                delete(remoteRegistryMap, consulKey)
+                delete(currentProviderInstances, consulKey)
+                delete(remoteInstances, consulKey)
             } else {
-                log.Logger.Infof("k8s match much id : %v , status : %v \n", consulIns.InstanceId, consulIns.Status)
+                // For these instances in both Provider but not in MfwRegistry, the instance should be added to MfwRegistry.
+                log.Logger.Infof("consul match much id : %s, status: %d", consulIns.InstanceId, consulIns.Status)
                 if consulIns.Status == 1 {
                     c.buildAndSendEvent(consulIns)
                 }
-                delete(providerMap, consulKey)
+                delete(currentProviderInstances, consulKey)
             }
         }
-        if len(remoteRegistryMap) > 0 {
-            log.Logger.Infof("atlas server pre delete instance size :%d \n", len(remoteRegistryMap))
-            for _, servIns := range remoteRegistryMap {
+        // The instances remaining in the MfwRegistry variable（remoteInstances） are either old or not in the Provider instance list.
+        // In this case, we should delete it from MfwRegistry (that is, set it to Status=2 and push it).
+        if len(remoteInstances) > 0 {
+            log.Logger.Infof("process mfwregistry instance deleting. instance size: %d", len(remoteInstances))
+            for _, servIns := range remoteInstances {
                 servIns.Status = 2
+                log.Logger.Infof("mfwregistry server has the old instance, set its Status filed as 2, and trigger a push. instance: %v", servIns)
                 c.buildAndSendEvent(servIns)
             }
         }

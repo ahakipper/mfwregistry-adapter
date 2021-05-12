@@ -37,7 +37,7 @@ func (s *UnsyncedService) Add(triggerTime int64, instance []*v2.Instance) {
         s.Lock()
         defer s.Unlock()
         // just store the latest event, the old event is not needed
-        for _,item := range instance{
+        for _, item := range instance {
             if old, ok := s.store[item.InstanceId]; ok {
                 oldIns := old.Data[0]
                 if item.Reversion > oldIns.Reversion {
@@ -45,9 +45,9 @@ func (s *UnsyncedService) Add(triggerTime int64, instance []*v2.Instance) {
                     s.store[item.InstanceId] = old
                 }
             } else {
-                newIns := make([]*v2.Instance,1)
+                newIns := make([]*v2.Instance, 1)
                 newIns[0] = item
-                newEvent := &Event{Trigger:triggerTime,Data:newIns,Operate:OperateTypeSync}
+                newEvent := &Event{Trigger: triggerTime, Data: newIns, Operate: OperateTypeSync}
                 s.store[item.InstanceId] = newEvent
             }
         }
@@ -66,7 +66,9 @@ func (us *UnsyncedService) Sync() {
                 us.Lock()
                 defer us.Unlock()
                 // call with WithRecover is to prevent subsequent function calls from panic
-                log.Logger.Infof("unsync service worked count :%d \n",len(us.store))
+                if len(us.store) > 0 {
+                    log.Logger.Infof("unsync service worked count :%d \n", len(us.store))
+                }
                 metrics.SyncErrorGauge.WithLabelValues("sync_error_gauge").Set(float64(len(us.store)))
                 for k, v := range us.store {
                     // if the push is successful, delete the event

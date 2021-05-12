@@ -36,13 +36,14 @@ func TestClient_Sync(t *testing.T) {
         Status:    1,
         EnvCode:   "dev",
         EnvGroup:  "inter111",
-        Reversion: 1234,
+        Reversion: 1240,
     }}
     r, err := client.Sync(instances)
     if err != nil {
         t.Error(err.Error())
     }
-    pp.Println(r.Code, r.Msg)
+    r = r
+    // pp.Println(r.Code, r.Msg)
 }
 
 func TestClient_GetAllOfProviderK8s(t *testing.T) {
@@ -56,6 +57,7 @@ func TestClient_GetAllOfProviderK8s(t *testing.T) {
     if err != nil {
         t.Error(err.Error())
     }
+    r = r
     pp.Println(len(r.Instance))
 }
 
@@ -67,6 +69,7 @@ func TestClient_GetAllOfProviderEcs(t *testing.T) {
         t.Error(err)
     }
     r, err := client.GetAll(1, "ecs")
+    r = r
     if err != nil {
         t.Error(err.Error())
     }

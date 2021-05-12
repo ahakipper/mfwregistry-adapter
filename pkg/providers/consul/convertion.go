@@ -17,6 +17,9 @@ const (
 
 var instanceBaseAttrMetas = map[string]struct{}{metaPorts: {}, metaEnvType: {}, metaEnvGroup: {}, metaAppcode: {}, metaVersion: {}}
 
+// convertInstance convert a Consul valid Endpoint to a Instance.
+// As the Endpoints obtained from Consul are valid and passed the health check. Therefore, when converting to Instance,
+// we need to set the value of Instance  Status filed to 1.
 func convertInstance(endpoint *api.CatalogService) (ins *sv.Instance, err error) {
     if endpoint == nil {
         return nil, errors.New("nil consul service endpoint")
@@ -70,7 +73,7 @@ func convertInstance(endpoint *api.CatalogService) (ins *sv.Instance, err error)
         Image:       map[string]string{},
         Idc:         "",
         Reversion:   int64(endpoint.ModifyIndex),
-        Status:      0,
+        Status:      1,
     }
 
     return ins, nil

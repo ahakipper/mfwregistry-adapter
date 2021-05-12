@@ -173,6 +173,7 @@ func (s *Server) stopAndStartWroker() (err error) {
 
     // start and wait
     for _, p := range s.Providers {
+        p := p
         eg.Go(func() error {
             return p.Run()
         })
@@ -202,7 +203,11 @@ func InitializeProviders(ctx context.Context, w worker.Worker) (prs []providers.
             prs = append(prs, k8sProvider)
         case providers.ProviderEcs:
             var consulProvider providers.Provider
-            consulProvider, err = consul2.NewConsulProvider(ctx, w, config.PushAllInterval, config.KubeConfigPath)
+            if len(config.ConsulAddress) == 0 {
+                err = errors.New("the consul server address is not configured")
+                return nil, err
+            }
+            consulProvider, err = consul2.NewConsulProvider(ctx, w, config.PushAllInterval, config.ConsulAddress)
             if err != nil {
                 err = errors.WithMessagef(err, "new consul provider")
                 return nil, err

@@ -258,7 +258,7 @@ func (k *k8s) CompareAndFlush() {
         }
         servMap := providers.ListToMap(list.GetInstance())
         k8sMap := providers.ListToMap(all)
-        log.Logger.Infof("atlas online instance size :%d  k8s online instance size :%d  total :%d", len(servMap), onlineCount, len(k8sMap))
+        log.Logger.Infof("mfwregistry online k8s instances size :%d  k8s online instance size :%d  total :%d", len(servMap), onlineCount, len(k8sMap))
         for k8sKey, k8sIns := range k8sMap {
             if servIns, exist := servMap[k8sKey]; exist {
                 diff := false
@@ -329,7 +329,7 @@ func (k *k8s) GetAll() (result []*sv.Instance) {
             log.Logger.Warnf("invalid instance: %s", instance.InstanceId)
         }
     }
-    log.Logger.Infof("k8s getAll size: %d \n", len(result))
+    log.Logger.Infof("k8s get all size: %d", len(result))
 
     return
 }

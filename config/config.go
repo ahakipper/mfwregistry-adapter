@@ -22,6 +22,8 @@ var (
     DisablePushWorker bool
     // Providers
     Providers []string
+    // ConsulAddress is the consul server address
+    ConsulAddress []string
 )
 
 func InitTest() {
@@ -30,6 +32,7 @@ func InitTest() {
     KeyFile = "./config/certs/etcdtest/etcd-key.pem"
     CAFile = "./config/certs/etcdtest/ca.pem"
     KubeConfigPath = []string{"./config/kubeconfigs/k8s-test"}
+    ConsulAddress = []string{"172.16.129.2:8520", "172.16.129.3:8520"}
     Providers = []string{}
 }
 
@@ -39,16 +42,17 @@ func InitDev() {
     KeyFile = "./config/certs/etcdtest/etcd-key.pem"
     CAFile = "./config/certs/etcdtest/ca.pem"
     KubeConfigPath = []string{"./config/kubeconfigs/k8s-hull"}
+    ConsulAddress = []string{"172.16.129.2:8520", "172.16.129.3:8520"}
     Providers = []string{}
 }
 
 func InitProd() {
     EtcdEndpoints = []string{"192.168.11.100:2479", "192.168.11.101:2479", "192.168.11.102:2479"}
-
     // this dir depend on Dockerfile
     CertFile = "./config/certs/etcdprod/etcd.pem"
     KeyFile = "./config/certs/etcdprod/etcd-key.pem"
     CAFile = "./config/certs/etcdprod/ca.pem"
     KubeConfigPath = []string{"./config/kubeconfigs/k8s-deck", "./config/kubeconfigs/k8s-kraken"}
+    ConsulAddress = []string{"10.132.2.40:8520", "10.132.2.42:8520", "10.132.2.43:8520"}
     Providers = []string{}
 }

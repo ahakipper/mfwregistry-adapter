@@ -120,7 +120,7 @@ func (m *consulMonitor) updateRecord(ctx context.Context, change <-chan struct{}
         case <-ticker.C:
             currentTime := time.Now().Unix()
             if lastChange > 0 && currentTime-lastChange > int64(refreshIdleTime.Seconds()) {
-                log.Logger.Infof("Consul service changed")
+                log.Logger.Infof("consul service changed")
                 // m.updateServiceRecord()
                 m.updateInstanceRecord()
                 lastChange = int64(0)
