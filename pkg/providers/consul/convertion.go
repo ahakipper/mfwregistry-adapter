@@ -53,7 +53,7 @@ func convertInstance(endpoint *api.CatalogService) (ins *sv.Instance, err error)
         InstanceId:  endpoint.Node,
         Level:       "",
         Ports:       ports,
-        Ip:          endpoint.ServiceAddress,
+        Ip:          endpoint.Address,
         EnvCode:     envCode,
         EnvType:     envType,
         EnvGroup:    envGroup,
@@ -75,7 +75,6 @@ func convertInstance(endpoint *api.CatalogService) (ins *sv.Instance, err error)
         Reversion:   int64(endpoint.ModifyIndex),
         Status:      1,
     }
-
     return ins, nil
 }
 

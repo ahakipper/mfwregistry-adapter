@@ -200,12 +200,16 @@ func (c *consul) extractDiff(old, new providers.CacheIterface) (add []*v2.Instan
                 if newIns.Reversion > oldIns.Reversion {
                     if c.VerifyInstance(newIns) {
                         update = append(update, newIns)
+                    } else {
+                        log.Logger.Warnf("verify instance failed, appcode: %s, instanceid: %s", newIns.AppCode, newIns.InstanceId)
                     }
                 }
             } else {
                 // add events
                 if c.VerifyInstance(newIns) {
                     add = append(add, newIns)
+                } else {
+                    log.Logger.Warnf("verify instance failed, appcode: %s, instanceid: %s", newIns.AppCode, newIns.InstanceId)
                 }
             }
         }
@@ -274,11 +278,12 @@ func (c *consul) eventSync(ins *sv.Instance, triggerTime int64) {
 // but to perform instances comparison and do instance synchronization one by one using Method CompareAndFlush.
 // TODO: 各个 Provider 方法重复，后期需要优化
 func (c *consul) ProcessIntervalFullPush() {
-    interval := providers.FullPushInterval
+    var interval time.Duration = providers.FullPushInterval
     if c.interval != 0 {
         interval = time.Duration(c.interval) * time.Second
     }
-    ticker := time.NewTicker(time.Second * time.Duration(interval))
+    interval = 10 * time.Second
+    ticker := time.NewTicker(interval)
     for {
         select {
         case <-ticker.C:
@@ -338,14 +343,14 @@ func (c *consul) CompareAndFlush() {
                     diff = true
                 } else if consulIns.Reversion == servIns.Reversion {
                     // If env-type not equal
-                    if consulIns.EnvType != servIns.EnvType {
-                        diff = true
-                    }
-                    // If env-group not equal
-                    if consulIns.EnvGroup != servIns.EnvGroup {
-                        diff = true
-                    }
-                    if consulIns.Status != servIns.Status {
+                    if consulIns.EnvType != servIns.EnvType ||
+                        consulIns.EnvGroup != servIns.EnvGroup ||
+                        consulIns.Status != servIns.Status ||
+                        consulIns.Ip != servIns.Ip ||
+                        consulIns.Idc != servIns.Idc ||
+                        consulIns.Cluster != servIns.Cluster ||
+                        consulIns.Enabled != servIns.Enabled ||
+                        consulIns.Cpu != servIns.Cpu {
                         diff = true
                     }
                 }

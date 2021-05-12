@@ -50,20 +50,16 @@ func ListToMap(ins []*sv.Instance) (m map[string]*sv.Instance) {
 
 func InitInstanceFilters() (filters []InstanceFilter) {
     filters = []InstanceFilter{}
-    // init a default instance filter
+    // Init a default instance filter
     filters = append(filters, func(ins *sv.Instance) bool {
         if ins == nil {
             return false
         }
-        // appcode
-        if ins.AppCode == "" {
+        // Validate some fields that must not be empty.
+        // Note: Do not valid ins.Version as it may truly be empty.
+        if ins.AppCode == "" || ins.EnvType == "" || ins.Ip == "" || ins.Reversion == 0 {
             return false
         }
-        // env_type
-        if ins.EnvType == "" {
-            return false
-        }
-        // ...
         return true
     })
 
