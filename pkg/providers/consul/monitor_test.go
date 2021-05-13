@@ -14,9 +14,9 @@ func init() {
 func TestRegisterService(t *testing.T) {
     var err error
     config := api.DefaultConfig()
-    config.Address = "http://172.16.129.38:8520"
+    config.Address = "http://172.16.129.37:8520"
     client, err := api.NewClient(config)
-    hostName := "knode172-16-129-38"
+    hostName := "knode172-16-129-37"
     service := &api.AgentServiceRegistration{
         Name: "redis",
         Port: 12311,

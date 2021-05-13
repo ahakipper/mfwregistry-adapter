@@ -77,9 +77,8 @@ func (c *consul) Run() (err error) {
     if err != nil {
         err = errors.WithMessage(err, "consul provider stopped")
         log.Logger.Errorf(err.Error())
-    } else {
-        log.Logger.Info("k8s providers worker stopped")
     }
+    log.Logger.Info("consul providers worker stopped")
 
     return err
 }
@@ -282,7 +281,6 @@ func (c *consul) ProcessIntervalFullPush() {
     if c.interval != 0 {
         interval = time.Duration(c.interval) * time.Second
     }
-    interval = 10 * time.Second
     ticker := time.NewTicker(interval)
     for {
         select {
