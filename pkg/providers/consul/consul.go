@@ -281,7 +281,6 @@ func (c *consul) ProcessIntervalFullPush() {
     if c.interval != 0 {
         interval = time.Duration(c.interval) * time.Second
     }
-    interval = 10 * time.Second
     ticker := time.NewTicker(interval)
     for {
         select {
