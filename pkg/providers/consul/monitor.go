@@ -41,7 +41,7 @@ type consulMonitor struct {
 const (
     refreshIdleTime    time.Duration = 50 * time.Millisecond
     periodicCheckTime  time.Duration = 50 * time.Millisecond
-    blockQueryWaitTime time.Duration = 10 * time.Minute
+    blockQueryWaitTime time.Duration = 10 * time.Second
 
     tagMicroservice string = "microservice"
 )
@@ -63,12 +63,16 @@ func NewConsulMonitor(clientF ConsulClientFactory) (monitor Monitor, err error) 
 }
 
 func (m *consulMonitor) Start(ctx context.Context) (err error) {
-    change := make(chan struct{})
+    change := make(chan struct{}, 64)
+    defer close(change)
+
     eg := errgroup.Group{}
     eg.Go(func() error {
+        defer log.Logger.Info("consul monitor watching action stopped")
         return m.watchConsul(ctx, change)
     })
     eg.Go(func() error {
+        defer log.Logger.Info("consul monitor update record action stopped")
         return m.updateRecord(ctx, change)
     })
     err = eg.Wait()

@@ -77,9 +77,8 @@ func (c *consul) Run() (err error) {
     if err != nil {
         err = errors.WithMessage(err, "consul provider stopped")
         log.Logger.Errorf(err.Error())
-    } else {
-        log.Logger.Info("k8s providers worker stopped")
     }
+    log.Logger.Info("consul providers worker stopped")
 
     return err
 }

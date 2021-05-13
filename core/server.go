@@ -11,6 +11,7 @@ import (
     consul2 "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/providers/consul"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/providers/k8s"
     worker "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/worker"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/tools"
     "golang.org/x/sync/errgroup"
     "sync"
 )
@@ -19,8 +20,8 @@ import (
 type Server struct {
 
     // When server stop need to call this funcs
-    stopWorkerFunc  context.CancelFunc
-    stopElectorFunc context.CancelFunc
+    stopProviderFunc context.CancelFunc
+    stopElectorFunc  context.CancelFunc
 
     // providers providers
     Providers []providers.Provider
@@ -61,23 +62,15 @@ func NewServer() (*Server, error) {
     if err != nil {
         return nil, err
     }
-    // init cancel context
-    wctx, wcancel := context.WithCancel(context.Background())
-    // create worker
-    w := worker.NewResourceWorker(wctx)
-    var prs []providers.Provider
-    if prs, err = InitializeProviders(wctx, w); err != nil {
-        err = errors.WithMessagef(err, "new server")
-        return nil, err
-    }
+    // init Server
     return &Server{
-        stopElectorFunc: ecancel,
-        stopWorkerFunc:  wcancel,
-        Providers:       prs,
-        elector:         elector,
-        leaderChCh:      leaderChanges,
-        stop:            make(chan struct{}),
-        promesvr:        metrics.NewPrometheusServer(),
+        stopElectorFunc:  ecancel,
+        stopProviderFunc: nil,
+        Providers:        nil,
+        elector:          elector,
+        leaderChCh:       leaderChanges,
+        stop:             make(chan struct{}),
+        promesvr:         metrics.NewPrometheusServer(),
     }, nil
 }
 
@@ -89,9 +82,9 @@ func (s *Server) Run() {
     // start prome and pprof http server
     go s.promesvr.Start()
 
+    isBreak := false
     for {
-        breaked := false
-        if breaked {
+        if isBreak {
             break
         }
         select {
@@ -102,27 +95,28 @@ func (s *Server) Run() {
             }
             // if current leader is true, but changes to false, then stop the worker
             if !isLeader && isLeader != s.isLeader {
-                log.Logger.Warn("i am lossing the leader state")
+                log.Logger.Warn("i am losing the leader state")
                 s.isLeader = isLeader
                 // if the current node is not the leader, stop the work of the worker (the election work will continue)
-                s.stopWorkerFunc()
+                // s.stopWorkerFunc()
+                s.stopProviders()
                 continue
             }
-            // if current leader is false, but changes to true, then start the worker agian
+            // if current leader is false, but changes to true, then start the worker again
             if !s.isLeader && isLeader != s.isLeader {
                 log.Logger.Info("i successfully competed for the leader")
                 // set current sate
                 s.isLeader = isLeader
-                // if is leader agin, create worker again
-                go s.stopAndStartWroker()
+                // if is leader again, create worker again
+                go s.stopAndStartProviders()
             }
             continue
         case <-s.stop:
             // stop background context
             s.stopElectorFunc()
-            s.stopWorkerFunc()
+            s.stopProviderFunc()
             // break the loop
-            breaked = true
+            isBreak = true
         }
     }
 
@@ -136,29 +130,24 @@ func (s *Server) Stop() {
     log.Logger.Info("core server stop background context")
 }
 
-func (s *Server) stopAndStartWroker() (err error) {
-    s.Lock()
-    defer s.Unlock()
-    log.Logger.Info("stop and create worker")
-
-    // providers check
-    if len(config.Providers) == 0 {
-        err = errors.New("there is none providers configured")
-        panic(err)
-    } else {
-        log.Logger.Infof("configured providers %v", config.Providers)
-    }
-
+func (s *Server) stopProviders() (err error) {
     // stop the previous worker
-    if s.stopWorkerFunc != nil {
-        s.stopWorkerFunc()
-        s.stopWorkerFunc = nil
+    log.Logger.Infof("stop providers activly, the stopWorkerFunc will be called and providers will be clear ")
+    if s.stopProviderFunc != nil {
+        // Use a protection mechanism to execute stopProviderFunc
+        tools.WithRecover(s.stopProviderFunc)
+        s.stopProviderFunc = nil
     }
     s.Providers = nil
 
+    return err
+}
+
+func (s *Server) startProviders() (err error) {
+    // start new worker
     // init cancel context
     wctx, wcancel := context.WithCancel(context.Background())
-    s.stopWorkerFunc = wcancel
+    s.stopProviderFunc = wcancel
     // new error group
     eg := errgroup.Group{}
     // create and start the worker
@@ -175,11 +164,35 @@ func (s *Server) stopAndStartWroker() (err error) {
     for _, p := range s.Providers {
         p := p
         eg.Go(func() error {
+            // 注意：我们期望是，一个 providers 退出，则另外其他 providers 都退出
+            defer tools.WithRecover(s.stopProviderFunc)
             return p.Run()
         })
 
     }
+    // wait to stop
     err = eg.Wait()
+
+    return err
+}
+
+// stopAndStartProviders will stop providers and then start new providers
+// If an error occurs when stopping providers, ignore it.
+func (s *Server) stopAndStartProviders() (err error) {
+    log.Logger.Info("stop and start providers begin..")
+    s.Lock()
+    defer func() {
+        s.Unlock()
+        log.Logger.Info("stop and start providers stopped..")
+    }()
+    // stop the previous providers
+    if err = s.stopProviders(); err != nil {
+        // do nothing
+    }
+    // start new providers
+    if err = s.startProviders(); err != nil {
+        err = errors.WithMessage(err, "stop and start providers")
+    }
 
     return err
 }
