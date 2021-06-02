@@ -3,6 +3,7 @@ package consul
 import (
     "context"
     "github.com/hashicorp/consul/api"
+    "github.com/k0kubun/pp"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
     "testing"
 )
@@ -35,7 +36,7 @@ func TestRegisterService(t *testing.T) {
             "other_3":    "other_3",
         },
         Check: &api.AgentServiceCheck{
-            HTTP:     "http://127.0.0.1:8520",
+            HTTP:     "http://127.0.0.1:8120",
             Interval: "10s",
             Timeout:  "10s",
         }}
@@ -54,6 +55,25 @@ func TestDeRegisterService(t *testing.T) {
     client, err = api.NewClient(config)
     serviceId := "redis"
     if err = client.Agent().ServiceDeregister(serviceId); err != nil {
+        t.Error(err.Error())
+        t.FailNow()
+    }
+}
+
+func TestGetServices(t *testing.T) {
+    var err error
+    config := api.DefaultConfig()
+    var client *api.Client
+    config.Address = "172.16.129.38:8520"
+    client, err = api.NewClient(config)
+    serviceId := "testiterationc-msp"
+    queryOptions := api.QueryOptions{
+        WaitTime: blockQueryWaitTime,
+    }
+    var endpoints []*api.ServiceEntry
+    if endpoints, _, err = client.Health().Service(serviceId, tagMicroservice, true, &queryOptions); err == nil {
+        pp.Println(endpoints)
+    } else {
         t.Error(err.Error())
         t.FailNow()
     }
