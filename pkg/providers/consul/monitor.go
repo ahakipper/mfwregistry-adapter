@@ -15,7 +15,7 @@ import (
 type Monitor interface {
     Start(ctx context.Context) error
     GetServices() (services map[string][]string, err error)
-    GetCatalogService(name string, q *api.QueryOptions) (endpoints []*api.CatalogService, err error)
+    GetServiceEntries(name string, q *api.QueryOptions) (endpoints []*api.ServiceEntry, err error)
     AppendServiceHandler(ServiceHandler)
     AppendInstanceHandler(InstanceHandler)
 }
@@ -190,14 +190,14 @@ func (c *consulMonitor) GetServices() (services map[string][]string, err error) 
     return data, nil
 }
 
-func (m *consulMonitor) GetCatalogService(name string, q *api.QueryOptions) (endpoints []*api.CatalogService, err error) {
+func (m *consulMonitor) GetServiceEntries(name string, q *api.QueryOptions) (endpoints []*api.ServiceEntry, err error) {
     var client *api.Client
     if client, err = m.clientFactory.ConsulClientFactory(); err != nil {
         log.Logger.Errorf(errors.WithMessage(err, "get consul client").Error())
         return nil, err
     }
     // filter the endpoint not tagged with "microservice". referer here: https://wiki.mafengwo.cn/x/mM3_Aw
-    endpoints, _, err = client.Catalog().Service(name, tagMicroservice, q)
+    endpoints, _, err = client.Health().Service(name, tagMicroservice, true, q)
     if err != nil {
         log.Logger.Warnf("Could not retrieve service catalog from consul: %v", err)
         return nil, err

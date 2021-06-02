@@ -108,7 +108,7 @@ func (c *consul) syncInstance() (err error) {
     }
     // Compare to generate events
     addEvents, updateEvents, deleteEvents := c.extractDiff(oldCache, newCache)
-    //pp.Println(map[string][]*sv.Instance{"add": addEvents, "update": updateEvents, "delete": deleteEvents})
+    // pp.Println(map[string][]*sv.Instance{"add": addEvents, "update": updateEvents, "delete": deleteEvents})
     // push events
     c.EventsSync(addEvents, updateEvents, deleteEvents)
     // Update cache
@@ -117,7 +117,7 @@ func (c *consul) syncInstance() (err error) {
     return err
 }
 
-func (c *consul) convertConsulEndpoint2Instance(endpoints []*api.CatalogService) (inss []*sv.Instance) {
+func (c *consul) convertConsulEndpoint2Instance(endpoints []*api.ServiceEntry) (inss []*sv.Instance) {
     // get pod info from k8s robot
     inss = []*sv.Instance{}
     if len(endpoints) > 0 {
@@ -149,8 +149,8 @@ func (c *consul) GetAll() (result []*v2.Instance) {
         result = []*sv.Instance{}
         for serviceName := range consulServices {
             // get endpoints of a service from consul
-            var endpoints []*api.CatalogService
-            endpoints, err = c.monitor.GetCatalogService(serviceName, nil)
+            var endpoints []*api.ServiceEntry
+            endpoints, err = c.monitor.GetServiceEntries(serviceName, nil)
             if err != nil {
                 err = errors.WithMessage(err, "get service endpoints from consul")
                 log.Logger.Errorf(err.Error())
