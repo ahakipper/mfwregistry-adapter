@@ -468,34 +468,34 @@ func formatLableInfo(pod *v1.Pod, originLables map[string]string, envs map[strin
     }
     // for Java SDK
     if envs != nil && len(envs) > 0 {
-        if san, exist := envs["spring.application.name"]; exist {
-            lablel["env:san"] = san
+        if san, exist := envs[providers.InstanceSpringApplicationName]; exist {
+            lablel[providers.InstanceCompatibilityLabelEnvSan] = san
         }
     }
     // for namespace
-    lablel["compatibility:aos_namespace"] = ""
+    lablel[providers.InstanceCompatibilityLabelAosNamespace] = ""
     if pod != nil {
-        lablel["compatibility:aos_namespace"] = pod.Namespace
+        lablel[providers.InstanceCompatibilityLabelAosNamespace] = pod.Namespace
     }
     if originLables != nil && len(originLables) > 0 {
         // for specific label
-        lablel["compatibility:aos_app"] = ""
+        lablel[providers.InstanceCompatibilityLabelAosApp] = ""
         if lapp, exist := originLables["app"]; exist {
-            lablel["compatibility:aos_app"] = lapp
+            lablel[providers.InstanceCompatibilityLabelAosApp] = lapp
         }
         // for destination rule and virtual service
         var drHost string
         // in case of FengXiao
         if _, exist := originLables["deploy-id"]; exist {
-            drHost = lablel["compatibility:aos_app"] + "." + lablel["compatibility:aos_namespace"]
+            drHost = lablel[providers.InstanceCompatibilityLabelAosApp] + "." + lablel[providers.InstanceCompatibilityLabelAosNamespace]
         } else {
             // in case of AosMicroservice
-            drHost = lablel["compatibility:aos_app"]
+            drHost = lablel[providers.InstanceCompatibilityLabelAosApp]
         }
-        lablel["compatibility:aos_dr_host"] = drHost
+        lablel[providers.InstanceCompatibilityLabelAosDrHost] = drHost
         // in case of WebIDE
         if mark, exist := originLables["mark"]; exist {
-            lablel["compatibility:aos_mark"] = mark
+            lablel[providers.InstanceCompatibilityLabelAosMark] = mark
         }
     }
 
