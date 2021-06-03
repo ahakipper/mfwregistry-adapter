@@ -28,6 +28,15 @@ const (
 )
 
 const (
+    InstanceCompatibilityLabelAosNamespace = "compatibility:aos_namespace"
+    InstanceCompatibilityLabelAosApp       = "compatibility:aos_app"     // Aos and Fengxiao had incompatibility issues with the app field in the label of the generated Pod from the beginning.
+    InstanceCompatibilityLabelAosDrHost    = "compatibility:aos_dr_host" // Used for gateways to generate DestinationRule rules adapted to Aos microservices.
+    InstanceCompatibilityLabelAosMark      = "compatibility:aos_mark"    // Used for Aos WebIDE
+    InstanceCompatibilityLabelEnvSan       = "env:san"
+    InstanceSpringApplicationName          = "spring.application.name"
+)
+
+const (
     FullPushInterval = 7200 * time.Second
 )
 

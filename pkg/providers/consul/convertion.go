@@ -2,20 +2,29 @@ package consul
 
 import (
     "encoding/json"
+    "fmt"
     "github.com/hashicorp/consul/api"
     "github.com/pkg/errors"
     sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/providers"
 )
 
 const (
-    metaPorts                 = "ports"
-    metaEnvType               = "envType"
-    metaEnvGroup              = "envGroup"
-    metaAppcode               = "appCode"
-    metaVersion               = "version"
-    metaNamespace             = "namespace"
-    metaSpringApplicationName = "spring.application.name"
+    metaPorts      = "ports"
+    metaEnvType    = "envType"
+    metaEnvGroup   = "envGroup"
+    metaAppcode    = "appCode"
+    metaVersion    = "version"
+    metaInstanceId = "instanceId"
+    metaNamespace  = "namespace"
 )
+
+type consulInstancePort struct {
+    sv.PortInfo
+    // The scheme field is for compatibility, and its function is the same as protocol.
+    // In the instance meta information registered by the Ecs deployment service, the field used in the port part is 'schema' instead of 'protocol'.
+    Scheme string `json:"scheme"`
+}
 
 var instanceBaseAttrMetas = map[string]struct{}{metaPorts: {}, metaEnvType: {}, metaEnvGroup: {}, metaAppcode: {}, metaVersion: {}, metaNamespace: {}}
 
@@ -51,8 +60,14 @@ func convertInstance(endpoint *api.ServiceEntry) (ins *sv.Instance, err error) {
         err = errors.WithMessage(err, "convert instance")
         return nil, err
     }
+    // instanceId
+    var instanceId string
+    if instanceId, err = convertInstanceId(endpoint); err != nil {
+        err = errors.WithMessage(err, "convert instance")
+        return nil, err
+    }
     ins = &sv.Instance{
-        InstanceId:  endpoint.Node.Node,
+        InstanceId:  instanceId,
         Level:       "",
         Ports:       ports,
         Ip:          endpoint.Node.Address,
@@ -92,24 +107,24 @@ func convertLabels(endpoint *api.ServiceEntry) map[string]string {
     //    }
     //}
     // for Java SDK
-    if san, exist := out[metaSpringApplicationName]; exist {
-        out["env:san"] = san
+    if san, exist := out[providers.InstanceSpringApplicationName]; exist {
+        out[providers.InstanceCompatibilityLabelEnvSan] = san
     }
     // for namespace
-    out["compatibility:aos_namespace"] = ""
+    out[providers.InstanceCompatibilityLabelAosNamespace] = ""
     if ns, ok := out[metaNamespace]; ok {
-        out["compatibility:aos_namespace"] = ns
+        out[providers.InstanceCompatibilityLabelAosNamespace] = ns
     }
     // for specific label
-    out["compatibility:aos_app"] = ""
+    out[providers.InstanceCompatibilityLabelAosApp] = ""
     if lapp, exist := out[metaAppcode]; exist {
-        out["compatibility:aos_app"] = lapp
+        out[providers.InstanceCompatibilityLabelAosApp] = lapp
     }
     // for destination rule and virtual service
     var drHost string
     // in case of Ecs deploy
-    drHost = out["compatibility:aos_app"] + "." + out["compatibility:aos_namespace"]
-    out["compatibility:aos_dr_host"] = drHost
+    drHost = out[providers.InstanceCompatibilityLabelAosApp] + "." + out[providers.InstanceCompatibilityLabelAosNamespace]
+    out[providers.InstanceCompatibilityLabelAosDrHost] = drHost
 
     return out
 }
@@ -119,15 +134,33 @@ func convertPort(endpoint *api.ServiceEntry) (ports []*sv.PortInfo, err error) {
         return nil, errors.New("convert port with none params")
     }
     ports = []*sv.PortInfo{}
-    if err = json.Unmarshal([]byte(endpoint.Service.Meta[metaPorts]), &ports); err != nil {
+    var ps []*consulInstancePort
+    if err = json.Unmarshal([]byte(endpoint.Service.Meta[metaPorts]), &ps); err != nil {
         return nil, errors.WithMessage(err, "unmarshal json")
+    } else {
+        for idx, p := range ps {
+            var protocol = p.Protocol
+            if protocol == "" {
+                protocol = p.Scheme
+            }
+            var portName = p.Name
+            if portName == "" {
+                portName = fmt.Sprintf(protocol+"%d", idx)
+            }
+            ports = append(ports, &sv.PortInfo{
+                Name:        portName,
+                Protocol:    protocol,
+                Port:        p.Port,
+                ServicePort: p.Port,
+            })
+        }
     }
 
     return ports, nil
 }
 
 func convertEnv(endpoint *api.ServiceEntry) (envType, envGroup string, err error) {
-    if endpoint == nil {
+    if endpoint == nil || endpoint.Service == nil || endpoint.Service.Meta == nil {
         return "", "", errors.New("convert env with none endpoint")
     }
     envType = endpoint.Service.Meta[metaEnvType]
@@ -136,8 +169,17 @@ func convertEnv(endpoint *api.ServiceEntry) (envType, envGroup string, err error
     return envType, envGroup, nil
 }
 
+func convertInstanceId(endpoint *api.ServiceEntry) (instanceId string, err error) {
+    if endpoint == nil || endpoint.Service == nil || endpoint.Service.Meta == nil {
+        return "", errors.New("convert instanceId with none endpoint")
+    }
+    instanceId = endpoint.Service.Meta[metaInstanceId]
+
+    return
+}
+
 func convertAppcode(endpoint *api.ServiceEntry) (appcode string, err error) {
-    if endpoint == nil || endpoint.Service.Meta[metaAppcode] == "" {
+    if endpoint == nil || endpoint.Service == nil || endpoint.Service.Meta[metaAppcode] == "" {
         return "", errors.New("convert appcode with none endpoint")
     }
     appcode = endpoint.Service.Meta[metaAppcode]

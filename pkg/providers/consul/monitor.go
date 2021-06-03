@@ -101,7 +101,7 @@ func (m *consulMonitor) watchConsul(ctx context.Context, change chan struct{}) (
             }
             // This Consul REST API will block until service changes or timeout
             // var svcs map[string][]string
-            _, queryMeta, err = client.Catalog().Services(&queryOptions)
+            _, queryMeta, err = client.Health().State("passing", &queryOptions)
             if err != nil {
                 log.Logger.Warnf("Could not fetch services: %v", err)
             } else if consulWaitIndex != queryMeta.LastIndex {

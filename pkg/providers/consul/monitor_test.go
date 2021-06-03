@@ -51,9 +51,9 @@ func TestDeRegisterService(t *testing.T) {
     var err error
     config := api.DefaultConfig()
     var client *api.Client
-    config.Address = "172.16.129.38:8520"
+    config.Address = "172.16.129.146:8520"
     client, err = api.NewClient(config)
-    serviceId := "redis"
+    serviceId := "testiterationc-msp"
     if err = client.Agent().ServiceDeregister(serviceId); err != nil {
         t.Error(err.Error())
         t.FailNow()
