@@ -10,12 +10,13 @@ import (
 )
 
 const (
-    metaPorts                 = "ports"
-    metaEnvType               = "envType"
-    metaEnvGroup              = "envGroup"
-    metaAppcode               = "appCode"
-    metaVersion               = "version"
-    metaNamespace             = "namespace"
+    metaPorts      = "ports"
+    metaEnvType    = "envType"
+    metaEnvGroup   = "envGroup"
+    metaAppcode    = "appCode"
+    metaVersion    = "version"
+    metaInstanceId = "instanceId"
+    metaNamespace  = "namespace"
 )
 
 type consulInstancePort struct {
@@ -59,8 +60,14 @@ func convertInstance(endpoint *api.ServiceEntry) (ins *sv.Instance, err error) {
         err = errors.WithMessage(err, "convert instance")
         return nil, err
     }
+    // instanceId
+    var instanceId string
+    if instanceId, err = convertInstanceId(endpoint); err != nil {
+        err = errors.WithMessage(err, "convert instance")
+        return nil, err
+    }
     ins = &sv.Instance{
-        InstanceId:  endpoint.Node.Node,
+        InstanceId:  instanceId,
         Level:       "",
         Ports:       ports,
         Ip:          endpoint.Node.Address,
@@ -153,7 +160,7 @@ func convertPort(endpoint *api.ServiceEntry) (ports []*sv.PortInfo, err error) {
 }
 
 func convertEnv(endpoint *api.ServiceEntry) (envType, envGroup string, err error) {
-    if endpoint == nil {
+    if endpoint == nil || endpoint.Service == nil || endpoint.Service.Meta == nil {
         return "", "", errors.New("convert env with none endpoint")
     }
     envType = endpoint.Service.Meta[metaEnvType]
@@ -162,8 +169,17 @@ func convertEnv(endpoint *api.ServiceEntry) (envType, envGroup string, err error
     return envType, envGroup, nil
 }
 
+func convertInstanceId(endpoint *api.ServiceEntry) (instanceId string, err error) {
+    if endpoint == nil || endpoint.Service == nil || endpoint.Service.Meta == nil {
+        return "", errors.New("convert instanceId with none endpoint")
+    }
+    instanceId = endpoint.Service.Meta[metaInstanceId]
+
+    return
+}
+
 func convertAppcode(endpoint *api.ServiceEntry) (appcode string, err error) {
-    if endpoint == nil || endpoint.Service.Meta[metaAppcode] == "" {
+    if endpoint == nil || endpoint.Service == nil || endpoint.Service.Meta[metaAppcode] == "" {
         return "", errors.New("convert appcode with none endpoint")
     }
     appcode = endpoint.Service.Meta[metaAppcode]

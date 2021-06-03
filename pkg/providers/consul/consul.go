@@ -108,7 +108,7 @@ func (c *consul) syncInstance() (err error) {
     }
     // Compare to generate events
     addEvents, updateEvents, deleteEvents := c.extractDiff(oldCache, newCache)
-    // pp.Println(map[string][]*sv.Instance{"add": addEvents, "update": updateEvents, "delete": deleteEvents})
+    //pp.Println(map[string][]*sv.Instance{"add": addEvents, "update": updateEvents, "delete": deleteEvents})
     // push events
     c.EventsSync(addEvents, updateEvents, deleteEvents)
     // Update cache
@@ -329,6 +329,7 @@ func (c *consul) CompareAndFlush() {
             return
         }
         remoteInstances := providers.ListToMap(registryList.GetInstance())
+        // pp.Println(remoteInstances)
         currentProviderInstances := providers.ListToMap(all)
         log.Logger.Infof("mfwregistry online ecs instances size :%d  consul online instance size :%d  total :%d", len(remoteInstances), onlineCount, len(currentProviderInstances))
 
@@ -348,6 +349,7 @@ func (c *consul) CompareAndFlush() {
                         consulIns.Idc != servIns.Idc ||
                         consulIns.Cluster != servIns.Cluster ||
                         consulIns.Enabled != servIns.Enabled ||
+                        consulIns.AppCode != servIns.AppCode ||
                         consulIns.Cpu != servIns.Cpu {
                         diff = true
                     }
