@@ -284,6 +284,8 @@ gitlab.mfwdev.com/servicemesh/robot v0.1.2 h1:g1EP+maRBvurqjX1XLDzfRZrDESjtwUUOY
 gitlab.mfwdev.com/servicemesh/robot v0.1.2/go.mod h1:agzkjQB20HK2IkVZ+dSAQb+VAy+y8vC7bGN5sTa/vEM=
 gitlab.mfwdev.com/servicemesh/robot v0.1.3 h1:45QDkrePL4nwJGi+LSINpOB8rXOSAHajrO7Em3SjQos=
 gitlab.mfwdev.com/servicemesh/robot v0.1.3/go.mod h1:agzkjQB20HK2IkVZ+dSAQb+VAy+y8vC7bGN5sTa/vEM=
+gitlab.mfwdev.com/servicemesh/robot v0.1.4 h1:HLZFeZGz1wa6jsP4uirsdIrLBmI1+yVfEJI3FICohUA=
+gitlab.mfwdev.com/servicemesh/robot v0.1.4/go.mod h1:agzkjQB20HK2IkVZ+dSAQb+VAy+y8vC7bGN5sTa/vEM=
 go.etcd.io/bbolt v1.3.2 h1:Z/90sZLPOeCy2PwprqkFa25PdkusRzaj9P8zm/KNyvk=
 go.etcd.io/bbolt v1.3.2/go.mod h1:IbVyRI1SCnLcuJnV2u8VeU0CEYM7e686BmAb1XKL+uU=
 go.uber.org/atomic v1.4.0 h1:cxzIVoETapQEqDhQu3QfnvXAV4AlzcvUCxkVUFw3+EU=

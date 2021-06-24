@@ -71,8 +71,6 @@ func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int,
 // Run starts to monitor k8s cluster pod changes
 func (k *k8s) Run() (err error) {
     log.Logger.Infof("start to run k8s provider")
-    k.robot.Run()
-    defer k.robot.Stop()
     k.monitor()
     log.Logger.Info("k8s providers worker stopped")
 
@@ -80,22 +78,27 @@ func (k *k8s) Run() (err error) {
 }
 
 // monitor k8s pod changes
+// Perform full instances synchronization periodically
+// Perform instances comparison for single synchronization one by one. Note: this operation will only be executed once.
 func (k *k8s) monitor() {
-    // Perform full instances synchronization periodically
-    go k.ProcessIntervalFullPush()
-    // Perform instances comparison for single synchronization one by one. Note: this operation will only be executed once.
-    go k.CompareAndFlush()
-    // monitor instance changes
+    go k.robot.Run()
     for {
-        select {
-        case <-k.ctx.Done():
-            k.stopped = true
-            k.robot.Stop()
-            goto monitorEnd
-        default:
+        if k.robot.HasSynced() {
+            break
+        }
+    }
+    go k.ProcessIntervalFullPush()
+    go k.CompareAndFlush()
+    defer k.robot.Stop()
+    // fork a goroutine to monitor pod change
+    go func() {
+        for {
             // get pod changes from k8s client
             obj, err := k.robot.Pop()
             if err != nil {
+                if k.stopped {
+                    break
+                }
                 log.Logger.Error("K8S watch error: ", err)
                 time.Sleep(1 * time.Second)
                 continue
@@ -113,9 +116,15 @@ func (k *k8s) monitor() {
             })
             k.robot.Finish(obj)
         }
+    }()
+
+    // wait to stop
+    select {
+    case <-k.ctx.Done():
+        k.stopped = true
+        break
     }
 
-monitorEnd:
     log.Logger.Info("exit the k8s monitor")
 }
 
