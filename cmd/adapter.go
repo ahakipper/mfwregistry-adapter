@@ -18,7 +18,7 @@ import (
     "fmt"
     "github.com/spf13/cobra"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/core"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/internel"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/providers"
 )
@@ -38,7 +38,7 @@ to quickly create a Cobra application.`,
         // init flags
         initAdapterFlags(cmd)
         // server init
-        server, err := core.NewServer()
+        server, err := internel.NewServer()
         if err != nil {
             fmt.Println(err.Error())
             return
@@ -75,6 +75,7 @@ func init() {
     adapterCmd.Flags().IntP("push-interval", "i", 7200, "the time interval for full synchronization. the unit is seconds")
     adapterCmd.Flags().StringP("grpc-addr", "g", "172.16.130.71:50051", "grpc address")
     adapterCmd.Flags().BoolP("disable-worker", "w", false, "disable push worker, just for testing")
+    adapterCmd.Flags().StringSliceP("appcodes", "", []string{}, "only push instances of the appcodes, just for testing")
 }
 
 func initAdapterFlags(cmd *cobra.Command) {
@@ -109,4 +110,5 @@ func initAdapterFlags(cmd *cobra.Command) {
     // disable push worker action
     config.DisablePushWorker, _ = cmd.Flags().GetBool("disable-worker")
     config.Providers, _ = cmd.Flags().GetStringSlice("providers")
+    config.PushAppCodes, _ = cmd.Flags().GetStringSlice("appcodes")
 }

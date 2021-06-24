@@ -5,6 +5,7 @@ import (
     "github.com/hashicorp/consul/api"
     "github.com/k0kubun/pp"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/providers"
     "testing"
 )
 
@@ -25,7 +26,7 @@ func TestRegisterService(t *testing.T) {
         Meta: map[string]string{
             "ports":      "[{\"name\":\"http0\",\"protocal\":\"http\",\"port\":80}]",
             "appCode":    "test-mtest",
-            "envType":    "dev",
+            "envType":    providers.EnvDev,
             "envGroup":   "inter1231112",
             "instanceId": hostName,
             "cluster":    "",

@@ -6,6 +6,7 @@ import (
     "github.com/coreos/etcd/clientv3"
     "github.com/coreos/etcd/clientv3/concurrency"
     uuid "github.com/satori/go.uuid"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
     "sync"
     "time"
@@ -15,9 +16,6 @@ const (
     CampainTimeout     = 10
     LeaderChangePeriod = 2
 )
-
-// Indicates the prefix key for participating in the campaign, store in etcd
-var campaignCenter = "/paas/mfwregistry-k8sadapter1"
 
 type Candidate interface {
     // Campaign puts a value as eligible for the election. It blocks until
@@ -89,7 +87,7 @@ func NewCandidate(ctx context.Context, etcdclient *clientv3.Client) (can Candida
         return nil, err
     }
     cd.session = session
-    cd.election = concurrency.NewElection(session, campaignCenter)
+    cd.election = concurrency.NewElection(session, config.LockCampaignKey)
 
     // sleep a while
     // time.Sleep(time.Millisecond * 1000)
@@ -115,7 +113,7 @@ func (c *candidate) NewElectionSession(timeout time.Duration) {
         return
     }
     c.session = session
-    c.election = concurrency.NewElection(session, campaignCenter)
+    c.election = concurrency.NewElection(session, config.LockCampaignKey)
     // sleep a while
     // time.Sleep(time.Millisecond * 1000)
 }

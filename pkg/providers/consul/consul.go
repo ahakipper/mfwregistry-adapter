@@ -117,7 +117,7 @@ func (c *consul) syncInstance() (err error) {
     return err
 }
 
-func (c *consul) convertConsulEndpoint2Instance(endpoints []*api.ServiceEntry) (inss []*sv.Instance) {
+func (c *consul) toInstance(endpoints []*api.ServiceEntry) (inss []*sv.Instance) {
     // get pod info from k8s robot
     inss = []*sv.Instance{}
     if len(endpoints) > 0 {
@@ -156,7 +156,7 @@ func (c *consul) GetAll() (result []*v2.Instance) {
                 log.Logger.Errorf(err.Error())
                 return nil
             }
-            if instances := c.convertConsulEndpoint2Instance(endpoints); instances != nil {
+            if instances := c.toInstance(endpoints); instances != nil {
                 for _, ins := range instances {
                     result = append(result, ins)
                 }
@@ -198,6 +198,9 @@ func (c *consul) extractDiff(old, new providers.CacheIterface) (add []*v2.Instan
                 // update events
                 if newIns.Reversion > oldIns.Reversion {
                     if c.VerifyInstance(newIns) {
+                        newIns.Status = providers.InstanceStatusOnline
+                        newIns.Enabled = true
+                        newIns.State = providers.InstanceStateRunning
                         update = append(update, newIns)
                     } else {
                         log.Logger.Warnf("verify instance failed, appcode: %s, instanceid: %s", newIns.AppCode, newIns.InstanceId)
@@ -206,6 +209,9 @@ func (c *consul) extractDiff(old, new providers.CacheIterface) (add []*v2.Instan
             } else {
                 // add events
                 if c.VerifyInstance(newIns) {
+                    newIns.Status = providers.InstanceStatusOnline
+                    newIns.Enabled = true
+                    newIns.State = providers.InstanceStateRunning
                     add = append(add, newIns)
                 } else {
                     log.Logger.Warnf("verify instance failed, appcode: %s, instanceid: %s", newIns.AppCode, newIns.InstanceId)
@@ -217,6 +223,9 @@ func (c *consul) extractDiff(old, new providers.CacheIterface) (add []*v2.Instan
             // old cache has the instance which not in new cache
             if newIns := new.Get(oldIns.InstanceId); newIns == nil {
                 // delete events
+                oldIns.Status = providers.InstanceStatusUnhealthy
+                oldIns.Enabled = false
+                oldIns.State = providers.InstanceStateProbing
                 del = append(del, oldIns)
             }
         }
@@ -242,22 +251,16 @@ func (c *consul) VerifyInstance(ins *sv.Instance) bool {
 func (c *consul) EventsSync(add, update, del []*sv.Instance) {
     if len(add) > 0 {
         for _, ins := range add {
-            ins.Status = 1
-            ins.Enabled = true
             c.eventSync(ins, time.Now().Unix())
         }
     }
     if len(update) > 0 {
         for _, ins := range update {
-            ins.Status = 1
-            ins.Enabled = true
             c.eventSync(ins, time.Now().Unix())
         }
     }
     if len(del) > 0 {
         for _, ins := range del {
-            ins.Status = 2
-            ins.Enabled = false
             c.eventSync(ins, time.Now().Unix())
         }
     }
@@ -316,7 +319,7 @@ func (c *consul) CompareAndFlush() {
             }
         }
         // 对比差异并增量同步
-        registryList, err := c.worker.GetAll(providers.InstanceStatus, providers.ProviderEcs)
+        registryList, err := c.worker.GetAll(providers.InstanceStatusOnline, providers.ProviderEcs)
         if err != nil {
             err = errors.WithMessage(err, "get all instances from mfwregistry")
             log.Logger.Errorf(err.Error())

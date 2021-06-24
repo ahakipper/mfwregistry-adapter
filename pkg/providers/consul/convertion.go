@@ -60,12 +60,26 @@ func convertInstance(endpoint *api.ServiceEntry) (ins *sv.Instance, err error) {
         err = errors.WithMessage(err, "convert instance")
         return nil, err
     }
+    // state
+    var state string
+    if state, err = convertState(endpoint); err != nil {
+        err = errors.WithMessage(err, "convert state")
+        return nil, err
+    }
     // instanceId
     var instanceId string
     if instanceId, err = convertInstanceId(endpoint); err != nil {
         err = errors.WithMessage(err, "convert instance")
         return nil, err
     }
+    // idc
+    var idc string
+    if envType == providers.EnvDev {
+        idc = "office"
+    } else {
+        idc = "mix"
+    }
+    // instance
     ins = &sv.Instance{
         InstanceId:  instanceId,
         Level:       "",
@@ -77,7 +91,7 @@ func convertInstance(endpoint *api.ServiceEntry) (ins *sv.Instance, err error) {
         Cluster:     "",
         Version:     version,
         Enabled:     true,
-        State:       "",
+        State:       state,
         HealthState: "",
         AppCode:     appcode,
         Provider:    "ecs",
@@ -88,7 +102,7 @@ func convertInstance(endpoint *api.ServiceEntry) (ins *sv.Instance, err error) {
         Disk:        0,
         Os:          "",
         Image:       map[string]string{},
-        Idc:         "",
+        Idc:         idc,
         Reversion:   int64(endpoint.Service.ModifyIndex),
         Status:      1,
     }
@@ -161,7 +175,7 @@ func convertPort(endpoint *api.ServiceEntry) (ports []*sv.PortInfo, err error) {
 
 func convertEnv(endpoint *api.ServiceEntry) (envType, envGroup string, err error) {
     if endpoint == nil || endpoint.Service == nil || endpoint.Service.Meta == nil {
-        return "", "", errors.New("convert env with none endpoint")
+        return "", "", errors.New("convert env with invalid endpoint")
     }
     envType = endpoint.Service.Meta[metaEnvType]
     envGroup = endpoint.Service.Meta[metaEnvGroup]
@@ -171,7 +185,7 @@ func convertEnv(endpoint *api.ServiceEntry) (envType, envGroup string, err error
 
 func convertInstanceId(endpoint *api.ServiceEntry) (instanceId string, err error) {
     if endpoint == nil || endpoint.Service == nil || endpoint.Service.Meta == nil {
-        return "", errors.New("convert instanceId with none endpoint")
+        return "", errors.New("convert instanceId with invalid endpoint")
     }
     instanceId = endpoint.Service.Meta[metaInstanceId]
 
@@ -180,7 +194,7 @@ func convertInstanceId(endpoint *api.ServiceEntry) (instanceId string, err error
 
 func convertAppcode(endpoint *api.ServiceEntry) (appcode string, err error) {
     if endpoint == nil || endpoint.Service == nil || endpoint.Service.Meta[metaAppcode] == "" {
-        return "", errors.New("convert appcode with none endpoint")
+        return "", errors.New("convert appcode with invalid endpoint")
     }
     appcode = endpoint.Service.Meta[metaAppcode]
 
@@ -194,4 +208,11 @@ func convertVersion(endpoint *api.ServiceEntry) (appcode string, err error) {
     appcode = endpoint.Service.Meta[metaVersion]
 
     return appcode, nil
+}
+
+func convertState(endpoint *api.ServiceEntry) (state string, err error) {
+    if endpoint == nil {
+        return "", errors.New("convert state with invalid endpoint")
+    }
+    return state, nil
 }

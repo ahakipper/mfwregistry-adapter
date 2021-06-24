@@ -5,6 +5,7 @@ import (
     sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/providers"
     "testing"
 )
 
@@ -34,7 +35,7 @@ func TestClient_Sync(t *testing.T) {
         },
         Enabled:   true,
         Status:    1,
-        EnvCode:   "dev",
+        EnvCode:   providers.EnvDev,
         EnvGroup:  "inter111",
         Reversion: 1240,
     }}
