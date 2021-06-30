@@ -4,6 +4,7 @@ import (
     "context"
     "github.com/panjf2000/ants/v2"
     sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/metrics"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/providers"
@@ -11,9 +12,6 @@ import (
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/tools/unit"
     client "gitlab.mfwdev.com/servicemesh/robot"
     v1 "k8s.io/api/core/v1"
-    "k8s.io/apimachinery/pkg/api/resource"
-    "regexp"
-    "strconv"
     "strings"
     "sync"
     "time"
@@ -73,8 +71,6 @@ func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int,
 // Run starts to monitor k8s cluster pod changes
 func (k *k8s) Run() (err error) {
     log.Logger.Infof("start to run k8s provider")
-    k.robot.Run()
-    defer k.robot.Stop()
     k.monitor()
     log.Logger.Info("k8s providers worker stopped")
 
@@ -82,22 +78,27 @@ func (k *k8s) Run() (err error) {
 }
 
 // monitor k8s pod changes
+// Perform full instances synchronization periodically
+// Perform instances comparison for single synchronization one by one. Note: this operation will only be executed once.
 func (k *k8s) monitor() {
-    // Perform full instances synchronization periodically
-    go k.ProcessIntervalFullPush()
-    // Perform instances comparison for single synchronization one by one. Note: this operation will only be executed once.
-    go k.CompareAndFlush()
-    // monitor instance changes
+    go k.robot.Run()
     for {
-        select {
-        case <-k.ctx.Done():
-            k.stopped = true
-            k.robot.Stop()
-            goto monitorEnd
-        default:
+        if k.robot.HasSynced() {
+            break
+        }
+    }
+    go k.ProcessIntervalFullPush()
+    go k.CompareAndFlush()
+    defer k.robot.Stop()
+    // fork a goroutine to monitor pod change
+    go func() {
+        for {
             // get pod changes from k8s client
             obj, err := k.robot.Pop()
             if err != nil {
+                if k.stopped {
+                    break
+                }
                 log.Logger.Error("K8S watch error: ", err)
                 time.Sleep(1 * time.Second)
                 continue
@@ -106,7 +107,7 @@ func (k *k8s) monitor() {
             triggerTime := obj.CreateAt.Unix()
             // instance format
             var ins *sv.Instance
-            if ins = k.convertK8sPod2Instance(obj); ins == nil {
+            if ins = k.pod2Instance(obj); ins == nil {
                 continue
             }
             // rsync
@@ -115,21 +116,27 @@ func (k *k8s) monitor() {
             })
             k.robot.Finish(obj)
         }
+    }()
+
+    // wait to stop
+    select {
+    case <-k.ctx.Done():
+        k.stopped = true
+        break
     }
 
-monitorEnd:
     log.Logger.Info("exit the k8s monitor")
 }
 
 //
-func (k *k8s) ProcessCache(obj client.QueueObject, ins *sv.Instance) {
-    switch obj.Event {
+func (k *k8s) ProcessCache(event client.Event, ins *sv.Instance) {
+    switch event {
     case client.EventAdd:
         k.cache.ReplaceOrInsert(ins)
     case client.EventUpdate:
         k.cache.ReplaceOrInsert(ins)
     case client.EventDelete:
-        k.cache.Delete(ins.InstanceId)
+        k.cache.ReplaceOrInsert(ins)
     }
 }
 
@@ -155,20 +162,24 @@ func (k *k8s) eventSync(ins *sv.Instance, triggerTime int64) {
     })
 }
 
-func (k *k8s) convertK8sPod2Instance(obj client.QueueObject) (ins *sv.Instance) {
+//
+func (k *k8s) pod2Instance(obj client.QueueObject) (ins *sv.Instance) {
     // get pod info from k8s robot
     items, ok := k.robot.GetByKey(client.Pods, obj.Key)
     if ok && len(items) > 0 {
         pod := items[0].(*v1.Pod)
         instance := formatInstance(&obj, pod)
+        if instance == nil {
+            return nil
+        }
         // if instance status is 0 or cache is nil and cache status not equals current status ,send sync event, otherwise don't repeat send
         if instance.Status == 0 {
             return nil
         }
         cacheInstance := k.cache.Get(instance.InstanceId)
-        if cacheInstance == nil || cacheInstance.Status != instance.Status {
+        if cacheInstance == nil || k.hasInstanceDiff(cacheInstance, instance) {
             // put all exist instance to cache, purpose for get cache don't make npe
-            k.ProcessCache(obj, instance)
+            k.ProcessCache(obj.Event, instance)
             if k.VerifyInstance(instance) {
                 ins = instance
             } else {
@@ -186,14 +197,14 @@ func (k *k8s) convertK8sPod2Instance(obj client.QueueObject) (ins *sv.Instance) 
         case client.EventUpdate:
             // log error
         case client.EventDelete:
-            instanceId := k.formatObjToInstanceId(obj)
+            instanceId := k.obj2InstanceId(obj)
             log.Logger.Infof("delete event, instanceid: %s", instanceId)
             if instance := k.cache.Get(instanceId); instance != nil {
-                if instance.Status != 2 {
+                if instance.Status != providers.InstanceStatusOffline {
                     // set instance status
-                    instance.Status = 2
+                    instance.Status = providers.InstanceStatusOffline
                     // delete cache
-                    k.cache.Delete(instance.InstanceId)
+                    k.ProcessCache(client.EventDelete, instance)
                     ins = instance
                 }
             }
@@ -203,7 +214,22 @@ func (k *k8s) convertK8sPod2Instance(obj client.QueueObject) (ins *sv.Instance) 
     return ins
 }
 
-func (k *k8s) formatObjToInstanceId(obj client.QueueObject) string {
+//
+func (k *k8s) hasInstanceDiff(old, new *sv.Instance) (diff bool) {
+    // If K8s instance Version > Finder instance version
+    if old.Status == new.Status && old.Status == 3 { // if instance status is offline, we need not treat the change as difference
+        diff = false
+    } else if new.Reversion > old.Reversion {
+        diff = true
+    } else if new.EnvType != old.EnvType || new.State != old.State || new.Status != old.Status ||
+        new.EnvGroup != old.EnvGroup || new.InstanceId != old.InstanceId {
+        diff = true
+    }
+
+    return diff
+}
+
+func (k *k8s) obj2InstanceId(obj client.QueueObject) string {
     if obj.Key != "" {
         keys := strings.Split(obj.Key, "/")
         if keys != nil && len(keys) >= 2 {
@@ -246,7 +272,7 @@ func (k *k8s) CompareAndFlush() {
             }
         }
         // 对比差异并增量同步
-        list, err := k.worker.GetAll(providers.InstanceStatus, providers.ProviderK8s)
+        list, err := k.worker.GetAll(providers.InstanceStatusOnline, providers.ProviderK8s)
         if err != nil {
             log.Logger.Errorf("get all instances from atlas failed")
         }
@@ -255,32 +281,30 @@ func (k *k8s) CompareAndFlush() {
                 k.buildAndSendEvent(ins)
             }
             return
+        } else if len(config.PushAppCodes) > 0 {
+            instances := []*sv.Instance{}
+            for _, ins := range list.Instance {
+                for _, appcode := range config.PushAppCodes {
+                    if appcode == ins.AppCode {
+                        instances = append(instances, ins)
+                    }
+                }
+            }
+            list.Instance = instances
         }
         servMap := providers.ListToMap(list.GetInstance())
         k8sMap := providers.ListToMap(all)
         log.Logger.Infof("mfwregistry online k8s instances size :%d  k8s online instance size :%d  total :%d", len(servMap), onlineCount, len(k8sMap))
         for k8sKey, k8sIns := range k8sMap {
             if servIns, exist := servMap[k8sKey]; exist {
-                diff := false
-                // If K8s instance Version > Finder instance version
-                if k8sIns.Reversion > servIns.Reversion {
-                    diff = true
-                }
-                // If env-type not equal
-                if k8sIns.EnvType != servIns.EnvType {
-                    diff = true
-                }
-                // If env-group not equal
-                if k8sIns.EnvGroup != servIns.EnvGroup {
-                    diff = true
-                }
+                diff := k.hasInstanceDiff(servIns, k8sIns)
                 if diff {
                     k.buildAndSendEvent(k8sIns)
                 }
                 delete(k8sMap, k8sKey)
                 delete(servMap, k8sKey)
             } else {
-                log.Logger.Infof("k8s match much id : %v , status : %v \n", k8sIns.InstanceId, k8sIns.Status)
+                log.Logger.Infof("k8s match much id: %v , status : %v \n", k8sIns.InstanceId, k8sIns.Status)
                 if k8sIns.Status == 1 {
                     k.buildAndSendEvent(k8sIns)
                 }
@@ -320,6 +344,9 @@ func (k *k8s) GetAll() (result []*sv.Instance) {
     for _, item := range items {
         pod := item.(*v1.Pod)
         instance := formatInstance(nil, pod)
+        if instance == nil {
+            continue
+        }
         if k.VerifyInstance(instance) {
             if result == nil {
                 result = []*sv.Instance{}
@@ -357,300 +384,6 @@ func (k *k8s) ProcessIntervalFullPush() {
             return
         }
     }
-}
-
-// TODO obj param optimize
-func formatInstance(obj *client.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
-    if pod == nil {
-        return ins
-    }
-    // labels
-    labels := pod.Labels
-    var runtimeConfig *providers.RuntimeConfig
-    var envType string
-    var ports []*sv.PortInfo
-    var cpu float32
-    var memory int32
-    var envs map[string]string
-    var images = make(map[string]string)
-    // A pod may contains more than one containers
-    for _, container := range pod.Spec.Containers {
-
-        // only get the  container env info that named "application"
-        if container.Name == "application" {
-            envs = make(map[string]string, len(container.Env))
-            for _, env := range container.Env {
-                envs[env.Name] = env.Value
-            }
-
-        }
-        images[container.Name] = container.Image
-        for _, e := range container.Env {
-            if e.Name == "K8S_CLUSTER_TYPE" {
-                envType = e.Value
-            }
-        }
-        // merge containers cpu and memory limit value
-        cpu = cpu + formatCpuSize(container.Resources.Limits.Cpu())
-        memory = memory + formatMemorySize(container.Resources.Limits.Memory())
-    }
-    // format container port
-    ports = formatAppPort(pod)
-
-    // cpu and memroy
-    runtimeConfig = &providers.RuntimeConfig{
-        Cpu:          cpu,
-        Memory:       memory,
-        Image:        images,
-        Environments: envs,
-    }
-    // format state and appcode
-    state := formatState(pod)
-    appCode := formatAppCode(pod)
-    status := formatInstanceStatus(obj, pod)
-    // filter the invalid pod
-    if appCode == "" {
-        return
-    }
-    envType = formatEnvType(pod, envType)
-    // enable state
-    enabled := formatContainerEnabled(pod)
-    // reversion
-    // pay attention. The reversion field is the providers version of the instance, which is strictly self-increasing.
-    // The push behavior of data may not be able to reach the opposite end in an orderly manner under a complex network environment.
-    // Therefore, when the opposite end receives data, it needs to compare the reversion value with the existing value.
-    // If the value is larger, it can be stored in the database. Otherwise, refuse to update.
-    reversion, _ := strconv.ParseInt(pod.ObjectMeta.ResourceVersion, 10, 64)
-
-    // envgroup
-    envGroup := ""
-    if eg, ok := labels["env-group"]; ok && eg != "" {
-        envGroup = eg
-    }
-
-    // envCode
-    envCode := envType + "#" + envGroup
-
-    // set application.name
-    label := formatLableInfo(pod, labels, runtimeConfig.Environments)
-
-    // convert pod to instance
-    ins = &sv.Instance{
-        InstanceId:  pod.Name,
-        Ports:       ports,
-        AppCode:     appCode,
-        EnvCode:     envCode,
-        EnvType:     envType,
-        EnvGroup:    envGroup,
-        Version:     labels["version"],
-        HealthState: "passing",
-        Ip:          pod.Status.PodIP,
-        Enabled:     enabled,
-        State:       state,
-        Provider:    "k8s",
-        Hostname:    pod.Name,
-        Cpu:         runtimeConfig.Cpu,
-        Memory:      runtimeConfig.Memory,
-        Image:       runtimeConfig.Image,
-        Idc:         labels["version"],
-        Reversion:   reversion,
-        Status:      status,
-        Label:       label,
-    }
-
-    return
-}
-
-// format lable info
-func formatLableInfo(pod *v1.Pod, originLables map[string]string, envs map[string]string) (lablel map[string]string) {
-    if lablel == nil {
-        lablel = make(map[string]string)
-    }
-    // for Java SDK
-    if envs != nil && len(envs) > 0 {
-        if san, exist := envs[providers.InstanceSpringApplicationName]; exist {
-            lablel[providers.InstanceCompatibilityLabelEnvSan] = san
-        }
-    }
-    // for namespace
-    lablel[providers.InstanceCompatibilityLabelAosNamespace] = ""
-    if pod != nil {
-        lablel[providers.InstanceCompatibilityLabelAosNamespace] = pod.Namespace
-    }
-    if originLables != nil && len(originLables) > 0 {
-        // for specific label
-        lablel[providers.InstanceCompatibilityLabelAosApp] = ""
-        if lapp, exist := originLables["app"]; exist {
-            lablel[providers.InstanceCompatibilityLabelAosApp] = lapp
-        }
-        // for destination rule and virtual service
-        var drHost string
-        // in case of FengXiao
-        if _, exist := originLables["deploy-id"]; exist {
-            drHost = lablel[providers.InstanceCompatibilityLabelAosApp] + "." + lablel[providers.InstanceCompatibilityLabelAosNamespace]
-        } else {
-            // in case of AosMicroservice
-            drHost = lablel[providers.InstanceCompatibilityLabelAosApp]
-        }
-        lablel[providers.InstanceCompatibilityLabelAosDrHost] = drHost
-        // in case of WebIDE
-        if mark, exist := originLables["mark"]; exist {
-            lablel[providers.InstanceCompatibilityLabelAosMark] = mark
-        }
-    }
-
-    return
-}
-
-// formatAppPort format K8s container port to instance port info
-func formatAppPort(pod *v1.Pod) (ports []*sv.PortInfo) {
-    ports = []*sv.PortInfo{}
-    if pod.Spec.Containers != nil && len(pod.Spec.Containers) > 0 {
-        // TODO temp setting
-        ports = append(ports, &sv.PortInfo{
-            Name:     "dubbo" + "-" + strconv.FormatInt(7096, 10),
-            Protocol: providers.ProtoDubbo,
-            Port:     7096,
-        })
-        for _, container := range pod.Spec.Containers {
-            if container.Ports != nil && len(container.Ports) > 0 {
-                for _, p := range container.Ports {
-                    proto := ""
-                    if p.Protocol == v1.ProtocolTCP {
-                        if strings.HasPrefix(p.Name, "http") {
-                            proto = providers.ProtoHTTP
-                        } else if strings.HasPrefix(p.Name, "grpc") {
-                            proto = providers.ProtoGRPC
-                        }
-                    }
-                    ports = append(ports, &sv.PortInfo{
-                        Name:     p.Name,
-                        Protocol: proto,
-                        Port:     p.ContainerPort,
-                    })
-
-                }
-            }
-        }
-    }
-
-    return
-}
-
-func formatAppCode(pod *v1.Pod) (appCode string) {
-    labels := pod.Labels
-    if code, ok := labels["app-code"]; ok {
-        appCode = code
-    } else if code, ok := labels["cadvisor-app"]; ok {
-        appCode = code
-    } else {
-        appCode = pod.Namespace + "-" + labels["name"]
-    }
-    return
-}
-
-// formatInstanceStatus convert instance status
-func formatInstanceStatus(obj *client.QueueObject, pod *v1.Pod) (status int32) {
-    if obj != nil && obj.Event == client.EventDelete {
-        status = 2
-    } else {
-        if pod.DeletionTimestamp != nil {
-            // modify 3 to 2
-            status = 2
-        } else if pod != nil && pod.Status.Phase == v1.PodRunning {
-            var ready = true
-            for _, c := range pod.Status.ContainerStatuses {
-                if c.Ready == false || c.State.Running == nil {
-                    ready = false
-                }
-            }
-            if ready == true {
-                status = 1
-            } else {
-                status = 2
-            }
-        }
-    }
-
-    return
-}
-
-func formatEnvType(pod *v1.Pod, envType string) string {
-    labels := pod.Labels
-    if env, ok := labels["env-type"]; ok && envType != "" {
-        envType = env
-    } else if env, ok := labels["K8S_CLUSTER_TYPE"]; ok && envType == "" {
-        envType = env
-    }
-    envType = strings.ToLower(envType)
-    if envType == "online" {
-        envType = "product"
-    }
-    return envType
-}
-
-func formatContainerEnabled(pod *v1.Pod) (enabled bool) {
-    if pod != nil && pod.Status.Phase == v1.PodRunning {
-        var ready = true
-        for _, c := range pod.Status.ContainerStatuses {
-            if c.Ready == false || c.State.Running == nil {
-                ready = false
-            }
-        }
-        if pod.DeletionTimestamp != nil {
-            ready = false
-        }
-        if ready == true {
-            enabled = true
-        }
-    }
-
-    return
-}
-
-// 1000m = 1
-func formatCpuSize(r *resource.Quantity) (count float32) {
-    if cpuInt, ok := r.AsInt64(); !ok {
-        cpuStr := r.String()
-        reg := regexp.MustCompile(`\d+`)
-        c, err := strconv.Atoi(string(reg.Find([]byte(cpuStr))))
-        if err != nil {
-            log.Logger.Error("format cpu error: cpu=", cpuStr)
-        }
-        count = float32(c) / 1000
-    } else {
-        count = float32(cpuInt)
-    }
-    return
-}
-
-// formatMemorySize is responsible for formatting the memory value of the instance
-func formatMemorySize(r *resource.Quantity) (memory int32) {
-    memoryInt, _ := r.AsInt64()
-    memoryStr := r.String()
-    if strings.Contains(memoryStr, "i") {
-        memory = int32(memoryInt / 1024 / 1024)
-    } else {
-        memory = int32(memoryInt / 1000 / 1000)
-    }
-    return
-}
-
-// formatState is responsible for formatting the state of the instance
-func formatState(pod *v1.Pod) (state string) {
-
-    if formatContainerEnabled(pod) {
-        state = providers.InstanceOnline
-    } else {
-        switch pod.Status.Phase {
-        case v1.PodPending:
-            state = providers.InstancePrepared
-        case v1.PodUnknown:
-        case v1.PodFailed:
-            state = providers.InstanceFailed
-        }
-    }
-    return
 }
 
 // withExpiryDuration sets up the interval time of cleaning up goroutines.

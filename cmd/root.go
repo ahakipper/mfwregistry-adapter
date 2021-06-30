@@ -27,14 +27,9 @@ var cfgFile string
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-    Use:   "mfwregistry-k8sadapter",
-    Short: "A brief description of your application",
-    Long: `A longer description that spans multiple lines and likely contains
-examples and usage of using your application. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
+    Use:   "mfwregistry-adapter",
+    Short: "MfwRegistry-Adapter aims to push instance events(from K8s and Consul) to MfwRegistry",
+    Long: ``,
     // Uncomment the following line if your bare application
     // has an action associated with it:
     //	Run: func(cmd *cobra.Command, args []string) { },
@@ -80,7 +75,7 @@ func initConfig() {
 
         // Search config in home directory with name ".mfwregistry-k8sadapter" (without extension).
         viper.AddConfigPath(home)
-        viper.SetConfigName(".mfwregistry-k8sadapter")
+        viper.SetConfigName(".mfwregistry-adapter")
     }
 
     viper.AutomaticEnv() // read in environment variables that match

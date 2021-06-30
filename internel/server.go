@@ -1,4 +1,4 @@
-package core
+package internel
 
 import (
     "context"
@@ -127,7 +127,7 @@ func (s *Server) Run() {
 // Stop server and release resources
 func (s *Server) Stop() {
     s.stop <- struct{}{}
-    log.Logger.Info("core server stop background context")
+    log.Logger.Info("internel server stop background context")
 }
 
 func (s *Server) stopProviders() (err error) {

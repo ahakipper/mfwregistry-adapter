@@ -6,11 +6,22 @@ import (
 )
 
 const (
-    InstanceOnline   = "online"
-    InstanceOffline  = "offline"
-    InstancePrepared = "prepared"
-    InstanceFailed   = "failed"
-    InstanceStatus   = 1 // 0下线 1上线 -1全量
+    InstanceStatePending    = "pending"    // Instance not scheduled
+    InstanceStateStarting   = "starting"   // Instance is starting
+    InstanceStateProbing    = "probing"    //
+    InstanceStateOOM        = "oom"        // The instance is OOM Killed. This state may exist for a very short time
+    InstanceStateCrash      = "crash"      // Instance exited without code 0
+    InstanceStateRunning    = "running"    // Instance is running
+    InstanceStateError      = "error"      // Instance can not be stated. for instance: the start command path is incorrect
+    InstanceStateFailed     = "failed"     // Instance can not be created due to system error, such as: K8s kubelet cni configuration invalid.
+    InstanceStateTerminated = "terminated" // Instance is deleted.
+    InstanceStateUnknown    = "unknown"    //
+)
+
+const (
+    InstanceStatusOnline    = 1 // Instance is online
+    InstanceStatusUnhealthy = 2 //
+    InstanceStatusOffline   = 3 // Instance is deleted
 )
 
 const (
@@ -25,6 +36,13 @@ const (
 const (
     ProviderK8s = "k8s"
     ProviderEcs = "ecs"
+)
+
+const (
+    EnvDev     = "dev"
+    EnvTest    = "test"
+    EnvStaging = "staging"
+    EnvProduct = "product"
 )
 
 const (

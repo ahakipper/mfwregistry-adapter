@@ -2,6 +2,7 @@ package providers
 
 import (
     "github.com/google/btree"
+    "github.com/mohae/deepcopy"
     sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
     "strings"
     "sync"
@@ -37,7 +38,7 @@ type CacheBtree struct {
     sync.RWMutex
 }
 
-func (cache *CacheBtree) Get(id string) *sv.Instance {
+func (cache *CacheBtree) Get(id string) (ins *sv.Instance) {
     cache.RLock()
     defer cache.RUnlock()
     key := &InstanceCacheItem{
@@ -47,9 +48,12 @@ func (cache *CacheBtree) Get(id string) *sv.Instance {
     }
     // avoid generate npe
     if item := cache.btree.Get(key); item != nil {
-        return item.(*InstanceCacheItem).Instance
+        tins := item.(*InstanceCacheItem).Instance
+        sins := cache.deepCopy(*tins)
+        ins = &sins
     }
-    return nil
+
+    return ins
 }
 
 // List return all the instances
@@ -62,8 +66,9 @@ func (cache *CacheBtree) List() []*sv.Instance {
             all = []*sv.Instance{}
         }
         if item != nil {
-            ins := item.(*InstanceCacheItem)
-            all = append(all, ins.Instance)
+            tins := item.(*InstanceCacheItem).Instance
+            sins := cache.deepCopy(*tins)
+            all = append(all, &sins)
         }
 
         return true
@@ -90,6 +95,9 @@ func (cache *CacheBtree) ReplaceOrInsert(ins *sv.Instance) *sv.Instance {
     defer cache.Unlock()
     if ins == nil {
         return nil
+    } else {
+        sins := cache.deepCopy(*ins)
+        ins = &sins
     }
     item := &InstanceCacheItem{
         Instance: ins,
@@ -103,6 +111,13 @@ func (cache *CacheBtree) Clear() {
     cache.Lock()
     defer cache.Unlock()
     cache.btree.Clear(false)
+}
+
+func (cache *CacheBtree) deepCopy(ins sv.Instance) (nsp sv.Instance) {
+    cp := deepcopy.Copy(ins)
+    nsp = cp.(sv.Instance)
+
+    return nsp
 }
 
 type InstanceCacheItem struct {

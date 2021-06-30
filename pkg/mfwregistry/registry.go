@@ -4,6 +4,7 @@ import (
     v2 "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
+    "strings"
 )
 
 type Pusher interface {
@@ -33,12 +34,18 @@ func (mr *MFWRegistry) Push(triggerTime int64, instance []*v2.Instance) (err err
     }
     // simulate push failure
     // err = errors.New("the registery not exists now")
+    ids := []string{}
+    for _, ins := range instance {
+        ids = append(ids, ins.InstanceId)
+    }
     res, err := mr.C.Sync(instance)
     if err != nil {
+        log.Logger.Infof("synced instance to mfwregistry failed, instance ids: %s, rpc code: %d, rpc error: %s", strings.Join(ids, ","), res.GetCode(), res.GetMsg())
         return err
+    } else {
+        log.Logger.Infof("synced instance to mfwregistry successfully, instance ids: %s", strings.Join(ids, ","))
+        return nil
     }
-    log.Logger.Info(res)
-    return nil
 }
 
 func (mr *MFWRegistry) PushAll(triggerTime int64, instance []*v2.Instance) (err error) {

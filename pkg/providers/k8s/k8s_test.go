@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"fmt"
+	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/providers"
 	client "gitlab.mfwdev.com/servicemesh/robot"
 	v1 "k8s.io/api/core/v1"
 	"testing"
@@ -21,7 +22,7 @@ func TestFormatInstance(t *testing.T) {
 		"deploy-id":         "987",
 		"deploy-name":       "31-test-testiterationc-msp",
 		"env-group":         "7",
-		"env-type":          "test",
+		"env-type":          providers.EnvTest,
 		"pod-template-hash": "c4dcf8b8f",
 		"source-platform":   "beehive",
 		"version":           "31",
@@ -37,11 +38,11 @@ func TestFormatInstance(t *testing.T) {
 				},
 				v1.EnvVar{
 					Name:  "APP_ENV_TYPE",
-					Value: "test",
+					Value: providers.EnvTest,
 				},
 				v1.EnvVar{
 					Name:  "K8S_CLUSTER_TYPE",
-					Value: "dev",
+					Value: providers.EnvDev,
 				},
 			},
 			Ports: []v1.ContainerPort{
@@ -54,7 +55,7 @@ func TestFormatInstance(t *testing.T) {
 		},
 	}
 	instance := formatInstance(obj, pod)
-	if instance.EnvType != "test" {
+	if instance.EnvType != providers.EnvTest {
 		t.Error(fmt.Sprintf("The value of the instance env typ does not meet expectations, appcode: %s", instance.AppCode))
 		t.FailNow()
 	}
@@ -161,7 +162,7 @@ func TestFormatInstance(t *testing.T) {
 	pod.Labels = map[string]string{
 		"app":               "oudder.mservice",
 		"cadvisor-app":      "oudder-mservice",
-		"env-type":          "dev",
+		"env-type":          providers.EnvDev,
 		"microservice":      "rudder",
 		"pod-template-hash": "db9cff469",
 		"version":           "349672",
@@ -189,7 +190,7 @@ func TestFormatInstance(t *testing.T) {
 				},
 				v1.EnvVar{
 					Name:  "APP_ENV_TYPE",
-					Value: "dev",
+					Value: providers.EnvDev,
 				},
 				v1.EnvVar{
 					Name:  "APP_ENV_GROUP",
@@ -197,7 +198,7 @@ func TestFormatInstance(t *testing.T) {
 				},
 				v1.EnvVar{
 					Name:  "K8S_CLUSTER_TYPE",
-					Value: "dev",
+					Value: providers.EnvDev,
 				},
 			},
 			Ports: []v1.ContainerPort{
@@ -210,7 +211,7 @@ func TestFormatInstance(t *testing.T) {
 		},
 	}
 	instance = formatInstance(obj, pod)
-	if instance.EnvType != "dev" {
+	if instance.EnvType != providers.EnvDev {
 		t.Error(fmt.Sprintf("The value of the instance env typ does not meet expectations, appcode: %s", instance.AppCode))
 		t.FailNow()
 	}
@@ -224,7 +225,7 @@ func TestFormatInstance(t *testing.T) {
 	pod.Labels = map[string]string{
 		"app":               "oudder.mservice",
 		"cadvisor-app":      "oudder-mservice",
-		"env-type":          "product",
+		"env-type":          providers.EnvProduct,
 		"microservice":      "rudder",
 		"pod-template-hash": "589fd89b74",
 		"version":           "352414",
@@ -292,14 +293,14 @@ func TestFormatInstance(t *testing.T) {
 				},
 				v1.EnvVar{
 					Name:  "APP_ENV_TYPE",
-					Value: "product",
+					Value: providers.EnvProduct,
 				},
 				v1.EnvVar{
 					Name: "APP_ENV_GROUP",
 				},
 				v1.EnvVar{
 					Name:  "K8S_CLUSTER_TYPE",
-					Value: "product",
+					Value: providers.EnvProduct,
 				},
 				v1.EnvVar{
 					Name:  "K8S_CLUSTER_NAME",
@@ -316,7 +317,7 @@ func TestFormatInstance(t *testing.T) {
 		},
 	}
 	instance = formatInstance(obj, pod)
-	if instance.EnvType != "product" {
+	if instance.EnvType != providers.EnvProduct {
 		t.Error(fmt.Sprintf("The value of the instance env typ does not meet expectations, appcode: %s", instance.AppCode))
 		t.FailNow()
 	}
@@ -385,7 +386,7 @@ func TestFormatInstance(t *testing.T) {
 				},
 				v1.EnvVar{
 					Name:  "K8S_CLUSTER_TYPE",
-					Value: "product",
+					Value: providers.EnvProduct,
 				},
 				v1.EnvVar{
 					Name:  "K8S_CLUSTER_NAME",
@@ -402,7 +403,7 @@ func TestFormatInstance(t *testing.T) {
 		},
 	}
 	instance = formatInstance(obj, pod)
-	if instance.EnvType != "product" {
+	if instance.EnvType != providers.EnvProduct {
 		t.Error(fmt.Sprintf("The value of the instance env typ does not meet expectations, appcode: %s", instance.AppCode))
 		t.FailNow()
 	}
@@ -417,7 +418,7 @@ func TestFormatInstance(t *testing.T) {
 		"app":               "useraccount.muser",
 		"cadvisor-app":      "useraccount-muser",
 		"env-group":         "10014",
-		"env-type":          "staging",
+		"env-type":          providers.EnvStaging,
 		"microservice":      "rudder",
 		"pod-template-hash": "848cc77b",
 		"version":           "356885",
@@ -485,7 +486,7 @@ func TestFormatInstance(t *testing.T) {
 				},
 				v1.EnvVar{
 					Name:  "APP_ENV_TYPE",
-					Value: "staging",
+					Value: providers.EnvStaging,
 				},
 				v1.EnvVar{
 					Name:  "APP_ENV_GROUP",
@@ -493,7 +494,7 @@ func TestFormatInstance(t *testing.T) {
 				},
 				v1.EnvVar{
 					Name:  "K8S_CLUSTER_TYPE",
-					Value: "staging",
+					Value: providers.EnvStaging,
 				},
 				v1.EnvVar{
 					Name:  "K8S_CLUSTER_NAME",
@@ -510,7 +511,7 @@ func TestFormatInstance(t *testing.T) {
 		},
 	}
 	instance = formatInstance(obj, pod)
-	if instance.EnvType != "staging" {
+	if instance.EnvType != providers.EnvStaging {
 		t.Error(fmt.Sprintf("The value of the instance env typ does not meet expectations, appcode: %s", instance.AppCode))
 		t.FailNow()
 	}
@@ -579,7 +580,7 @@ func TestFormatInstance(t *testing.T) {
 				},
 				v1.EnvVar{
 					Name:  "K8S_CLUSTER_TYPE",
-					Value: "staging",
+					Value: providers.EnvStaging,
 				},
 				v1.EnvVar{
 					Name:  "K8S_CLUSTER_NAME",
@@ -596,7 +597,7 @@ func TestFormatInstance(t *testing.T) {
 		},
 	}
 	instance = formatInstance(obj, pod)
-	if instance.EnvType != "staging" {
+	if instance.EnvType != providers.EnvStaging {
 		t.Error(fmt.Sprintf("The value of the instance env typ does not meet expectations, appcode: %s", instance.AppCode))
 		t.FailNow()
 	}
