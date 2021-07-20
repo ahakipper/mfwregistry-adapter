@@ -7,6 +7,7 @@ import (
     "github.com/pkg/errors"
     sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/providers"
+    v1 "k8s.io/api/core/v1"
 )
 
 const (
@@ -211,8 +212,72 @@ func convertVersion(endpoint *api.ServiceEntry) (appcode string, err error) {
 }
 
 func convertState(endpoint *api.ServiceEntry) (state string, err error) {
+    state = providers.InstanceStateProbing
     if endpoint == nil {
+        if len(endpoint.Checks) > 0 {
+            var appcode string
+            if appcode, err = convertAppcode(endpoint); err != nil {
+                return "", err
+            }
+            serviceCheckId := "service:" + appcode
+            for _, ck := range endpoint.Checks {
+                if ck.CheckID == serviceCheckId {
+                    if ck.Status == "passing" {
+                        state = providers.InstanceStateRunning
+                        break
+                    }
+                }
+            }
+        }
         return "", errors.New("convert state with invalid endpoint")
     }
+    
     return state, nil
+}
+
+// formatState is responsible for formatting the state of the instance
+func formatState(pod *v1.Pod) (state string) {
+    if pod != nil {
+        if !pod.DeletionTimestamp.IsZero() { // the pod is deleted
+            state = providers.InstanceStateTerminated
+        } else if pod.Status.Phase != v1.PodRunning {
+            switch pod.Status.Phase {
+            case v1.PodPending:
+                state = providers.InstanceStatePending
+            case v1.PodUnknown:
+                state = providers.InstanceStateUnknown
+            case v1.PodFailed:
+                state = providers.InstanceStateFailed
+            }
+        } else {
+            already := true
+            for _, cs := range pod.Status.ContainerStatuses {
+                if !cs.Ready {
+                    already = false
+                    if cs.State.Waiting != nil && cs.LastTerminationState.Terminated != nil &&
+                        cs.State.Waiting.Reason == "CrashLoopBackOff" &&
+                        cs.LastTerminationState.Terminated.Reason == "Error" {
+                        state = providers.InstanceStateError
+                    } else if cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {
+                        state = providers.InstanceStateCrash
+                    }
+                }
+            }
+            if already {
+                state = providers.InstanceStateRunning
+            } else {
+                if state == "" {
+                    state = providers.InstanceStateProbing
+                } else {
+                    state = providers.InstanceStateUnknown
+                }
+            }
+        }
+    }
+
+    if state == "" {
+        state = providers.InstanceStateUnknown
+    }
+
+    return state
 }

@@ -223,9 +223,9 @@ func (c *consul) extractDiff(old, new providers.CacheIterface) (add []*v2.Instan
             // old cache has the instance which not in new cache
             if newIns := new.Get(oldIns.InstanceId); newIns == nil {
                 // delete events
-                oldIns.Status = providers.InstanceStatusUnhealthy
+                oldIns.Status = providers.InstanceStatusOffline
                 oldIns.Enabled = false
-                oldIns.State = providers.InstanceStateProbing
+                oldIns.State = providers.InstanceStateTerminated
                 del = append(del, oldIns)
             }
         }
