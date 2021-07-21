@@ -8,16 +8,16 @@ import (
     "github.com/coreos/etcd/clientv3"
     "github.com/coreos/etcd/mvcc/mvccpb"
 
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/tools/cache"
     "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/tools/cache"
 )
 
 var (
     // Indicates the prefix key of register center, store in etcd
-    registerCenter = "/paas/mfwregistry-k8sadapter/register/"
+    registerCenter = "/paas/mfwregistry-adapter/register/"
 
     // pushChannelBaseKey the base key of slave node subscript channel
-    pushChannelBaseKey = "/paas/mfwregistry-k8sadapter/subscribech"
+    pushChannelBaseKey = "/paas/mfwregistry-adapter/subscribech"
 
     // Operate ectd timeout
     timeout = 5 * time.Second

@@ -25,7 +25,7 @@ pipeline:
 
   docker-build:
     image: hub.mfwdev.com/paas/drone-docker:v0.5.8
-    repo: hub.mfwdev.com/paas/mfwregistry-k8sadapter
+    repo: hub.mfwdev.com/paas/mfwregistry-adapter
     auth_config:
       innerid: hub.mfwdev.com
     auth_config_innerid: hub.mfwdev.com

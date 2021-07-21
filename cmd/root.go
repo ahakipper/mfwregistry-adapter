@@ -50,7 +50,7 @@ func init() {
     // Here you will define your flags and configuration settings.
     // Cobra supports persistent flags, which, if defined here,
     // will be global for your application.
-    // rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.mfwregistry-k8sadapter.yaml)")
+    // rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.mfwregistry-adapter.yaml)")
     rootCmd.PersistentFlags().StringP("log-file-path", "p", "./logfiles/", "the log path")
     rootCmd.PersistentFlags().IntP("log-maxsize", "m", 100, "max log size (MB)")
     rootCmd.PersistentFlags().IntP("log-backup-number", "n", 10, "log backup numbers")
@@ -73,7 +73,7 @@ func initConfig() {
             os.Exit(1)
         }
 
-        // Search config in home directory with name ".mfwregistry-k8sadapter" (without extension).
+        // Search config in home directory with name ".mfwregistry-adapter" (without extension).
         viper.AddConfigPath(home)
         viper.SetConfigName(".mfwregistry-adapter")
     }
