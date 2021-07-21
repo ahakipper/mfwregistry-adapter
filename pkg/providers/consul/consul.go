@@ -344,6 +344,7 @@ func (c *consul) CompareAndFlush() {
                     if consulIns.EnvType != servIns.EnvType ||
                         consulIns.EnvGroup != servIns.EnvGroup ||
                         consulIns.Status != servIns.Status ||
+                        consulIns.State != servIns.State ||
                         consulIns.Ip != servIns.Ip ||
                         consulIns.Idc != servIns.Idc ||
                         consulIns.Cluster != servIns.Cluster ||
