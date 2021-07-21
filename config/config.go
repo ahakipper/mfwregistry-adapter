@@ -57,7 +57,7 @@ func InitProd() {
     CertFile = "./config/certs/etcdprod/etcd.pem"
     KeyFile = "./config/certs/etcdprod/etcd-key.pem"
     CAFile = "./config/certs/etcdprod/ca.pem"
-    KubeConfigPath = []string{"./config/kubeconfigs/k8s-deck", "./config/kubeconfigs/k8s-kraken"}
+    KubeConfigPath = []string{"./config/kubeconfigs/k8s-deck", "./config/kubeconfigs/k8s-kraken", "./config/kubeconfigs/k8s-eel"}
     ConsulAddress = []string{"10.132.2.40:8520", "10.132.2.42:8520", "10.132.2.43:8520"}
     Providers = []string{}
     LockCampaignKey = "/paas/mfwregistry-adapter"
