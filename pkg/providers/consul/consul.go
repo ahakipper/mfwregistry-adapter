@@ -198,9 +198,6 @@ func (c *consul) extractDiff(old, new providers.CacheIterface) (add []*v2.Instan
                 // update events
                 if newIns.Reversion > oldIns.Reversion {
                     if c.VerifyInstance(newIns) {
-                        newIns.Status = providers.InstanceStatusOnline
-                        newIns.Enabled = true
-                        newIns.State = providers.InstanceStateRunning
                         update = append(update, newIns)
                     } else {
                         log.Logger.Warnf("verify instance failed, appcode: %s, instanceid: %s", newIns.AppCode, newIns.InstanceId)
@@ -211,7 +208,6 @@ func (c *consul) extractDiff(old, new providers.CacheIterface) (add []*v2.Instan
                 if c.VerifyInstance(newIns) {
                     newIns.Status = providers.InstanceStatusOnline
                     newIns.Enabled = true
-                    newIns.State = providers.InstanceStateRunning
                     add = append(add, newIns)
                 } else {
                     log.Logger.Warnf("verify instance failed, appcode: %s, instanceid: %s", newIns.AppCode, newIns.InstanceId)

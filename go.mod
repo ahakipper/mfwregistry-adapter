@@ -12,7 +12,7 @@ require (
 	github.com/k0kubun/colorstring v0.0.0-20150214042306-9440f1994b88 // indirect
 	github.com/k0kubun/pp v3.0.1+incompatible
 	github.com/mitchellh/go-homedir v1.1.0
-	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826 // indirect
+	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
 	github.com/natefinch/lumberjack v2.0.0+incompatible
 	github.com/panjf2000/ants/v2 v2.4.3
 	github.com/pkg/errors v0.9.1
