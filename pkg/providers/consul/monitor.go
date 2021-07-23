@@ -102,7 +102,7 @@ func (m *consulMonitor) watchConsul(ctx context.Context, change chan struct{}) (
             // This Consul REST API will block until service changes or timeout
             // var svcs map[string][]string
             // fmt.Println(r.url.String() + r.url.Fragment,p.StatusCode)
-            _, queryMeta, err = client.Health().State("any", &queryOptions)
+            _, queryMeta, err = client.Health().State(api.HealthAny, &queryOptions)
             if err != nil {
                 log.Logger.Warnf("could not fetch services: %s", err.Error())
             } else if consulWaitIndex != queryMeta.LastIndex {
@@ -198,7 +198,8 @@ func (m *consulMonitor) GetServiceEntries(name string, q *api.QueryOptions) (end
         return nil, err
     }
     // filter the endpoint not tagged with "microservice". referer here: https://wiki.mafengwo.cn/x/mM3_Aw
-    endpoints, _, err = client.Health().Service(name, tagMicroservice, false, q)
+    // endpoints, _, err = client.Health().Service(name, tagMicroservice, false, q)
+    endpoints, _, err = client.Health().Service(name, tagMicroservice, true, q)
     if err != nil {
         log.Logger.Warnf("Could not retrieve service catalog from consul: %v", err)
         return nil, err
