@@ -197,21 +197,21 @@ func (c *consul) extractDiff(old, new providers.CacheIterface) (add []*v2.Instan
             if oldIns := old.Get(newIns.InstanceId); oldIns != nil {
                 // update events
                 if newIns.Reversion > oldIns.Reversion {
-                    if c.VerifyInstance(newIns) {
+                    if ver := c.VerifyInstance(newIns); ver == nil {
                         update = append(update, newIns)
                     } else {
-                        log.Logger.Warnf("verify instance failed, appcode: %s, instanceid: %s", newIns.AppCode, newIns.InstanceId)
+                        log.Logger.Warnf("invalid instance, instanceid: %s, reason: %s", newIns.InstanceId, ver.Error())
                     }
                 }
             } else {
                 // add events
-                if c.VerifyInstance(newIns) {
+                if ver := c.VerifyInstance(newIns); ver == nil {
                     newIns.Status = providers.InstanceStatusOnline
                     newIns.Enabled = true
                     newIns.State = providers.InstanceStateRunning
                     add = append(add, newIns)
                 } else {
-                    log.Logger.Warnf("verify instance failed, appcode: %s, instanceid: %s", newIns.AppCode, newIns.InstanceId)
+                    log.Logger.Warnf("invalid instance, instanceid: %s, reason: %s", newIns.InstanceId, ver.Error())
                 }
             }
         }
@@ -232,16 +232,16 @@ func (c *consul) extractDiff(old, new providers.CacheIterface) (add []*v2.Instan
 }
 
 // VerifyInstance checks wether the instance is valid
-func (c *consul) VerifyInstance(ins *sv.Instance) bool {
+func (c *consul) VerifyInstance(ins *sv.Instance) error {
     if c.filters != nil && len(c.filters) > 0 {
         for _, f := range c.filters {
-            if !f(ins) {
-                return false
+            if err := f(ins); err != nil {
+                return err
             }
         }
     }
 
-    return true
+    return nil
 }
 
 // EventsSync sync the event to the finder

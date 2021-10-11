@@ -141,16 +141,16 @@ func (k *k8s) ProcessCache(event client.Event, ins *sv.Instance) {
 }
 
 // VerifyInstance checks wether the instance is valid
-func (k *k8s) VerifyInstance(ins *sv.Instance) bool {
+func (k *k8s) VerifyInstance(ins *sv.Instance) error {
     if k.filters != nil && len(k.filters) > 0 {
         for _, f := range k.filters {
-            if !f(ins) {
-                return false
+            if err := f(ins); err != nil {
+                return err
             }
         }
     }
 
-    return true
+    return nil
 }
 
 // eventSync sync the event to the finder
@@ -180,10 +180,10 @@ func (k *k8s) pod2Instance(obj client.QueueObject) (ins *sv.Instance) {
         if cacheInstance == nil || k.hasInstanceDiff(cacheInstance, instance) {
             // put all exist instance to cache, purpose for get cache don't make npe
             k.ProcessCache(obj.Event, instance)
-            if k.VerifyInstance(instance) {
+            if ver := k.VerifyInstance(instance); ver == nil {
                 ins = instance
             } else {
-                log.Logger.Warnf("invalid instance: %s", instance.InstanceId)
+                log.Logger.Warnf("invalid instance, instanceid: %s, reason: %s", instance.InstanceId, ver.Error())
             }
         }
     } else {
@@ -347,13 +347,13 @@ func (k *k8s) GetAll() (result []*sv.Instance) {
         if instance == nil {
             continue
         }
-        if k.VerifyInstance(instance) {
+        if ver := k.VerifyInstance(instance); ver == nil {
             if result == nil {
                 result = []*sv.Instance{}
             }
             result = append(result, instance)
         } else {
-            log.Logger.Warnf("invalid instance: %s", instance.InstanceId)
+            log.Logger.Warnf("invalid instance, instanceid: %s, reason: %s", instance.InstanceId, ver.Error())
         }
     }
     log.Logger.Infof("k8s get all size: %d", len(result))
@@ -369,7 +369,7 @@ func (k *k8s) ProcessIntervalFullPush() {
     if k.interval != 0 {
         interval = time.Duration(k.interval) * time.Second
     }
-    ticker := time.NewTicker(time.Second * time.Duration(interval))
+    ticker := time.NewTicker(interval)
     for {
         select {
         case <-ticker.C:

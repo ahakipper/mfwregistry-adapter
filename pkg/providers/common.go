@@ -1,6 +1,7 @@
 package providers
 
 import (
+    "github.com/pkg/errors"
     sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
     "time"
 )
@@ -65,7 +66,7 @@ type RuntimeConfig struct {
     Environments map[string]string `json:"environments"`
 }
 
-type InstanceFilter func(ins *sv.Instance) bool
+type InstanceFilter func(ins *sv.Instance) error
 
 func ListToMap(ins []*sv.Instance) (m map[string]*sv.Instance) {
     m = make(map[string]*sv.Instance)
@@ -78,16 +79,26 @@ func ListToMap(ins []*sv.Instance) (m map[string]*sv.Instance) {
 func InitInstanceFilters() (filters []InstanceFilter) {
     filters = []InstanceFilter{}
     // Init a default instance filter
-    filters = append(filters, func(ins *sv.Instance) bool {
+    filters = append(filters, func(ins *sv.Instance) error {
         if ins == nil {
-            return false
+            return errors.New("nil resource instance")
         }
         // Validate some fields that must not be empty.
         // Note: Do not valid ins.Version as it may truly be empty.
-        if ins.AppCode == "" || ins.EnvType == "" || ins.Ip == "" || ins.Reversion == 0 {
-            return false
+        if ins.AppCode == "" {
+            return errors.New("instance has nil appcode")
         }
-        return true
+        if ins.EnvType == "" {
+            return errors.New("instance has nil env type")
+        }
+        if ins.Ip == "" {
+            return errors.New("instance has nil ip")
+        }
+        if ins.Reversion == 0 {
+            return errors.New("instance has nil reversion")
+        }
+
+        return nil
     })
 
     return filters
