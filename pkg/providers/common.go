@@ -56,7 +56,7 @@ const (
 )
 
 const (
-    FullPushInterval = 7200 * time.Second
+    FullPushInterval = 21600 * time.Second
 )
 
 type RuntimeConfig struct {

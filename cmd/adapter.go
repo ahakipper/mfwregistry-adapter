@@ -72,7 +72,7 @@ func init() {
     )
     adapterCmd.Flags().BoolP("leader-elect", "t", true, "whether to enable node election")
     adapterCmd.Flags().StringP("env", "e", "test", "the environment，e.g：test、dev、prod")
-    adapterCmd.Flags().IntP("push-interval", "i", 7200, "the time interval for full synchronization. the unit is seconds")
+    adapterCmd.Flags().IntP("push-interval", "i", 21600, "the time interval for full synchronization. the unit is seconds")
     adapterCmd.Flags().StringP("grpc-addr", "g", "172.16.130.71:50051", "grpc address")
     adapterCmd.Flags().BoolP("disable-worker", "w", false, "disable push worker, just for testing")
     adapterCmd.Flags().StringSliceP("appcodes", "", []string{}, "only push instances of the appcodes, just for testing")
