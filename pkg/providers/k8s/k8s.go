@@ -169,22 +169,15 @@ func (k *k8s) pod2Instance(obj client.QueueObject) (ins *sv.Instance) {
     if ok && len(items) > 0 {
         pod := items[0].(*v1.Pod)
         instance := formatInstance(&obj, pod)
-        if instance == nil {
-            return nil
-        }
-        // if instance status is 0 or cache is nil and cache status not equals current status ,send sync event, otherwise don't repeat send
-        if instance.Status == 0 {
+        if ver := k.VerifyInstance(instance); ver != nil {
+            log.Logger.Warnf("invalid instance, instanceid: %s, reason: %s", instance.InstanceId, ver.Error())
             return nil
         }
         cacheInstance := k.cache.Get(instance.InstanceId)
         if cacheInstance == nil || k.hasInstanceDiff(cacheInstance, instance) {
             // put all exist instance to cache, purpose for get cache don't make npe
             k.ProcessCache(obj.Event, instance)
-            if ver := k.VerifyInstance(instance); ver == nil {
-                ins = instance
-            } else {
-                log.Logger.Warnf("invalid instance, instanceid: %s, reason: %s", instance.InstanceId, ver.Error())
-            }
+            ins = instance
         }
     } else {
         // If we cannot get the instance data, it means that this may be a DELETE event. At this point, the data in the

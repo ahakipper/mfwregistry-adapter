@@ -1,6 +1,7 @@
 package providers
 
 import (
+    "fmt"
     "github.com/pkg/errors"
     sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
     "time"
@@ -20,6 +21,7 @@ const (
 )
 
 const (
+    InstanceStatusUnknown   = 0
     InstanceStatusOnline    = 1 // Instance is online
     InstanceStatusUnhealthy = 2 //
     InstanceStatusOffline   = 3 // Instance is deleted
@@ -96,6 +98,9 @@ func InitInstanceFilters() (filters []InstanceFilter) {
         }
         if ins.Reversion == 0 {
             return errors.New("instance has nil reversion")
+        }
+        if ins.Status == InstanceStatusUnknown {
+            return errors.New(fmt.Sprintf("instance has status unknown value: %d，may be the format process need to be performed", ins.Status))
         }
 
         return nil

@@ -60,18 +60,20 @@ func formatInstance(obj *client.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
     }
     // format state and appcode
     appCode := formatAppCode(pod)
-    // filter appcodes
-    for _, code := range config.PushAppCodes {
-        if appCode != code {
-            return nil
-        }
-    }
-    state := formatState(pod)
-    status := formatStatus(obj, pod)
     // filter the invalid pod
     if appCode == "" {
         return
     }
+    // filter appcodes
+    if config.PushAppCodes != nil {
+        for _, code := range config.PushAppCodes {
+            if appCode != code {
+                return nil
+            }
+        }
+    }
+    state := formatState(pod)
+    status := formatStatus(obj, pod)
     envType = formatEnvType(pod, envType)
     // enable state
     enabled := formatContainerEnabled(pod)
@@ -210,6 +212,7 @@ func formatAppCode(pod *v1.Pod) (appCode string) {
 
 // formatInstanceStatus convert instance status
 func formatStatus(obj *client.QueueObject, pod *v1.Pod) (status int32) {
+    status = providers.InstanceStatusOffline
     if pod == nil {
         status = providers.InstanceStatusOffline
     } else if obj != nil && obj.Event == client.EventDelete {
@@ -229,6 +232,8 @@ func formatStatus(obj *client.QueueObject, pod *v1.Pod) (status int32) {
             } else {
                 status = providers.InstanceStatusUnhealthy
             }
+        } else {
+            status = providers.InstanceStatusOffline
         }
     }
 
