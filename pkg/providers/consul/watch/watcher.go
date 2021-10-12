@@ -5,7 +5,7 @@ import (
     "github.com/hashicorp/consul/api"
     consulwatch "github.com/hashicorp/consul/api/watch"
     "github.com/pkg/errors"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
     "golang.org/x/sync/errgroup"
 )
 

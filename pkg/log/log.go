@@ -2,7 +2,7 @@ package log
 
 import (
     "github.com/natefinch/lumberjack"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/config"
     "go.uber.org/zap"
     "go.uber.org/zap/zapcore"
     "os"

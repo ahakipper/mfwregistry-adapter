@@ -2,7 +2,7 @@ package k8s
 
 import (
 	"fmt"
-	"gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/providers"
+	"gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers"
 	client "gitlab.mfwdev.com/servicemesh/robot"
 	v1 "k8s.io/api/core/v1"
 	"testing"

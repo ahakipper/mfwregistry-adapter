@@ -17,10 +17,10 @@ package cmd
 import (
     "fmt"
     "github.com/spf13/cobra"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/internel"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/providers"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/config"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/internel"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers"
 )
 
 // k8sadapterCmd represents the k8sadapter command

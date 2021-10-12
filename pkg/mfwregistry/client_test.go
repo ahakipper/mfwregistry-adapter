@@ -3,9 +3,9 @@ package mfwregistry
 import (
     "github.com/k0kubun/pp"
     sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/providers"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/config"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers"
     "testing"
 )
 

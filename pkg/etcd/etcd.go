@@ -5,7 +5,7 @@ import (
     "errors"
     "github.com/coreos/etcd/clientv3"
     "github.com/coreos/etcd/pkg/transport"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/config"
     "time"
 )
 

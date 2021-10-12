@@ -1,4 +1,4 @@
-module gitlab.mfwdev.com/paas/mfwregistry-k8sadapter
+module gitlab.mfwdev.com/paas/mfwregistry-adapter
 
 go 1.15
 

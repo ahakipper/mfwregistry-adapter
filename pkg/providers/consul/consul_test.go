@@ -2,8 +2,8 @@ package consul
 
 import (
     "context"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/providers"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/worker"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/worker"
     "testing"
 )
 

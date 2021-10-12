@@ -2,9 +2,9 @@ package k8s
 
 import (
     sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/providers"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/config"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers"
     client "gitlab.mfwdev.com/servicemesh/robot"
     v1 "k8s.io/api/core/v1"
     "k8s.io/apimachinery/pkg/api/resource"
@@ -75,6 +75,8 @@ func formatInstance(obj *client.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
     state := formatState(pod)
     status := formatStatus(obj, pod)
     envType = formatEnvType(pod, envType)
+    idc := formatIDC(pod)
+    cluster := formatCluster(pod)
     // enable state
     enabled := formatContainerEnabled(pod)
     // reversion
@@ -113,7 +115,8 @@ func formatInstance(obj *client.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
         Cpu:        runtimeConfig.Cpu,
         Memory:     runtimeConfig.Memory,
         Image:      runtimeConfig.Image,
-        Idc:        labels["version"],
+        Idc:        idc,
+        Cluster:    cluster,
         Reversion:  reversion,
         Status:     status,
         Label:      label,
@@ -358,4 +361,58 @@ func formatState(pod *v1.Pod) (state string) {
     }
 
     return state
+}
+
+// formatIDC is responsible for formatting the IDC attr of the instance
+func formatIDC(pod *v1.Pod) string {
+    // get idc from labels first
+    if len(pod.Labels) > 0 {
+        if idc, ok := pod.Labels["idc"]; ok {
+            return idc
+        }
+    }
+    // get idc from env
+    envs := make(map[string]string)
+    for _, container := range pod.Spec.Containers {
+        // only get the  container env info that named "application"
+        if container.Name == "application" {
+            for _, env := range container.Env {
+                envs[env.Name] = env.Value
+            }
+        }
+    }
+    if len(envs) > 0 {
+        if cluster, ok := envs["APP_IDC"]; ok {
+            return cluster
+        }
+    }
+
+    return ""
+}
+
+// formatIDC is responsible for formatting the K8s Cluster attr of the instance
+func formatCluster(pod *v1.Pod) string {
+    // get cluster from labels first
+    if len(pod.Labels) > 0 {
+        if idc, ok := pod.Labels["cluster"]; ok {
+            return idc
+        }
+    }
+    // get idc from env
+    envs := make(map[string]string)
+    for _, container := range pod.Spec.Containers {
+        // only get the  container env info that named "application"
+        if container.Name == "application" {
+            for _, env := range container.Env {
+                envs[env.Name] = env.Value
+            }
+        }
+    }
+    if len(envs) > 0 {
+        if cluster, ok := envs["K8S_CLUSTER_NAME"]; ok {
+            return cluster
+        }
+    }
+
+    return ""
 }

@@ -6,8 +6,8 @@ import (
     "github.com/coreos/etcd/clientv3"
     "github.com/coreos/etcd/clientv3/concurrency"
     uuid "github.com/satori/go.uuid"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/config"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
     "sync"
     "time"
 )

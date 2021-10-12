@@ -2,14 +2,14 @@ package discovery
 
 import (
     "context"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/tools/net"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/tools/net"
     "time"
 
     "github.com/coreos/etcd/clientv3"
     "github.com/coreos/etcd/mvcc/mvccpb"
 
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/tools/cache"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/tools/cache"
 )
 
 var (

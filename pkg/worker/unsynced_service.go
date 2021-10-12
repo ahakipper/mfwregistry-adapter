@@ -3,10 +3,10 @@ package worker
 import (
     "context"
     v2 "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/metrics"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/mfwregistry"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/tools"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/metrics"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/mfwregistry"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/tools"
     "sync"
     "time"
 )

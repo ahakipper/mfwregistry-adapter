@@ -2,8 +2,8 @@ package mfwregistry
 
 import (
     v2 "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/config"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/config"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
     "strings"
 )
 

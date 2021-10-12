@@ -3,9 +3,9 @@ package worker
 import (
     "context"
     "github.com/coreos/etcd/clientv3"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/distribute/election"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/etcd"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/distribute/election"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/etcd"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
     "time"
 )
 

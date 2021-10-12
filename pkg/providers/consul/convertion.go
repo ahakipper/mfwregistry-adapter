@@ -6,7 +6,7 @@ import (
     "github.com/hashicorp/consul/api"
     "github.com/pkg/errors"
     sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/providers"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers"
 )
 
 const (

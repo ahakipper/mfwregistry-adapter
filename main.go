@@ -14,7 +14,7 @@
 
 package main
 
-import "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/cmd"
+import "gitlab.mfwdev.com/paas/mfwregistry-adapter/cmd"
 
 func main() {
 	cmd.Execute()

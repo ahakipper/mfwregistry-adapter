@@ -2,7 +2,7 @@ package metrics
 
 import (
     "github.com/prometheus/client_golang/prometheus/promhttp"
-    "gitlab.mfwdev.com/paas/mfwregistry-k8sadapter/pkg/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
     "math/rand"
     "net/http"
     _ "net/http/pprof"
