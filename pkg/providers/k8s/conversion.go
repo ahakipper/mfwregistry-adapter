@@ -232,8 +232,10 @@ func formatStatus(obj *client.QueueObject, pod *v1.Pod) (status int32) {
             } else {
                 status = providers.InstanceStatusUnhealthy
             }
-        } else {
-            status = providers.InstanceStatusOffline
+        } else if pod.Status.Phase == v1.PodFailed {
+            if pod.Status.Reason == "Evicted" {
+                status = providers.InstanceStatusUnhealthy
+            }
         }
     }
 
@@ -313,7 +315,15 @@ func formatState(pod *v1.Pod) (state string) {
             case v1.PodUnknown:
                 state = providers.InstanceStateUnknown
             case v1.PodFailed:
-                state = providers.InstanceStateFailed
+                // For the eviction scenario, the pod stage status is Failed, but the reason is Evicted, we treat it specially
+                if pod.Status.Reason == "Evicted" {
+                    state = providers.InstanceStateEvicted
+                } else {
+                    state = providers.InstanceStateFailed
+                }
+            // PodSucceeded means that all the containers of the pod has exited with exit code 0, and we mark it as terminated.
+            case v1.PodSucceeded:
+                state = providers.InstanceStateTerminated
             }
         } else {
             already := true

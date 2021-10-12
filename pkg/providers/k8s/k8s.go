@@ -215,7 +215,8 @@ func (k *k8s) hasInstanceDiff(old, new *sv.Instance) (diff bool) {
     } else if new.Reversion > old.Reversion {
         diff = true
     } else if new.EnvType != old.EnvType || new.State != old.State || new.Status != old.Status ||
-        new.EnvGroup != old.EnvGroup || new.InstanceId != old.InstanceId {
+        new.EnvGroup != old.EnvGroup || new.InstanceId != old.InstanceId || new.Ip != old.Ip ||
+        new.Cpu != old.Cpu || new.Memory != old.Memory {
         diff = true
     }
 

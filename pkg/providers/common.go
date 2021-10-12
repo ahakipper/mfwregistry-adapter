@@ -17,6 +17,7 @@ const (
     InstanceStateError      = "error"      // Instance can not be stated. for instance: the start command path is incorrect
     InstanceStateFailed     = "failed"     // Instance can not be created due to system error, such as: K8s kubelet cni configuration invalid.
     InstanceStateTerminated = "terminated" // Instance is deleted.
+    InstanceStateEvicted    = "evicted"    // Instance has been evicted
     InstanceStateUnknown    = "unknown"    //
 )
 
@@ -93,8 +94,8 @@ func InitInstanceFilters() (filters []InstanceFilter) {
         if ins.EnvType == "" {
             return errors.New("instance has nil env type")
         }
-        if ins.Ip == "" {
-            return errors.New("instance has nil ip")
+        if ins.Status == InstanceStatusOnline && ins.Ip == "" {
+            return errors.New("instance has nil ip when it on online status")
         }
         if ins.Reversion == 0 {
             return errors.New("instance has nil reversion")
