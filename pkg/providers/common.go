@@ -97,6 +97,12 @@ func InitInstanceFilters() (filters []InstanceFilter) {
         if ins.Status == InstanceStatusOnline && ins.Ip == "" {
             return errors.New("instance has nil ip when it on online status")
         }
+        // The following code block, in principle, should not exist. There is this code block,
+        // the purpose is to filter the scene where the state of the pod is pending in the early stage of creation.
+        // In this scenario, push action is not performed to reduce the pressure on Finder (database deadlock of Finder may occur)
+        if ins.State == InstanceStatePending {
+            return errors.New("instance has nil ip when it on heal check status and pending state")
+        }
         if ins.Reversion == 0 {
             return errors.New("instance has nil reversion")
         }
