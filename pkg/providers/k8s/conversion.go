@@ -236,6 +236,8 @@ func formatStatus(obj *client.QueueObject, pod *v1.Pod) (status int32) {
             if pod.Status.Reason == "Evicted" {
                 status = providers.InstanceStatusUnhealthy
             }
+        } else if pod.Status.Phase == v1.PodPending {
+            status = providers.InstanceStatusUnhealthy
         }
     }
 
