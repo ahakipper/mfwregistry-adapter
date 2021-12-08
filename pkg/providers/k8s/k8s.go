@@ -107,7 +107,7 @@ func (k *k8s) monitor() {
                 time.Sleep(1 * time.Second)
                 continue
             }
-            log.Logger.Infof("get changes from k8s robot client, resource type: %s, key: %s", obj.RType.String(), obj.Key)
+            log.Logger.Infof("get changes from k8s robot client, resource type: %s, key: %s, event: %s", obj.RType.String(), obj.Key, obj.Event.String())
             // trigger time
             triggerTime := obj.CreateAt.Unix()
             // instance format
