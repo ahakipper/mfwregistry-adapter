@@ -1,4 +1,4 @@
-FROM hub.mfwdev.com/paas/centos:7.5.1804
+FROM hub.mfwdev.com/paas/golang:1.17.4
 ENV TZ='Asia/Shanghai'
 ADD ./config /usr/bin/config
 ADD ./mfwregistry-adapter /usr/bin/

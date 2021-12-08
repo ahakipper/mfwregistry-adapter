@@ -90,6 +90,7 @@ func (k *k8s) monitor() {
             time.Sleep(1 * time.Second)
         }
     }
+    log.Logger.Infof("the robot has finished synced of all the k8s data, start to compare and sync instanes")
     go k.ProcessIntervalFullPush()
     go k.CompareAndFlush()
     defer k.robot.Stop()
@@ -98,6 +99,7 @@ func (k *k8s) monitor() {
         for {
             // get pod changes from k8s client
             obj, err := k.robot.Pop()
+            log.Logger.Infof("get pod changes from k8s robot client")
             if err != nil {
                 if k.stopped {
                     break
