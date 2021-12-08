@@ -14,6 +14,7 @@ pipeline:
     image: hub.mfwdev.com/paas/golang:1.17.4
     auth_config:
       innerid: hub.mfwdev.com
+    auth_config_innerid: hub.mfwdev.com
     commands:
       - make OS=linux
     network_mode: host
