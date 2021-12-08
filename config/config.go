@@ -27,6 +27,8 @@ var (
     // LockCampaignKey Indicates the prefix key for participating in the campaign, store in etcd
     LockCampaignKey string
     PushAppCodes    []string
+    // Election
+    LeaderElection bool
 )
 
 func InitTest() {

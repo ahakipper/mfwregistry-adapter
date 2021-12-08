@@ -111,4 +111,5 @@ func initAdapterFlags(cmd *cobra.Command) {
     config.DisablePushWorker, _ = cmd.Flags().GetBool("disable-worker")
     config.Providers, _ = cmd.Flags().GetStringSlice("providers")
     config.PushAppCodes, _ = cmd.Flags().GetStringSlice("appcodes")
+    config.LeaderElection, _ = cmd.Flags().GetBool("leader-elect")
 }

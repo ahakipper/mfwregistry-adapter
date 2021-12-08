@@ -78,7 +78,12 @@ func NewServer() (*Server, error) {
 func (s *Server) Run() {
     // start and process leader election
     log.Logger.Info("trying to become to master through election")
-    go s.elector.ElectWait()
+    // if leader election is enabled, run the elector, otherwise just set current server as leader.
+    if config.LeaderElection {
+        go s.elector.ElectWait()
+    } else {
+        s.leaderChCh <- true
+    }
     // start prome and pprof http server
     go s.promesvr.Start()
 
