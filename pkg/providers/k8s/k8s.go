@@ -85,6 +85,9 @@ func (k *k8s) monitor() {
     for {
         if k.robot.HasSynced() {
             break
+        } else {
+            log.Logger.Warnf("the robot has not synced yet")
+            time.Sleep(1 * time.Second)
         }
     }
     go k.ProcessIntervalFullPush()
