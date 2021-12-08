@@ -82,15 +82,16 @@ func (k *k8s) Run() (err error) {
 // Perform instances comparison for single synchronization one by one. Note: this operation will only be executed once.
 func (k *k8s) monitor() {
     go k.robot.Run()
+    log.Logger.Infof("wait to sync data from robot client")
     for {
         if k.robot.HasSynced() {
             break
         } else {
-            log.Logger.Warnf("the robot has not synced yet")
-            time.Sleep(1 * time.Second)
         }
     }
     log.Logger.Infof("the robot has finished synced of all the k8s data, start to compare and sync instanes")
+    log.Logger.Infof("do noting just sleep")
+    select {}
     go k.ProcessIntervalFullPush()
     go k.CompareAndFlush()
     defer k.robot.Stop()

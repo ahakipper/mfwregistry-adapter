@@ -68,6 +68,8 @@ func NewConsulProvider(ctx context.Context, worker worker.Worker, pushInterval i
 
 func (c *consul) Run() (err error) {
     log.Logger.Infof("start to run ecs provider")
+    log.Logger.Infof("do noting just sleep")
+    select {}
     // Perform full instances synchronization periodically
     go c.ProcessIntervalFullPush()
     // Perform instances comparison for single synchronization one by one. Note: this operation will only be executed once.
