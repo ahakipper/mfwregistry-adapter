@@ -99,15 +99,15 @@ func (k *k8s) monitor() {
         for {
             // get pod changes from k8s client
             obj, err := k.robot.Pop()
-            log.Logger.Infof("get pod changes from k8s robot client")
             if err != nil {
+                log.Logger.Errorf("k8s client watch error: %s", err.Error())
                 if k.stopped {
                     break
                 }
-                log.Logger.Error("K8S watch error: ", err)
                 time.Sleep(1 * time.Second)
                 continue
             }
+            log.Logger.Infof("get changes from k8s robot client, resource type: %s, key: %s", obj.RType.String(), obj.Key)
             // trigger time
             triggerTime := obj.CreateAt.Unix()
             // instance format
