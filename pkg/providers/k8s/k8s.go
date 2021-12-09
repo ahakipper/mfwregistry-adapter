@@ -19,15 +19,16 @@ import (
 
 // K8S provider implement
 type k8s struct {
-    robot      client.Robot               // the K8s multi-cluster aggregator
-    ctx        context.Context            // context
-    worker     worker.Worker              // the role of worker is to synchronize provider changes to the discovery center
-    stopped    bool                       // whether the current provider has stopped
-    sync.Mutex                            // lock mutex
-    interval   int                        // the time interval for full synchronization. default 600s(10m)
-    filters    []providers.InstanceFilter // finters is a collection of functions used to filter invalid instances
-    cache      providers.CacheIterface    // pod cache
-    pool       *ants.Pool                 // goroutine pool
+    providerName string
+    robot        client.Robot               // the K8s multi-cluster aggregator
+    ctx          context.Context            // context
+    worker       worker.Worker              // the role of worker is to synchronize provider changes to the discovery center
+    stopped      bool                       // whether the current provider has stopped
+    sync.Mutex                              // lock mutex
+    interval     int                        // the time interval for full synchronization. default 600s(10m)
+    filters      []providers.InstanceFilter // finters is a collection of functions used to filter invalid instances
+    cache        providers.CacheIterface    // pod cache
+    pool         *ants.Pool                 // goroutine pool
 }
 
 // NewK8SProvider Init k8s provider
@@ -53,11 +54,12 @@ func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int,
 
     // init k8s obj
     k := &k8s{
-        robot:    kr,
-        ctx:      ctx,
-        worker:   worker,
-        interval: pushInterval,
-        cache:    providers.NewCache(2),
+        providerName: "k8s",
+        robot:        kr,
+        ctx:          ctx,
+        worker:       worker,
+        interval:     pushInterval,
+        cache:        providers.NewCache(2),
     }
     p, _ := ants.NewPool(providers.PoolBenchSize, withExpiryDuration(time.Second*providers.PoolExpireTime))
     k.pool = p
@@ -220,8 +222,8 @@ func (k *k8s) hasInstanceDiff(old, new *sv.Instance) (diff bool) {
     } else if new.Reversion > old.Reversion {
         diff = true
     } else if new.EnvType != old.EnvType || new.State != old.State || new.Status != old.Status ||
-        new.EnvGroup != old.EnvGroup || new.InstanceId != old.InstanceId || new.Ip != old.Ip ||
-        new.Cpu != old.Cpu || new.Memory != old.Memory {
+        new.EnvGroup != old.EnvGroup || new.InstanceId != old.InstanceId || new.Ip != old.Ip {
+        // 去除比对 CPU 和 内存 new.Cpu != old.Cpu || new.Memory != old.Memory，因为发现中心存的是 int 类型，每次比对，都有不同
         diff = true
     }
 
@@ -260,6 +262,7 @@ func (k *k8s) flushInstances() {
 
 // CompareAndFlush compare and find diff instances then flush
 func (k *k8s) CompareAndFlush() {
+    log.Logger.Infof("%s: trying to compare and find diff instances then flush", k.providerName)
     if all := k.GetAll(); all != nil && len(all) > 0 {
         // 处理缓存
         k.cache.Clear()
@@ -298,6 +301,7 @@ func (k *k8s) CompareAndFlush() {
             if servIns, exist := servMap[k8sKey]; exist {
                 diff := k.hasInstanceDiff(servIns, k8sIns)
                 if diff {
+                    log.Logger.Infof("the instance: %s of appcode: %s is newer, trigger a push.", k8sIns.InstanceId, k8sIns.AppCode)
                     k.buildAndSendEvent(k8sIns)
                 }
                 delete(k8sMap, k8sKey)

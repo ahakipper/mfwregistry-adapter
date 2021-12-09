@@ -18,6 +18,7 @@ import (
 
 // K8S provider implement
 type consul struct {
+    providerName  string
     clientFactory ConsulClientFactory        // consul api factory
     monitor       Monitor                    // monitor
     ctx           context.Context            // context
@@ -46,6 +47,7 @@ func NewConsulProvider(ctx context.Context, worker worker.Worker, pushInterval i
         return nil, err
     }
     consulProvider := &consul{
+        providerName:  "consul",
         ctx:           ctx,
         monitor:       monitor,
         worker:        worker,
@@ -302,7 +304,7 @@ func (c *consul) ProcessIntervalFullPush() {
 func (c *consul) CompareAndFlush() {
     c.Lock()
     defer c.Unlock()
-    log.Logger.Infof("trying to compare and find diff instances then flush")
+    log.Logger.Infof("%s: trying to compare and find diff instances then flush", c.providerName)
     // Here, we assume that the consul data is impossible to be empty. Once it is empty,
     // no operation is performed.
     if all := c.GetAll(); all != nil && len(all) > 0 {
