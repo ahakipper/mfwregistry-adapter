@@ -15,7 +15,6 @@ import (
     "strings"
     "sync"
     "time"
-    "github.com/k0kubun/pp"
 )
 
 // K8S provider implement
@@ -178,12 +177,10 @@ func (k *k8s) pod2Instance(obj client.QueueObject) (ins *sv.Instance) {
         pod := items[0].(*v1.Pod)
         instance := formatInstance(&obj, pod)
         if instance == nil {
-            pp.Println(pod)
             log.Logger.Errorf("formatting instance to be nil, pod name: %s", pod.Name)
             return nil
         }
         if ver := k.VerifyInstance(instance); ver != nil {
-            pp.Println(instance, ver)
             log.Logger.Warnf("invalid instance, instanceid: %s, reason: %s", instance.InstanceId, ver.Error())
             return nil
         }
