@@ -68,6 +68,7 @@ func formatInstance(obj *client.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
     if config.PushAppCodes != nil {
         for _, code := range config.PushAppCodes {
             if appCode != code {
+                log.Logger.Warnf("invalid instance, the appcode referenced of the pod is not allowed to push, the allowed appcodes is: %s", strings.Join(config.PushAppCodes, ","))
                 return nil
             }
         }

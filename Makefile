@@ -10,6 +10,3 @@ DOCKER_VERSION ?= latest
 
 build:
 	GOOS=$(OS) go build -o mfwregistry-adapter
-
-docker:
-	docker build docker build -t hub.mfwdev.com/paas/mkube:$(DOCKER_VERSION) .

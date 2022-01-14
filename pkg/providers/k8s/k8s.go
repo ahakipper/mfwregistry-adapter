@@ -15,6 +15,7 @@ import (
     "strings"
     "sync"
     "time"
+    "github.com/k0kubun/pp"
 )
 
 // K8S provider implement
@@ -176,7 +177,13 @@ func (k *k8s) pod2Instance(obj client.QueueObject) (ins *sv.Instance) {
     if ok && len(items) > 0 {
         pod := items[0].(*v1.Pod)
         instance := formatInstance(&obj, pod)
+        if instance == nil {
+            pp.Println(pod)
+            log.Logger.Errorf("formatting instance to be nil, pod name: %s", pod.Name)
+            return nil
+        }
         if ver := k.VerifyInstance(instance); ver != nil {
+            pp.Println(instance, ver)
             log.Logger.Warnf("invalid instance, instanceid: %s, reason: %s", instance.InstanceId, ver.Error())
             return nil
         }
@@ -274,7 +281,7 @@ func (k *k8s) CompareAndFlush() {
             }
         }
         // 对比差异并增量同步
-        list, err := k.worker.GetAll(providers.InstanceStatusOnline, providers.ProviderK8s)
+        list, err := k.worker.GetAll([]int32{providers.InstanceStatusOnline, providers.InstanceStatusUnhealthy}, providers.ProviderK8s)
         if err != nil {
             log.Logger.Errorf("get all instances from atlas failed")
         }
@@ -298,6 +305,8 @@ func (k *k8s) CompareAndFlush() {
         k8sMap := providers.ListToMap(all)
         log.Logger.Infof("mfwregistry online k8s instances size :%d  k8s online instance size :%d  total :%d", len(servMap), onlineCount, len(k8sMap))
         for k8sKey, k8sIns := range k8sMap {
+            // case1: instance is both in K8s and MfwRegistry.
+            // Instance data information to be pushed, subject to the data in K8s
             if servIns, exist := servMap[k8sKey]; exist {
                 diff := k.hasInstanceDiff(servIns, k8sIns)
                 if diff {
@@ -307,6 +316,8 @@ func (k *k8s) CompareAndFlush() {
                 delete(k8sMap, k8sKey)
                 delete(servMap, k8sKey)
             } else {
+                // case1: instance is both in K8s, but not in MfwRegistry.
+                // Instance is newer than MfwRegistry, subject to the data in K8s
                 log.Logger.Infof("k8s match much id: %v , status : %v \n", k8sIns.InstanceId, k8sIns.Status)
                 if k8sIns.Status == 1 {
                     k.buildAndSendEvent(k8sIns)
@@ -314,10 +325,14 @@ func (k *k8s) CompareAndFlush() {
                 delete(k8sMap, k8sKey)
             }
         }
+        // case3: instance is not is K8s, but not MfwRegistry.
+        // Then instances should not be exists in MfwRegistry, just delete it.
         if len(servMap) > 0 {
             log.Logger.Infof("atlas server pre delete instance size :%d \n", len(servMap))
             for _, servIns := range servMap {
-                servIns.Status = 2
+                servIns.Enabled = false
+                servIns.Status = 3
+                servIns.State = providers.InstanceStateTerminated
                 k.buildAndSendEvent(servIns)
             }
         }

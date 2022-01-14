@@ -10,7 +10,7 @@ import (
 type Pusher interface {
     Push(triggerTime int64, instance []*v2.Instance) (err error)
     PushAll(triggerTime int64, instance []*v2.Instance) (err error)
-    GetAll(enable int32, provider string) (list *v2.InstanceList, err error)
+    GetAll(enable []int32, provider string) (list *v2.InstanceList, err error)
 }
 
 type MFWRegistry struct {
@@ -59,7 +59,7 @@ func (mr *MFWRegistry) PushAll(triggerTime int64, instance []*v2.Instance) (err 
     return nil
 }
 
-func (mr *MFWRegistry) GetAll(enable int32, provider string) (r *v2.InstanceList, err error) {
-    r, err = mr.C.GetAll(enable, provider)
+func (mr *MFWRegistry) GetAll(statuses []int32, provider string) (r *v2.InstanceList, err error) {
+    r, err = mr.C.GetAll(statuses, provider)
     return
 }

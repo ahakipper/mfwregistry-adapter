@@ -318,7 +318,7 @@ func (c *consul) CompareAndFlush() {
             }
         }
         // 对比差异并增量同步
-        registryList, err := c.worker.GetAll(providers.InstanceStatusOnline, providers.ProviderEcs)
+        registryList, err := c.worker.GetAll([]int32{providers.InstanceStatusOnline}, providers.ProviderEcs)
         if err != nil {
             err = errors.WithMessage(err, "get all instances from mfwregistry")
             log.Logger.Errorf(err.Error())

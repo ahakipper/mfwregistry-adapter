@@ -54,7 +54,7 @@ func TestClient_GetAllOfProviderK8s(t *testing.T) {
     if err != nil {
         t.Error(err)
     }
-    r, err := client.GetAll(1, "k8s")
+    r, err := client.GetAll([]int32{1}, "k8s")
     if err != nil {
         t.Error(err.Error())
     }
@@ -69,7 +69,7 @@ func TestClient_GetAllOfProviderEcs(t *testing.T) {
     if err != nil {
         t.Error(err)
     }
-    r, err := client.GetAll(1, "ecs")
+    r, err := client.GetAll([]int32{1}, "ecs")
     r = r
     if err != nil {
         t.Error(err.Error())

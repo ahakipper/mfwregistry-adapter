@@ -76,27 +76,27 @@ func (c *Client) SyncAll(instance []*v2.Instance) (r *v2.CommonResponse, err err
     return
 }
 
-func (c *Client) GetAll(status int32, provider string) (inss *v2.InstanceList, err error) {
+func (c *Client) GetAll(statuses []int32, provider string) (inss *v2.InstanceList, err error) {
     ctx, _ := context.WithTimeout(context.TODO(), time.Second*readTimeout)
-    req := new(v2.GetAllInstancesRequest)
-    req.Status = status
-    req.Provider = provider
-    var list *v2.InstanceList
-    list, err = c.service.GetAllInstance(ctx, req)
-    if err != nil {
-        log.Logger.Errorf("GetAll fail: %v req: %v", err, req)
-        return nil, err
-    }
-    if provider != "" && list != nil && len(list.Instance) > 0 {
-        inss = &v2.InstanceList{}
-        inss.Instance = []*v2.Instance{}
-        for _, ins := range list.Instance {
-            if ins.Provider == provider {
-                inss.Instance = append(inss.Instance, ins)
+    inss = &v2.InstanceList{}
+    inss.Instance = []*v2.Instance{}
+    for _, status := range statuses {
+        var list *v2.InstanceList
+        req := new(v2.GetAllInstancesRequest)
+        req.Status = status
+        req.Provider = provider
+        list, err = c.service.GetAllInstance(ctx, req)
+        if err != nil {
+            log.Logger.Errorf("GetAll fail: %v req: %v", err, req)
+            return nil, err
+        }
+        if provider != "" && list != nil && len(list.Instance) > 0 {
+            for _, ins := range list.Instance {
+                if ins.Provider == provider {
+                    inss.Instance = append(inss.Instance, ins)
+                }
             }
         }
-    } else {
-        inss = list
     }
 
     return inss, err

@@ -24,7 +24,7 @@ func (f FackPusher) PushAll(triggerTime int64, instance []*v2.Instance) (err err
     return err
 }
 
-func (f FackPusher) GetAll(enable int32, provider string) (list *v2.InstanceList, err error) {
+func (f FackPusher) GetAll(statuses []int32, provider string) (list *v2.InstanceList, err error) {
     log.Logger.Info("implement me")
     return nil, err
 }
@@ -91,7 +91,7 @@ func (w *FackWorker) ProcessUnsynced() {
     w.unsyncedService.Sync()
 }
 
-func (w *FackWorker) GetAll(enable int32, provider string) (r *v2.InstanceList, err error) {
-    r, err = w.pusher.GetAll(enable, provider)
+func (w *FackWorker) GetAll(statuses []int32, provider string) (r *v2.InstanceList, err error) {
+    r, err = w.pusher.GetAll(statuses, provider)
     return
 }

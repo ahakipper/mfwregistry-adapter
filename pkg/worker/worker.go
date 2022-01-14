@@ -69,7 +69,7 @@ func (w *DefaultWorker) ProcessUnsynced() {
     w.unsyncedService.Sync()
 }
 
-func (w *DefaultWorker) GetAll(enable int32, provider string) (r *v2.InstanceList, err error) {
+func (w *DefaultWorker) GetAll(enable []int32, provider string) (r *v2.InstanceList, err error) {
     r, err = w.pusher.GetAll(enable, provider)
     return
 }
