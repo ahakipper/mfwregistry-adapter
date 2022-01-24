@@ -47,7 +47,7 @@ func InitDev() {
     CertFile = "./config/certs/etcdtest/etcd.pem"
     KeyFile = "./config/certs/etcdtest/etcd-key.pem"
     CAFile = "./config/certs/etcdtest/ca.pem"
-    KubeConfigPath = []string{"./config/kubeconfigs/k8s-hull", "./config/kubeconfigs/k8s-boat"}
+    KubeConfigPath = []string{"./config/kubeconfigs/k8s-hull", "./config/kubeconfigs/k8s-boat", "./config/kubeconfigs/k8s-sailor", "./config/kubeconfigs/k8s-vipper"}
     ConsulAddress = []string{"172.16.129.2:8520", "172.16.129.3:8520"}
     Providers = []string{}
     LockCampaignKey = "/paas/mfwregistry-adapter"
