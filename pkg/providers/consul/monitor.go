@@ -98,7 +98,7 @@ func (m *consulMonitor) watchConsul(ctx context.Context, change chan struct{}) (
             if client, err = m.clientFactory.ConsulClientFactory(); err != nil {
                 log.Logger.Errorf(errors.WithMessage(err, "get consul client").Error())
                 // Sleep operation to prevent infinite loop
-                time.Sleep(5 * time.Second)
+                time.Sleep(blockQueryWaitTime * time.Second)
                 continue
             }
             // This Consul REST API will block until service changes or timeout
