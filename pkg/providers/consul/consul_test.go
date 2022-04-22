@@ -14,7 +14,7 @@ func TestNewConsulProvider(t *testing.T) {
     // create and start the worker
     w := worker.NewResourceFackWorker(wctx)
     var provider providers.Provider
-    if provider, err = NewConsulProvider(wctx, w, 300, []string{"http://172.16.129.3:8520", "http://172.16.129.2:8520"}); err != nil {
+    if provider, err = NewConsulProvider(wctx, w, 300, []string{"http://10.72.73.172:8520", "http://10.72.73.172:8520"}); err != nil {
         t.Error(err.Error())
         t.FailNow()
     }

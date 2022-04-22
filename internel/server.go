@@ -137,7 +137,7 @@ func (s *Server) Stop() {
 
 func (s *Server) stopProviders() (err error) {
     // stop the previous worker
-    log.Logger.Infof("stop providers activly, the stopWorkerFunc will be called and providers will be clear ")
+    log.Logger.Infof("stop providers activly, the stopWorkerFunc will be called and providers will be clear")
     if s.stopProviderFunc != nil {
         // Use a protection mechanism to execute stopProviderFunc
         tools.WithRecover(s.stopProviderFunc)
@@ -196,7 +196,8 @@ func (s *Server) stopAndStartProviders() (err error) {
     }
     // start new providers
     if err = s.startProviders(); err != nil {
-        err = errors.WithMessage(err, "stop and start providers")
+        err = errors.WithMessage(err, "start providers")
+        log.Logger.Errorf(err.Error())
     }
 
     return err

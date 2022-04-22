@@ -8,8 +8,8 @@ import (
 )
 
 var (
-    addr1 = "172.16.129.2:8500"
-    addr2 = "172.16.129.3:8500"
+    addr1 = "10.72.73.172:8520"
+    addr2 = "10.72.73.173:8520"
 )
 
 func TestWatcher_Watch(t *testing.T) {

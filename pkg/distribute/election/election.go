@@ -23,7 +23,7 @@ type Candidate interface {
     Campaign(timeout time.Duration) error
 
     // IsLeader judge this candidate whether it is a leader
-    IsLeader() bool
+    IsLeader() (bool, error)
 
     // Resign lets a leader start a new election.
     Resign() error
@@ -125,7 +125,12 @@ func (c *candidate) Wait() {
             log.Logger.Info("exit the candidate")
             return
         default:
-            isLeader := c.IsLeader()
+            time.Sleep(LeaderChangePeriod * time.Second)
+            isLeader, err := c.IsLeader()
+            if err != nil {
+                log.Logger.Errorf("get leader state error: %s", err.Error())
+                continue
+            }
             for _, call := range c.callBackFuncs {
                 // Here note!!!!
                 // must use goroutine for asynchronous notification to prevent it from blocking elections
@@ -138,7 +143,6 @@ func (c *candidate) Wait() {
                 c.NewElectionSession(CampainTimeout * time.Second)
                 c.Campaign(CampainTimeout * time.Second)
             }
-            time.Sleep(LeaderChangePeriod * time.Second)
         }
     }
 }
@@ -159,12 +163,13 @@ func (c *candidate) Campaign(timeout time.Duration) (err error) {
     return nil
 }
 
-func (c *candidate) IsLeader() bool {
+func (c *candidate) IsLeader() (bool, error) {
     resp, err := c.election.Leader(c.ctx)
     if err != nil {
-        return false
+        return false, err
     }
-    return string(resp.Kvs[0].Value) == c.tag
+
+    return string(resp.Kvs[0].Value) == c.tag, nil
 }
 
 func (c *candidate) Resign() (err error) {

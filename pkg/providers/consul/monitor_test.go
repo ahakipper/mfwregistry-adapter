@@ -83,7 +83,7 @@ func TestGetServices(t *testing.T) {
 func TestNewConsulMonitor(t *testing.T) {
     var err error
     var cf ConsulClientFactory
-    if cf, err = NeweClientFacotorySimple([]string{"172.16.129.3:8520", "172.16.129.2:8520"}); err != nil {
+    if cf, err = NeweClientFacotorySimple([]string{"10.72.73.172:8520", "10.72.73.173:8520"}); err != nil {
         t.Error(err)
         t.FailNow()
     }

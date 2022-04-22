@@ -65,7 +65,7 @@ func (w *ElectWorker) setLeaderChangeNotifyCall(ch chan bool) {
     var callback election.LeaderChangeFunc = func(isLeader bool) {
         // send leader changes to the channel if the elector is not stopped
         if !w.stopped {
-            // pp.Println("leader change func: ", isLeader, "stoppped", w.stopped, &ch)
+            // pp.Println("leader change func: ", isLeader, "stopped", w.stopped, &ch)
             ch <- isLeader
         }
     }
