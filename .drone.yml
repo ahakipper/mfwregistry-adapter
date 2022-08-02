@@ -11,7 +11,7 @@ clone:
 pipeline:
 
   go-build:
-    image: hub.mfwdev.com/paas/golang:1.17.4
+    image: hub.mfwdev.com/paas/golang:latest
     auth_config:
       innerid: hub.mfwdev.com
     auth_config_innerid: hub.mfwdev.com
