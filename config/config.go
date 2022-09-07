@@ -65,7 +65,6 @@ func InitProd() {
     CAFile = "./config/certs/etcdprod/ca.pem"
     // deck：微服务老预发布；eel：微服务腾仁机房；otter：微服务 TKE；slug：微服务新预发布
     KubeConfigPath = []string{
-        "./config/kubeconfigs/k8s-deck",
         "./config/kubeconfigs/k8s-eel",
         "./config/kubeconfigs/k8s-otter",
         "./config/kubeconfigs/k8s-slug",
