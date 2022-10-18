@@ -18,6 +18,7 @@ pipeline:
     commands:
       - make OS=linux
     network_mode: host
+    refer_stage: git
     environment:
       GOPROXY: https://goproxy.cn
       GOPRIVATE: gitlab.mfwdev.com
