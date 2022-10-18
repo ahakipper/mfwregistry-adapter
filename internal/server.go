@@ -1,14 +1,13 @@
-package internel
+package internal
 
 import (
 	"context"
 	"fmt"
 	"github.com/pkg/errors"
-
-	client "gitlab.mfwdev.com/mtech/appcenter-notice/client"
 	"gitlab.mfwdev.com/paas/mfwregistry-adapter/config"
 	"gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
 	"gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/metrics"
+	"gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/notice"
 	"gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers"
 	consul2 "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers/consul"
 	"gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers/k8s"
@@ -62,8 +61,7 @@ func NewServer() (*Server, error) {
 	var elector worker.Elector
 	elector, err = worker.NewElector(ectx, leaderChanges)
 	if err != nil {
-		//new elector init fail,need notice
-
+		notice.Notice("初始化elector失败", err.Error())
 		return nil, err
 	}
 	// init Server
@@ -74,7 +72,7 @@ func NewServer() (*Server, error) {
 		elector:          elector,
 		leaderChCh:       leaderChanges,
 		stop:             make(chan struct{}),
-		promesvr:         metrics.NewPrometheusServer(),
+		promesvr:         metrics.NewPrometheusServer(config.MetricsAddr),
 	}, nil
 }
 
@@ -105,12 +103,16 @@ func (s *Server) Run() {
 			// if current leader is true, but changes to false, then stop the worker
 			if !isLeader && isLeader != s.isLeader {
 				log.Logger.Warn("i am losing the leader state")
+				// Switch the leader,notice
+				currentIP, err := notice.GetLocalIP()
+				if err != nil {
+					log.Logger.Errorf("get the current node IP error:%s", err.Error())
+				}
+				notice.Notice("Leader 角色丢失", fmt.Sprintf("当前节点: %s 失去 Leader 角色，停止当前服务器的工作后，重新进入选举流程", currentIP))
 				s.isLeader = isLeader
 				// if the current node is not the leader, stop the work of the worker (the election work will continue)
 				// s.stopWorkerFunc()
 				s.stopProviders()
-				//switch the leader,notice
-				client.NewNoticer()
 				continue
 			}
 			// if current leader is false, but changes to true, then start the worker again
@@ -122,8 +124,8 @@ func (s *Server) Run() {
 				go func() {
 					err := s.stopAndStartProviders()
 					if err != nil {
-						//start provider failed,notice
-
+						// start provider failed,notice
+						notice.Notice("启动provider失败", err.Error())
 						log.Logger.Errorf("start provider error:%s", err)
 					}
 				}()
@@ -146,7 +148,7 @@ func (s *Server) Run() {
 // Stop server and release resources
 func (s *Server) Stop() {
 	s.stop <- struct{}{}
-	log.Logger.Info("internel server stop background context")
+	log.Logger.Info("internal server stop background context")
 }
 
 func (s *Server) stopProviders() (err error) {
@@ -210,8 +212,6 @@ func (s *Server) stopAndStartProviders() (err error) {
 	}
 	// start new providers
 	if err = s.startProviders(); err != nil {
-		//start provider fail,nitice
-
 		err = errors.WithMessage(err, "start providers")
 		log.Logger.Errorf(err.Error())
 	}

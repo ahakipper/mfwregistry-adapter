@@ -29,6 +29,8 @@ var (
     PushAppCodes    []string
     // EnableLeaderElection Leader election
     EnableLeaderElection bool
+    // MetricsAddr The Prometheus metrics address
+    MetricsAddr string
 )
 
 func InitTest() {
@@ -36,7 +38,7 @@ func InitTest() {
     CertFile = "./config/certs/etcdtest/etcd.pem"
     KeyFile = "./config/certs/etcdtest/etcd-key.pem"
     CAFile = "./config/certs/etcdtest/ca.pem"
-    KubeConfigPath = []string{"./config/kubeconfigs/k8s-boat"}
+    KubeConfigPath = []string{"./config/kubeconfigs/k8s-sailor"}
     ConsulAddress = []string{"10.72.73.172:8520", "10.72.73.173:8520", "10.72.73.174:8520"}
     Providers = []string{}
     LockCampaignKey = "/paas/mfwregistry-adapter-test"

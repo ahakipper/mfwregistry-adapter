@@ -18,8 +18,9 @@ import (
     "fmt"
     "github.com/spf13/cobra"
     "gitlab.mfwdev.com/paas/mfwregistry-adapter/config"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/internel"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/internal"
     "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/notice"
     "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers"
 )
 
@@ -37,8 +38,17 @@ to quickly create a Cobra application.`,
         fmt.Println("starting adapter")
         // init flags
         initAdapterFlags(cmd)
+        // init noticer
+        env, err := cmd.Flags().GetString("env")
+        if err != nil {
+            panic(err)
+        }
+        notice.InitNoticeClient(env)
+        if err != nil {
+            fmt.Println(err.Error())
+        }
         // server init
-        server, err := internel.NewServer()
+        server, err := internal.NewServer()
         if err != nil {
             fmt.Println(err.Error())
             return
@@ -71,11 +81,12 @@ func init() {
         fmt.Sprintf("the providers, e.g: %s、%s. multiple values are separated by commas", providers.ProviderK8s, providers.ProviderEcs),
     )
     adapterCmd.Flags().BoolP("leader-elect", "t", true, "whether to enable node election")
-    adapterCmd.Flags().StringP("env", "e", "test", "the environment，e.g：test、dev、prod")
+    adapterCmd.Flags().StringP("env", "e", "test", "the environment，e.g：dev、product")
     adapterCmd.Flags().IntP("push-interval", "i", 21600, "the time interval for full synchronization. the unit is seconds")
-    adapterCmd.Flags().StringP("grpc-addr", "g", "172.16.130.71:50051", "grpc address")
+    adapterCmd.Flags().StringP("grpc-addr", "g", "172.16.130.71:50051", "the Atlas grpc address")
     adapterCmd.Flags().BoolP("disable-worker", "w", false, "disable push worker, just for testing")
     adapterCmd.Flags().StringSliceP("appcodes", "", []string{}, "only push instances of the appcodes, just for testing")
+    adapterCmd.Flags().StringP("metrics-addr", "", ":8090", "the Prometheus metrics address")
 }
 
 func initAdapterFlags(cmd *cobra.Command) {
@@ -85,7 +96,7 @@ func initAdapterFlags(cmd *cobra.Command) {
         panic(err)
     }
     switch env {
-    case "prod":
+    case "product":
         config.InitProd()
     case "dev":
         config.InitDev()
@@ -112,4 +123,5 @@ func initAdapterFlags(cmd *cobra.Command) {
     config.Providers, _ = cmd.Flags().GetStringSlice("providers")
     config.PushAppCodes, _ = cmd.Flags().GetStringSlice("appcodes")
     config.EnableLeaderElection, _ = cmd.Flags().GetBool("leader-elect")
+    config.MetricsAddr, _ = cmd.Flags().GetString("metrics-addr")
 }

@@ -7,6 +7,7 @@ import (
     "gitlab.mfwdev.com/paas/mfwregistry-adapter/config"
     "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
     "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/metrics"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/notice"
     "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers"
     "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/worker"
     "gitlab.mfwdev.com/paas/mfwregistry-adapter/tools/unit"
@@ -26,7 +27,7 @@ type k8s struct {
     stopped      bool                       // whether the current provider has stopped
     sync.Mutex                              // lock mutex
     interval     int                        // the time interval for full synchronization. default 600s(10m)
-    filters      []providers.InstanceFilter // finters is a collection of functions used to filter invalid instances
+    filters      []providers.InstanceFilter // filters is a collection of functions used to filter invalid instances
     cache        providers.CacheIterface    // pod cache
     pool         *ants.Pool                 // goroutine pool
 }
@@ -88,13 +89,16 @@ func (k *k8s) monitor() {
         if k.robot.HasSynced() {
             break
         } else {
+            // Notice处理
             log.Logger.Warnf("the robot has not synced yet")
-            time.Sleep(1 * time.Second)
+            notice.Notice("robot同步K8s集群失败", "当robot同步K8s集群时，K8s各集群未完全同步")
+            time.Sleep(15 * time.Second)
         }
     }
     log.Logger.Infof("the robot has finished synced of all the k8s data, start to compare and sync instanes")
     go k.ProcessIntervalFullPush()
-    go k.CompareAndFlush()
+    // start with full update(CompareAndFlush()),then do incremental update,and every 6 hours to full push(ProcessIntervalFullPush())
+    k.CompareAndFlush()
     defer k.robot.Stop()
     // fork a goroutine to monitor pod change
     go func() {
@@ -278,6 +282,7 @@ func (k *k8s) CompareAndFlush() {
             }
         }
         // 对比差异并增量同步
+        // worker 就是和 Atlas 通信（获取发现中心、推送数据）
         list, err := k.worker.GetAll([]int32{providers.InstanceStatusOnline, providers.InstanceStatusUnhealthy}, providers.ProviderK8s)
         if err != nil {
             log.Logger.Errorf("get all instances from atlas failed")
@@ -298,9 +303,14 @@ func (k *k8s) CompareAndFlush() {
             }
             list.Instance = instances
         }
+        // compare
         servMap := providers.ListToMap(list.GetInstance())
         k8sMap := providers.ListToMap(all)
         log.Logger.Infof("mfwregistry online k8s instances size :%d  k8s online instance size :%d  total :%d", len(servMap), onlineCount, len(k8sMap))
+        // bothExist,k8sExist two flag to notice
+        bothExist := false
+        k8sExist := false
+        registryExist := false
         for k8sKey, k8sIns := range k8sMap {
             // case1: instance is both in K8s and MfwRegistry.
             // Instance data information to be pushed, subject to the data in K8s
@@ -308,21 +318,31 @@ func (k *k8s) CompareAndFlush() {
                 diff := k.hasInstanceDiff(servIns, k8sIns)
                 if diff {
                     log.Logger.Infof("the instance: %s of appcode: %s is newer, trigger a push.", k8sIns.InstanceId, k8sIns.AppCode)
+                    bothExist = true
                     k.buildAndSendEvent(k8sIns)
                 }
                 delete(k8sMap, k8sKey)
                 delete(servMap, k8sKey)
             } else {
-                // case1: instance is both in K8s, but not in MfwRegistry.
+                // case2: instance is both in K8s, but not in MfwRegistry.
                 // Instance is newer than MfwRegistry, subject to the data in K8s
                 log.Logger.Infof("k8s match much id: %v , status : %v \n", k8sIns.InstanceId, k8sIns.Status)
                 if k8sIns.Status == 1 {
+                    k8sExist = true
                     k.buildAndSendEvent(k8sIns)
                 }
                 delete(k8sMap, k8sKey)
             }
         }
-        // case3: instance is not is K8s, but not MfwRegistry.
+        // case 1 notice
+        if bothExist {
+            notice.Notice("实例数据不一致", "全量推送数据：发现中心与K8s集群中的数据不一致，发现中心与K8s集群中实例相同，但是实例的数据项有不同")
+        }
+        // case 2 notice
+        if k8sExist {
+            notice.Notice("实例数据不一致", "全量推送数据：发现中心与K8s集群中的数据不一致，发现中心与K8s集群中实例不同，有的实例在K8s集群中但是不在发现中心")
+        }
+        // case3: instance is not is K8s, but in MfwRegistry.
         // Then instances should not be exists in MfwRegistry, just delete it.
         if len(servMap) > 0 {
             log.Logger.Infof("atlas server pre delete instance size :%d \n", len(servMap))
@@ -330,7 +350,13 @@ func (k *k8s) CompareAndFlush() {
                 servIns.Enabled = false
                 servIns.Status = 3
                 servIns.State = providers.InstanceStateTerminated
+                registryExist = true
                 k.buildAndSendEvent(servIns)
+
+            }
+            // case 3 notice
+            if registryExist {
+                notice.Notice("实例数据不一致", "全量推送数据：发现中心与K8s集群中的数据不一致，发现中心与K8s集群中实例不同，有的实例在发现中心但是不在K8s集群中")
             }
         }
     }
