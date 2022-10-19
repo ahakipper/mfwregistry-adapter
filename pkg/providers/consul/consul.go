@@ -9,6 +9,7 @@ import (
     sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
     "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
     "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/metrics"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/notice"
     "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers"
     "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/worker"
     "gitlab.mfwdev.com/paas/mfwregistry-adapter/tools/unit"
@@ -77,6 +78,7 @@ func (c *consul) Run() (err error) {
     // monitor will hang
     err = c.monitor.Start(c.ctx)
     if err != nil {
+        notice.Notice("consul停止工作", err.Error())
         err = errors.WithMessage(err, "consul provider stopped")
         log.Logger.Errorf(err.Error())
     }
@@ -334,7 +336,10 @@ func (c *consul) CompareAndFlush() {
         // pp.Println(remoteInstances)
         currentProviderInstances := providers.ListToMap(all)
         log.Logger.Infof("mfwregistry online ecs instances size :%d  consul online instance size :%d  total :%d", len(remoteInstances), onlineCount, len(currentProviderInstances))
-
+        //bothExist,k8sExist two flag to notice
+        bothExist := false
+        ecsExist := false
+        registryExist := false
         for consulKey, consulIns := range currentProviderInstances {
             // For these instances in both Provider and MfwRegistry, if the information in Provider is newer, push is performed.
             if servIns, exist := remoteInstances[consulKey]; exist {
@@ -360,6 +365,7 @@ func (c *consul) CompareAndFlush() {
                 if diff {
                     log.Logger.Infof("the instance: %s of appcode: %s is newer, trigger a push.", consulIns.InstanceId, consulIns.AppCode)
                     c.buildAndSendEvent(consulIns)
+                    bothExist = true
                 }
                 delete(currentProviderInstances, consulKey)
                 delete(remoteInstances, consulKey)
@@ -367,10 +373,19 @@ func (c *consul) CompareAndFlush() {
                 // For these instances in both Provider but not in MfwRegistry, the instance should be added to MfwRegistry.
                 log.Logger.Infof("consul match much id : %s, status: %d", consulIns.InstanceId, consulIns.Status)
                 if consulIns.Status == 1 {
+                    ecsExist = true
                     c.buildAndSendEvent(consulIns)
                 }
                 delete(currentProviderInstances, consulKey)
             }
+        }
+        // case 1 notice
+        if bothExist {
+            notice.Notice("实例数据不一致", "发现中心与ecs集群中的数据不一致，发现中心与ecs集群中实例相同，但是实例的数据项有不同")
+        }
+        //case 2 notice
+        if ecsExist {
+            notice.Notice("实例数据不一致", "发现中心与ecs集群中的数据不一致，发现中心与ecs集群中实例不同，有的实例在ecs集群中但是不在发现中心")
         }
         // The instances remaining in the MfwRegistry variable（remoteInstances） are either old or not in the Provider instance list.
         // In this case, we should delete it from MfwRegistry (that is, set it to Status=2 and push it).
@@ -379,7 +394,12 @@ func (c *consul) CompareAndFlush() {
             for _, servIns := range remoteInstances {
                 servIns.Status = 2
                 log.Logger.Infof("mfwregistry server has the old instance, set its Status filed as 2, and trigger a push. instance: %v", servIns)
+                registryExist = true
                 c.buildAndSendEvent(servIns)
+            }
+            //case 3 notice
+            if registryExist {
+                notice.Notice("实例数据不一致", "发现中心与ecs集群中的数据不一致，发现中心与ecs集群中实例不同，有的实例在发现中心但是不在ecs集群中")
             }
         }
     }

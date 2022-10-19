@@ -52,13 +52,15 @@ func NewElector(ctx context.Context, leaderChCh chan bool) (Elector, error) {
 // ElectWait will perform the behavior of electing the leader. It will always block and notify the relevant channel
 // of leader changes
 func (w *ElectWorker) ElectWait() {
-    // start election campaign
-    w.candidate.Campaign(election.CampainTimeout * time.Second)
+    for {
+        // start election campaign
+        w.candidate.Campaign(election.CampainTimeout * time.Second)
 
-    go w.syncStoppedState()
+        go w.syncStoppedState()
 
-    // waiting for loop election
-    w.candidate.Wait()
+        // waiting for loop election
+        w.candidate.Wait()
+    }
 }
 
 func (w *ElectWorker) setLeaderChangeNotifyCall(ch chan bool) {

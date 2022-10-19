@@ -8,6 +8,7 @@ import (
     uuid "github.com/satori/go.uuid"
     "gitlab.mfwdev.com/paas/mfwregistry-adapter/config"
     "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/notice"
     "sync"
     "time"
 )
@@ -127,7 +128,7 @@ func (c *candidate) Wait() {
         default:
             time.Sleep(LeaderChangePeriod * time.Second)
             isLeader, err := c.IsLeader()
-            if err != nil {
+            if err != nil && err != concurrency.ErrElectionNoLeader {
                 log.Logger.Errorf("get leader state error: %s", err.Error())
                 continue
             }
@@ -153,8 +154,10 @@ func (c *candidate) Campaign(timeout time.Duration) (err error) {
     timeoutctx, _ := context.WithTimeout(context.Background(), timeout)
     if err = c.election.Campaign(timeoutctx, c.tag); err != nil {
         if err == context.Canceled {
-        } else {
-            return
+        }
+        if err.Error() != "context deadline exceeded" {
+            // Notice
+            notice.Notice("候选服务器节点选举失败", err.Error())
         }
         return
     }

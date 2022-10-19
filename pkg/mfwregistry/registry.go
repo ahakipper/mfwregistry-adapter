@@ -4,6 +4,7 @@ import (
     v2 "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
     "gitlab.mfwdev.com/paas/mfwregistry-adapter/config"
     "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
+    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/notice"
     "strings"
 )
 
@@ -40,6 +41,8 @@ func (mr *MFWRegistry) Push(triggerTime int64, instance []*v2.Instance) (err err
     }
     res, err := mr.C.Sync(instance)
     if err != nil {
+        // Synced instance to mfwregistry failed,need notice
+        notice.Notice("增量同步数据失败", err.Error())
         log.Logger.Infof("synced instance to mfwregistry failed, instance ids: %s, rpc code: %d, rpc error: %s", strings.Join(ids, ","), res.GetCode(), res.GetMsg())
         return err
     } else {
@@ -50,9 +53,11 @@ func (mr *MFWRegistry) Push(triggerTime int64, instance []*v2.Instance) (err err
 
 func (mr *MFWRegistry) PushAll(triggerTime int64, instance []*v2.Instance) (err error) {
     // simulate push failure
-    //err = errors.New("the registery not exists now")
+    // err = errors.New("the registery not exists now")
     res, err := mr.C.SyncAll(instance)
     if err != nil {
+        // Synced all instance to mfwregistry failed,need notice
+        notice.Notice("全量同步数据失败", err.Error())
         return err
     }
     log.Logger.Info(res)

@@ -9,17 +9,21 @@ import (
     "time"
 )
 
-type PrometheusService struct{}
+type PrometheusService struct {
+    Addr string
+}
 
 var srv *http.Server
 
-func NewPrometheusServer() *PrometheusService {
-    return &PrometheusService{}
+func NewPrometheusServer(addr string) *PrometheusService {
+    return &PrometheusService{
+        Addr: addr,
+    }
 }
 
 func (s *PrometheusService) Start() {
     //s.mock()
-    srv = &http.Server{Addr: ":8090"}
+    srv = &http.Server{Addr: s.Addr}
     log.Logger.Info("prometheus server start ...")
     http.Handle("/metrics", promhttp.Handler())
     log.Logger.Fatal(srv.ListenAndServe())
