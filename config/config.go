@@ -70,6 +70,7 @@ func InitProd() {
         "./config/kubeconfigs/k8s-eel",
         "./config/kubeconfigs/k8s-otter",
         "./config/kubeconfigs/k8s-slug",
+        "./config/kubeconfigs/k8s-bernuda",
     }
     ConsulAddress = []string{"10.132.2.40:8520", "10.132.2.42:8520", "10.132.2.43:8520"}
     Providers = []string{}

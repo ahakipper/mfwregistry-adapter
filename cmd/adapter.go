@@ -40,6 +40,9 @@ to quickly create a Cobra application.`,
         initAdapterFlags(cmd)
         // init noticer
         env, err := cmd.Flags().GetString("env")
+        if env != "product" && env != "dev" && env != "test" {
+            panic("invalid env param")
+        }
         if err != nil {
             panic(err)
         }
@@ -55,7 +58,7 @@ to quickly create a Cobra application.`,
         }
         // run
         server.Run()
-
+        
         // notify signal
         // c := make(chan os.Signal)
         // signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGTERM)
@@ -68,13 +71,13 @@ to quickly create a Cobra application.`,
 
 func init() {
     rootCmd.AddCommand(adapterCmd)
-
+    
     // Here you will define your flags and configuration settings.
-
+    
     // Cobra supports Persistent Flags which will work for this command
     // and all subcommands, e.g.:
     // k8sadapterCmd.PersistentFlags().String("foo", "", "A help for foo")
-
+    
     // Cobra supports local flags which will only run when this command
     // is called directly, e.g.:
     adapterCmd.Flags().StringSliceP("providers", "r", []string{},
