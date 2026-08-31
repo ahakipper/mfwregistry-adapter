@@ -89,9 +89,9 @@ func (k *k8s) monitor() {
         if k.robot.HasSynced() {
             break
         } else {
-            // Notice处理
+            // Notice handling
             log.Logger.Warnf("the robot has not synced yet")
-            notice.Notice("robot同步K8s集群失败", "当robot同步K8s集群时，K8s各集群未完全同步")
+            notice.Notice("robot failed to sync the K8s clusters", "While the robot is syncing the K8s clusters, the K8s clusters are not fully synced")
             time.Sleep(15 * time.Second)
         }
     }
@@ -231,7 +231,7 @@ func (k *k8s) hasInstanceDiff(old, new *sv.Instance) (diff bool) {
         diff = true
     } else if new.EnvType != old.EnvType || new.State != old.State || new.Status != old.Status ||
         new.EnvGroup != old.EnvGroup || new.InstanceId != old.InstanceId || new.Ip != old.Ip {
-        // 去除比对 CPU 和 内存 new.Cpu != old.Cpu || new.Memory != old.Memory，因为发现中心存的是 int 类型，每次比对，都有不同
+        // Excluding the CPU and memory comparison new.Cpu != old.Cpu || new.Memory != old.Memory, because the discovery center stores them as int type, so every comparison shows a difference
         diff = true
     }
 
@@ -272,7 +272,7 @@ func (k *k8s) flushInstances() {
 func (k *k8s) CompareAndFlush() {
     log.Logger.Infof("%s: trying to compare and find diff instances then flush", k.providerName)
     if all := k.GetAll(); all != nil && len(all) > 0 {
-        // 处理缓存
+        // process the cache
         k.cache.Clear()
         onlineCount := 0
         for _, item := range all {
@@ -281,8 +281,8 @@ func (k *k8s) CompareAndFlush() {
                 onlineCount++
             }
         }
-        // 对比差异并增量同步
-        // worker 就是和 Atlas 通信（获取发现中心、推送数据）
+        // compare diffs and sync incrementally
+        // the worker is exactly what communicates with Atlas (fetch from the discovery center, push data)
         list, err := k.worker.GetAll([]int32{providers.InstanceStatusOnline, providers.InstanceStatusUnhealthy}, providers.ProviderK8s)
         if err != nil {
             log.Logger.Errorf("get all instances from atlas failed")
@@ -336,11 +336,11 @@ func (k *k8s) CompareAndFlush() {
         }
         // case 1 notice
         if bothExist {
-            notice.Notice("实例数据不一致", "全量推送数据：发现中心与K8s集群中的数据不一致，发现中心与K8s集群中实例相同，但是实例的数据项有不同")
+            notice.Notice("Instance data inconsistency", "Full push: data inconsistency between the discovery center and the K8s clusters, the instances are the same in the discovery center and the K8s clusters, but some data fields of the instances differ")
         }
         // case 2 notice
         if k8sExist {
-            notice.Notice("实例数据不一致", "全量推送数据：发现中心与K8s集群中的数据不一致，发现中心与K8s集群中实例不同，有的实例在K8s集群中但是不在发现中心")
+            notice.Notice("Instance data inconsistency", "Full push: data inconsistency between the discovery center and the K8s clusters, the instances differ between the discovery center and the K8s clusters, some instances exist in the K8s clusters but not in the discovery center")
         }
         // case3: instance is not is K8s, but in MfwRegistry.
         // Then instances should not be exists in MfwRegistry, just delete it.
@@ -356,7 +356,7 @@ func (k *k8s) CompareAndFlush() {
             }
             // case 3 notice
             if registryExist {
-                notice.Notice("实例数据不一致", "全量推送数据：发现中心与K8s集群中的数据不一致，发现中心与K8s集群中实例不同，有的实例在发现中心但是不在K8s集群中")
+                notice.Notice("Instance data inconsistency", "Full push: data inconsistency between the discovery center and the K8s clusters, the instances differ between the discovery center and the K8s clusters, some instances exist in the discovery center but not in the K8s clusters")
             }
         }
     }

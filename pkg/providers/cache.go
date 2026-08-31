@@ -19,7 +19,7 @@ type CacheIterface interface {
 // Cache
 // The internal implementation of the cache can use data structures such as map and btree
 // The reason why map is not used is because golang map does not release memory space as elements
-// are deleted.（In fact, there is no problem under normal circumstances）
+// are deleted. (In fact, there is no problem under normal circumstances)
 // Therefore, if the current adapter runs for a long time, its memory may continue to increase (unless the map is cleared at the right time)
 
 // NewCache init a Cache

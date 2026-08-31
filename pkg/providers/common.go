@@ -107,7 +107,7 @@ func InitInstanceFilters() (filters []InstanceFilter) {
             return errors.New("instance has nil reversion")
         }
         if ins.Status == InstanceStatusUnknown {
-            return errors.New(fmt.Sprintf("instance has status unknown value: %d，may be the format process need to be performed", ins.Status))
+            return errors.New(fmt.Sprintf("instance has status unknown value: %d, may be the format process need to be performed", ins.Status))
         }
 
         return nil

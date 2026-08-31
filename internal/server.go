@@ -61,7 +61,7 @@ func NewServer() (*Server, error) {
 	var elector worker.Elector
 	elector, err = worker.NewElector(ectx, leaderChanges)
 	if err != nil {
-		notice.Notice("初始化elector失败", err.Error())
+		notice.Notice("Failed to initialize the elector", err.Error())
 		return nil, err
 	}
 	// init Server
@@ -108,7 +108,7 @@ func (s *Server) Run() {
 				if err != nil {
 					log.Logger.Errorf("get the current node IP error:%s", err.Error())
 				}
-				notice.Notice("Leader 角色丢失", fmt.Sprintf("当前节点: %s 失去 Leader 角色，停止当前服务器的工作后，重新进入选举流程", currentIP))
+				notice.Notice("Leader role lost", fmt.Sprintf("Current node: %s lost the Leader role. After stopping the work of the current server, it re-enters the election process", currentIP))
 				s.isLeader = isLeader
 				// if the current node is not the leader, stop the work of the worker (the election work will continue)
 				// s.stopWorkerFunc()
@@ -125,7 +125,7 @@ func (s *Server) Run() {
 					err := s.stopAndStartProviders()
 					if err != nil {
 						// start provider failed,notice
-						notice.Notice("启动provider失败", err.Error())
+						notice.Notice("Failed to start the provider", err.Error())
 						log.Logger.Errorf("start provider error:%s", err)
 					}
 				}()
@@ -171,7 +171,7 @@ func (s *Server) startProviders() (err error) {
 	s.stopProviderFunc = wcancel
 	// new error group
 	eg := errgroup.Group{}
-	// create and start the worker，init the unsynced service to sync the instances that pushed failed before
+	// create and start the worker, init the unsynced service to sync the instances that pushed failed before
 	w := worker.NewResourceWorker(wctx)
 
 	prs := []providers.Provider{}
@@ -185,7 +185,7 @@ func (s *Server) startProviders() (err error) {
 	for _, p := range s.Providers {
 		p := p
 		eg.Go(func() error {
-			// 注意：我们期望是，一个 providers 退出，则另外其他 providers 都退出
+			// Note: what we expect is that if one provider exits, all the other providers exit as well
 			defer tools.WithRecover(s.stopProviderFunc)
 			return p.Run()
 		})

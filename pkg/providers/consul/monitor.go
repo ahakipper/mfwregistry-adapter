@@ -98,7 +98,7 @@ func (m *consulMonitor) watchConsul(ctx context.Context, change chan struct{}) (
             var queryMeta *api.QueryMeta
             if client, err = m.clientFactory.ConsulClientFactory(); err != nil {
                 log.Logger.Errorf(errors.WithMessage(err, "get consul client").Error())
-                notice.Notice("监听 consul 数据变化时，初始化 consul 客户端失败", err.Error())
+                notice.Notice("Failed to initialize the consul client while watching for consul data changes", err.Error())
                 // Sleep operation to prevent infinite loop
                 time.Sleep(blockQueryWaitTime * time.Second)
                 continue
@@ -110,7 +110,7 @@ func (m *consulMonitor) watchConsul(ctx context.Context, change chan struct{}) (
             if err != nil {
                 // If watch consul failed,notice
                 log.Logger.Warnf("could not fetch services: %s", err.Error())
-                notice.Notice("监听 consul 数据变化时，从 consul 获取数据失败", err.Error())
+                notice.Notice("Failed to fetch data from consul while watching for consul data changes", err.Error())
             } else if consulWaitIndex != queryMeta.LastIndex {
                 consulWaitIndex = queryMeta.LastIndex
                 change <- struct{}{}
@@ -168,7 +168,7 @@ func (m *consulMonitor) updateInstanceRecord() {
     for _, f := range m.instanceHandlers {
         go func(handler InstanceHandler) {
             if err := handler(obj); err != nil {
-                notice.Notice("处理 consul instance 实例变化失败", err.Error())
+                notice.Notice("Failed to handle the consul instance change", err.Error())
                 log.Logger.Warnf("Error executing instance handler function: %v", err)
             }
         }(f)

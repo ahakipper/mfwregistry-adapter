@@ -3,7 +3,7 @@ all: build
 #usage
 #
 
-#预定义变量
+# Predefined variables
 ENV ?= dev
 OS ?= linux
 DOCKER_VERSION ?= latest

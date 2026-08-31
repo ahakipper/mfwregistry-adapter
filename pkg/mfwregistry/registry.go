@@ -42,7 +42,7 @@ func (mr *MFWRegistry) Push(triggerTime int64, instance []*v2.Instance) (err err
     res, err := mr.C.Sync(instance)
     if err != nil {
         // Synced instance to mfwregistry failed,need notice
-        notice.Notice("增量同步数据失败", err.Error())
+        notice.Notice("Failed to sync data incrementally", err.Error())
         log.Logger.Infof("synced instance to mfwregistry failed, instance ids: %s, rpc code: %d, rpc error: %s", strings.Join(ids, ","), res.GetCode(), res.GetMsg())
         return err
     } else {
@@ -57,7 +57,7 @@ func (mr *MFWRegistry) PushAll(triggerTime int64, instance []*v2.Instance) (err 
     res, err := mr.C.SyncAll(instance)
     if err != nil {
         // Synced all instance to mfwregistry failed,need notice
-        notice.Notice("全量同步数据失败", err.Error())
+        notice.Notice("Failed to sync all data", err.Error())
         return err
     }
     log.Logger.Info(res)

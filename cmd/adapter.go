@@ -81,10 +81,10 @@ func init() {
     // Cobra supports local flags which will only run when this command
     // is called directly, e.g.:
     adapterCmd.Flags().StringSliceP("providers", "r", []string{},
-        fmt.Sprintf("the providers, e.g: %s、%s. multiple values are separated by commas", providers.ProviderK8s, providers.ProviderEcs),
+        fmt.Sprintf("the providers, e.g: %s, %s. multiple values are separated by commas", providers.ProviderK8s, providers.ProviderEcs),
     )
     adapterCmd.Flags().BoolP("leader-elect", "t", true, "whether to enable node election")
-    adapterCmd.Flags().StringP("env", "e", "test", "the environment，e.g：dev、product")
+    adapterCmd.Flags().StringP("env", "e", "test", "the environment, e.g: dev, product")
     adapterCmd.Flags().IntP("push-interval", "i", 21600, "the time interval for full synchronization. the unit is seconds")
     adapterCmd.Flags().StringP("grpc-addr", "g", "172.16.130.71:50051", "the Atlas grpc address")
     adapterCmd.Flags().BoolP("disable-worker", "w", false, "disable push worker, just for testing")

@@ -78,7 +78,7 @@ func (c *consul) Run() (err error) {
     // monitor will hang
     err = c.monitor.Start(c.ctx)
     if err != nil {
-        notice.Notice("consul停止工作", err.Error())
+        notice.Notice("consul stopped working", err.Error())
         err = errors.WithMessage(err, "consul provider stopped")
         log.Logger.Errorf(err.Error())
     }
@@ -90,7 +90,7 @@ func (c *consul) Run() (err error) {
 // syncInstance will sync consul endpoints to MfwRegistry.
 // It will get all the services tagged as "microservice", and convert consul endpoint model to MfwRegistry Model.
 // Then compare the new instances list with the instances we cached before so that we can generate the instances which are
-// added、updated and deleted.
+// added, updated and deleted.
 func (c *consul) syncInstance() (err error) {
     c.Lock()
     defer c.Unlock()
@@ -279,7 +279,7 @@ func (c *consul) eventSync(ins *sv.Instance, triggerTime int64) {
 // ProcessIntervalFullPush will sync all Instances of the current Provider to the MfwRegistry.
 // Note: The current synchronization behavior is not to directly call the SyncAll method of MfwRegistry,
 // but to perform instances comparison and do instance synchronization one by one using Method CompareAndFlush.
-// TODO: 各个 Provider 方法重复，后期需要优化
+// TODO: the Provider methods are duplicated, this needs to be optimized later
 func (c *consul) ProcessIntervalFullPush() {
     var interval time.Duration = providers.FullPushInterval
     if c.interval != 0 {
@@ -310,7 +310,7 @@ func (c *consul) CompareAndFlush() {
     // Here, we assume that the consul data is impossible to be empty. Once it is empty,
     // no operation is performed.
     if all := c.GetAll(); all != nil && len(all) > 0 {
-        // 处理缓存
+        // process the cache
         c.cache.Clear()
         onlineCount := 0
         for _, item := range all {
@@ -319,7 +319,7 @@ func (c *consul) CompareAndFlush() {
                 onlineCount++
             }
         }
-        // 对比差异并增量同步
+        // compare diffs and sync incrementally
         registryList, err := c.worker.GetAll([]int32{providers.InstanceStatusOnline}, providers.ProviderEcs)
         if err != nil {
             err = errors.WithMessage(err, "get all instances from mfwregistry")
@@ -381,13 +381,13 @@ func (c *consul) CompareAndFlush() {
         }
         // case 1 notice
         if bothExist {
-            notice.Notice("实例数据不一致", "发现中心与ecs集群中的数据不一致，发现中心与ecs集群中实例相同，但是实例的数据项有不同")
+            notice.Notice("Instance data inconsistency", "Data inconsistency between the discovery center and the ecs cluster: the instances are the same in the discovery center and the ecs cluster, but some data fields of the instances differ")
         }
         //case 2 notice
         if ecsExist {
-            notice.Notice("实例数据不一致", "发现中心与ecs集群中的数据不一致，发现中心与ecs集群中实例不同，有的实例在ecs集群中但是不在发现中心")
+            notice.Notice("Instance data inconsistency", "Data inconsistency between the discovery center and the ecs cluster: the instances differ between the discovery center and the ecs cluster, some instances exist in the ecs cluster but not in the discovery center")
         }
-        // The instances remaining in the MfwRegistry variable（remoteInstances） are either old or not in the Provider instance list.
+        // The instances remaining in the MfwRegistry variable (remoteInstances) are either old or not in the Provider instance list.
         // In this case, we should delete it from MfwRegistry (that is, set it to Status=2 and push it).
         if len(remoteInstances) > 0 {
             log.Logger.Infof("process mfwregistry instance deleting. instance size: %d", len(remoteInstances))
@@ -399,7 +399,7 @@ func (c *consul) CompareAndFlush() {
             }
             //case 3 notice
             if registryExist {
-                notice.Notice("实例数据不一致", "发现中心与ecs集群中的数据不一致，发现中心与ecs集群中实例不同，有的实例在发现中心但是不在ecs集群中")
+                notice.Notice("Instance data inconsistency", "Data inconsistency between the discovery center and the ecs cluster: the instances differ between the discovery center and the ecs cluster, some instances exist in the discovery center but not in the ecs cluster")
             }
         }
     }

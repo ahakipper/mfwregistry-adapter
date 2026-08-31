@@ -157,7 +157,7 @@ func (c *candidate) Campaign(timeout time.Duration) (err error) {
         }
         if err.Error() != "context deadline exceeded" {
             // Notice
-            notice.Notice("候选服务器节点选举失败", err.Error())
+            notice.Notice("Candidate server node election failed", err.Error())
         }
         return
     }

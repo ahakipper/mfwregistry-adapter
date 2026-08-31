@@ -54,7 +54,7 @@ func NewAggregateController() *Controller {
 //// compare and find diff instances then flush
 //func (ag *Controller) compareAndFlush() {
 //    if all := ag.GetAll(); all != nil && len(all) > 0 {
-//        // 处理缓存
+//        // process the cache
 //        k.cache.Clear()
 //        onlineCount := 0
 //        for _, item := range all {
@@ -63,7 +63,7 @@ func NewAggregateController() *Controller {
 //                onlineCount++
 //            }
 //        }
-//        // 对比差异并增量同步
+//        // compare diffs and sync incrementally
 //        list, err := k.worker.GetAll(providers.InstanceStatus, providers.ProviderK8s)
 //        if err != nil {
 //            log.Logger.Errorf("get all instances from atlas failed")

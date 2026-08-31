@@ -15,7 +15,7 @@ var (
     LogEncoding string // log encoding, log, or json
     LogToStd    bool   // log to std
     // push
-    PushAllInterval int // The time interval of full push（seconds）
+    PushAllInterval int // The time interval of full push (seconds)
     // grpc
     GrpcAddr string
     // DisablePushWorker will stop the real push action of the worker but only print push info. This configuration is for test use only.
@@ -49,7 +49,7 @@ func InitDev() {
     CertFile = "./config/certs/etcdtest/etcd.pem"
     KeyFile = "./config/certs/etcdtest/etcd-key.pem"
     CAFile = "./config/certs/etcdtest/ca.pem"
-    // sailor: 微服务开发环境；vipper：大单体开发环境
+    // sailor: microservice dev environment; vipper: big-monolith dev environment
     KubeConfigPath = []string{
         "./config/kubeconfigs/k8s-sailor",
         "./config/kubeconfigs/k8s-vipper",
@@ -65,7 +65,7 @@ func InitProd() {
     CertFile = "./config/certs/etcdprod/etcd.pem"
     KeyFile = "./config/certs/etcdprod/etcd-key.pem"
     CAFile = "./config/certs/etcdprod/ca.pem"
-    // deck：微服务老预发布；eel：微服务腾仁机房；otter：微服务 TKE；slug：微服务新预发布
+    // deck: microservice legacy pre-release; eel: microservice Tengren datacenter; otter: microservice TKE; slug: microservice new pre-release
     KubeConfigPath = []string{
         "./config/kubeconfigs/k8s-eel",
         "./config/kubeconfigs/k8s-otter",

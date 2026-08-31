@@ -1,106 +1,106 @@
-## 项目说明
+## Project Description
 
-发现中心的 Instance 数据，其中，容器 Instance 数据，主要来源于此。
+The Instance data of the discovery center — among which the container Instance data mainly comes from this project.
 
-## 构建方式
+## How to Build
 
-#### 本地构建二进制
+#### Building the binary locally
 
 ```
-# 构建 mac 格式
+# Build the mac format
 make OS=darwin
 
-# 构建 Linux 格式
+# Build the Linux format
 make OS=linux
 ```
 
-#### 正式构建
+#### Official build
 
-正式构建，采用的是 docker 镜像构建方式，只需要在 gitlab 上，针对目标分支，打 tag 即可。
+The official build uses a docker image build approach: you only need to tag the target branch on gitlab.
 
-构建过程：https://drone-pub.mfwdev.com/PaaS/mfwregistry-adapter （私有界面，切勿修改相关内容，页面后续会对接 CAS 登录）
+Build process: https://drone-pub.mfwdev.com/PaaS/mfwregistry-adapter (private page; do not modify the related content. The page will be connected to CAS login later.)
 
-构建结束后，会生成镜像
+When the build is finished, an image is generated
 
-> 举例来说，打的 tag 为 v0.0.1 则生成的镜像为：hub.mfwdev.com/paas/mfwregistry-adapter:v0.0.1
+> For example, if the tag you pushed is v0.0.1, then the generated image is: hub.mfwdev.com/paas/mfwregistry-adapter:v0.0.1
 
-## 部署方式
+## How to Deploy
 
-地址：https://wiki.mafengwo.cn/pages/viewpage.action?pageId=63422398
+Address: https://wiki.mafengwo.cn/pages/viewpage.action?pageId=63422398
 
-## 使用方式
+## How to Use
 
-#### 使用
+#### Usage
 
-1、查看支持参数
+1. Show the supported parameters
 ```
 ./mfwregistry-adapter -h
 ```
-2、运行 k8s adapter 
+2. Run the k8s adapter
 ```
 ./mfwregistry-adapter adapter
 ```
-3、默认情况下，其连接的是 config/kubeconfigs 里定义的所有 K8s 集群（多 K8s 集群支持）。
-默认情况下，它会将 K8s 的数据，转换为 Instance 数据后，推送到目标发现中心。
+3. By default, it connects to all the K8s clusters defined in config/kubeconfigs (multiple K8s cluster support).
+By default, it converts the K8s data into Instance data and pushes it to the target discovery center.
 
-#### 关于环境
+#### About environments
 
-目标发现中心，可能有多个环境，可以通过参数查看
+The target discovery center may have multiple environments, which can be viewed via parameters
 
 ```
 ./mfwregistry-adapter adapter -h
 ```
 
-不同的环境，对接的发现中心，以及 etcd 集群不同。etcd 集群主要用于成员 master 选举。只有 master 节点
-才可以连接 K8s 并推送数据到发现中心，其他节点属于 backup 状态。一旦 master 挂掉，其他节点会迅速补上。
-（节点挂掉后，大概 10s 内完成重新选举）
+Different environments connect to different discovery centers and etcd clusters. The etcd cluster is mainly used for member master election. Only the master node
+can connect to K8s and push data to the discovery center; the other nodes are in backup state. Once the master dies, the other nodes quickly take over.
+(after a node dies, re-election completes within about 10 seconds)
 
-## 特别提示
+## Special Notes
 
-此项目在 Watch K8s 集群时，必须等待所有集群就绪，才能接收 Watch 的增量消息。
+When this project watches K8s clusters, it must wait for all clusters to be ready before it can receive the incremental Watch messages.
 
-也就是说，如果有 3 个 K8s 集群，mfwregistry-adapter 要等所有集群都能连通，才会继续下一步。
+That is to say, if there are 3 K8s clusters, mfwregistry-adapter has to wait until all clusters are reachable before it proceeds to the next step.
 
-这可能导致如下问题：
+This may cause the following problem:
 
-1. 如果有的集群被销毁了，无法连通了，那么一旦 mfwregistry-adapter 服务重启，则因为有集群无法连通，而整体阻塞，无法接收任何 K8s 的增量消息。
+1. If some cluster has been destroyed and can no longer be reached, then once the mfwregistry-adapter service restarts, it will block as a whole because that cluster is unreachable, and it cannot receive any incremental K8s messages.
 
-因此，为了防止这个问题发生，一旦有集群变化，必须同步更新到 mfwregistry-adapter 项目中，并在线上重启服务。
+Therefore, to prevent this problem, whenever there is a cluster change it must be synchronized into the mfwregistry-adapter project, and the service must be restarted online.
 
-那么，为什么要这么设计？
+So, why is it designed this way?
 
-核心的点在于，mfwregistry-adapter 是所有的实例汇总。在全量推送到 Atlas 时，会拿到所有实例，比对，同步到 Atlas 中。
+The core point is that mfwregistry-adapter is the aggregation of all instances. When doing a full push to Atlas, it fetches all the instances, compares them, and syncs them into Atlas.
 
-然而，如果有集群无法连通。mfwregistry-adapter 自身实例就不完整。如果此时把不完全的实例与 Atlas 对比并推送，就会导致 Atlas 的数据不完整。
+However, if some cluster is unreachable, the instances of mfwregistry-adapter itself are incomplete. If at that moment the incomplete instances are compared with Atlas and pushed, the data in Atlas would become incomplete.
 
-比如：
+For example:
 
-1. mfwregistry-adapter 有 A、B、C 集群的所有实例数据，并已经同步到 Atlas。
-2. A 集群可能因为网络问题，mfwregistry-adapter 【暂时】无法连通此集群。
-3. mfwregistry-adapter 重启了。如果此时，认为 B + C 是所有实例。则在往 Atlas 推送时，会将 A 集群实例，全部标记为下线。
-4. Atlas 标识 A 集群的实例全部下线。A 集群的实例将全部无法通过网关、Java SDK 访问。
+1. mfwregistry-adapter has all the instance data of clusters A, B and C, and has already synced them to Atlas.
+2. Cluster A may be temporarily unreachable by mfwregistry-adapter due to a network problem.
+3. mfwregistry-adapter restarted. If at that moment B + C are considered to be all the instances, then when pushing to Atlas, all the instances of cluster A would be marked as offline.
+4. Atlas marks all the instances of cluster A as offline. All the instances of cluster A would become inaccessible through the gateway and the Java SDK.
 
-## 项目特性
+## Project Features
 
-##### 已支持特性：
+##### Supported features:
 
-* 全量推送：支持定期全量推送数据到发现中心。
-* 增量推送：K8s 容器实例变化，增量通知发现中心。
-* 故障恢复：如果部署多个实例，支持节点选举及故障恢复，只有 master 节点才可以推送数据，其他节点 backup。
-            节点本身是可灵活增减的。
-* 日志双写：控制台和日志文件均记录。
+* Full push: supports periodically pushing all data to the discovery center.
+* Incremental push: when K8s container instances change, the discovery center is notified incrementally.
+* Failure recovery: if multiple instances are deployed, node election and failure recovery are supported; only the master node can push data, the other nodes are backup.
+            The nodes themselves can be added and removed flexibly.
+* Dual log writing: logs are written to both the console and log files.
 
-## 功能变更历史
+## Change History
 
-* 2022-10-19 增加异常通知机制，增加大单体预发布 bernuda 集群
-* 2022-09-07 去除老的预发布集群 deck
-* 2022-08-02 增加生产 tke 集群 otter，增加新预发布集群 slug
-* 2022-04-22 主要更改consul server地址
-* 2022-04-21 移除开发环境链接 hull 集群，hull 集群将下架
-* 2022-02-21 防止因consul链接失败，导致死循环
-* 2022-01-24 增加 sailor 集群、vipper 集群
-* 2022-01-14 主要修复：全量推送逻辑里没有获取远端registry status 为 2 的实例，导致这类实例存在，却无法被更新删除（update status 为3）
-* 2021-05-11 增加 consul 机器部署实例支持
-* 2021-06-11 增加 K8s 调试集群 boat 支持
-* 2021-06-24 k8s instance status 支持离线状态值、state 枚举值完善（如：probing、running 等）
-* 2021-07-20 consul instance status、state 字段值完善（同上）
+* 2022-10-19 Added the exception notification mechanism; added the big-monolith pre-release bernuda cluster
+* 2022-09-07 Removed the old pre-release cluster deck
+* 2022-08-02 Added the production tke cluster otter; added the new pre-release cluster slug
+* 2022-04-22 Mainly changed the consul server address
+* 2022-04-21 Removed the connection to the dev environment hull cluster; the hull cluster will be decommissioned
+* 2022-02-21 Prevent an infinite loop caused by a consul connection failure
+* 2022-01-24 Added the sailor cluster and the vipper cluster
+* 2022-01-14 Main fix: in the full-push logic, the instances whose remote registry status was 2 were not fetched, so such instances existed but could never be updated/deleted (update status to 3)
+* 2021-05-11 Added support for consul machine deployment instances
+* 2021-06-11 Added the K8s debug cluster boat support
+* 2021-06-24 k8s instance status supports the offline status value; the state enum values were completed (e.g. probing, running, etc.)
+* 2021-07-20 consul instance status and state field values completed (same as above)
