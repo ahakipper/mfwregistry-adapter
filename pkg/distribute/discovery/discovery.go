@@ -2,22 +2,22 @@ package discovery
 
 import (
     "context"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/tools/net"
+    "github.com/ahakipper/spotter/tools/net"
     "time"
 
     "github.com/coreos/etcd/clientv3"
     "github.com/coreos/etcd/mvcc/mvccpb"
 
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/tools/cache"
+    "github.com/ahakipper/spotter/pkg/log"
+    "github.com/ahakipper/spotter/tools/cache"
 )
 
 var (
     // Indicates the prefix key of register center, store in etcd
-    registerCenter = "/paas/mfwregistry-adapter/register/"
+    registerCenter = "/paas/spotter/register/"
 
     // pushChannelBaseKey the base key of slave node subscript channel
-    pushChannelBaseKey = "/paas/mfwregistry-adapter/subscribech"
+    pushChannelBaseKey = "/paas/spotter/subscribech"
 
     // Operate ectd timeout
     timeout = 5 * time.Second

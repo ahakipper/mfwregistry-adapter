@@ -3,15 +3,15 @@ package k8s
 import (
     "context"
     "github.com/panjf2000/ants/v2"
-    sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/config"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/metrics"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/notice"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/worker"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/tools/unit"
-    client "gitlab.mfwdev.com/servicemesh/robot"
+    sv "github.com/ahakipper/spotter/pkg/beehive/service/v2"
+    "github.com/ahakipper/spotter/config"
+    "github.com/ahakipper/spotter/pkg/log"
+    "github.com/ahakipper/spotter/pkg/metrics"
+    "github.com/ahakipper/spotter/pkg/notice"
+    "github.com/ahakipper/spotter/pkg/providers"
+    "github.com/ahakipper/spotter/pkg/worker"
+    "github.com/ahakipper/spotter/tools/unit"
+    k8srobot "github.com/ahakipper/spotter/pkg/k8srobot"
     v1 "k8s.io/api/core/v1"
     "strings"
     "sync"
@@ -21,7 +21,7 @@ import (
 // K8S provider implement
 type k8s struct {
     providerName string
-    robot        client.Robot               // the K8s multi-cluster aggregator
+    robot        k8srobot.Robot               // the K8s multi-cluster aggregator
     ctx          context.Context            // context
     worker       worker.Worker              // the role of worker is to synchronize provider changes to the discovery center
     stopped      bool                       // whether the current provider has stopped
@@ -34,20 +34,20 @@ type k8s struct {
 
 // NewK8SProvider Init k8s provider
 func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int, configPath []string) (provider providers.Provider, err error) {
-    clusters := make([]client.Cluster, len(configPath))
+    clusters := make([]k8srobot.Cluster, len(configPath))
     for idx, path := range configPath {
-        clusters[idx] = client.Cluster{
+        clusters[idx] = k8srobot.Cluster{
             ConfigPath: path,
-            Resources: []client.RN{
+            Resources: []k8srobot.RN{
                 {
-                    client.Pods,
+                    k8srobot.Pods,
                     "",
                 },
             },
         }
     }
-    var kr client.Robot
-    kr, err = client.NewRobot(clusters, false)
+    var kr k8srobot.Robot
+    kr, err = k8srobot.NewRobot(clusters, false)
     if err != nil {
         // If walk here, server init failed
         return nil, err
@@ -140,13 +140,13 @@ func (k *k8s) monitor() {
 }
 
 //
-func (k *k8s) ProcessCache(event client.Event, ins *sv.Instance) {
+func (k *k8s) ProcessCache(event k8srobot.EventType, ins *sv.Instance) {
     switch event {
-    case client.EventAdd:
+    case k8srobot.EventAdd:
         k.cache.ReplaceOrInsert(ins)
-    case client.EventUpdate:
+    case k8srobot.EventUpdate:
         k.cache.ReplaceOrInsert(ins)
-    case client.EventDelete:
+    case k8srobot.EventDelete:
         k.cache.ReplaceOrInsert(ins)
     }
 }
@@ -174,9 +174,9 @@ func (k *k8s) eventSync(ins *sv.Instance, triggerTime int64) {
 }
 
 //
-func (k *k8s) pod2Instance(obj client.QueueObject) (ins *sv.Instance) {
+func (k *k8s) pod2Instance(obj k8srobot.QueueObject) (ins *sv.Instance) {
     // get pod info from k8s robot
-    items, ok := k.robot.GetByKey(client.Pods, obj.Key)
+    items, ok := k.robot.GetByKey(k8srobot.Pods, obj.Key)
     if ok && len(items) > 0 {
         pod := items[0].(*v1.Pod)
         instance := formatInstance(&obj, pod)
@@ -199,12 +199,12 @@ func (k *k8s) pod2Instance(obj client.QueueObject) (ins *sv.Instance) {
         // K8s robot no longer exists. However, in this scenario, the consumer of the instance needs
         // not only status = 2 but also the complete field data of the instance. Therefore, we have to fetch it from the cache.
         switch obj.Event {
-        case client.EventAdd:
+        case k8srobot.EventAdd:
             fallthrough
             // log error
-        case client.EventUpdate:
+        case k8srobot.EventUpdate:
             // log error
-        case client.EventDelete:
+        case k8srobot.EventDelete:
             instanceId := k.obj2InstanceId(obj)
             log.Logger.Infof("delete event, instanceid: %s", instanceId)
             if instance := k.cache.Get(instanceId); instance != nil {
@@ -212,7 +212,7 @@ func (k *k8s) pod2Instance(obj client.QueueObject) (ins *sv.Instance) {
                     // set instance status
                     instance.Status = providers.InstanceStatusOffline
                     // delete cache
-                    k.ProcessCache(client.EventDelete, instance)
+                    k.ProcessCache(k8srobot.EventDelete, instance)
                     ins = instance
                 }
             }
@@ -238,7 +238,7 @@ func (k *k8s) hasInstanceDiff(old, new *sv.Instance) (diff bool) {
     return diff
 }
 
-func (k *k8s) obj2InstanceId(obj client.QueueObject) string {
+func (k *k8s) obj2InstanceId(obj k8srobot.QueueObject) string {
     if obj.Key != "" {
         keys := strings.Split(obj.Key, "/")
         if keys != nil && len(keys) >= 2 {
@@ -306,13 +306,13 @@ func (k *k8s) CompareAndFlush() {
         // compare
         servMap := providers.ListToMap(list.GetInstance())
         k8sMap := providers.ListToMap(all)
-        log.Logger.Infof("mfwregistry online k8s instances size :%d  k8s online instance size :%d  total :%d", len(servMap), onlineCount, len(k8sMap))
+        log.Logger.Infof("discovery center online k8s instances size :%d  k8s online instance size :%d  total :%d", len(servMap), onlineCount, len(k8sMap))
         // bothExist,k8sExist two flag to notice
         bothExist := false
         k8sExist := false
         registryExist := false
         for k8sKey, k8sIns := range k8sMap {
-            // case1: instance is both in K8s and MfwRegistry.
+            // case1: instance is both in K8s and the discovery center.
             // Instance data information to be pushed, subject to the data in K8s
             if servIns, exist := servMap[k8sKey]; exist {
                 diff := k.hasInstanceDiff(servIns, k8sIns)
@@ -324,8 +324,8 @@ func (k *k8s) CompareAndFlush() {
                 delete(k8sMap, k8sKey)
                 delete(servMap, k8sKey)
             } else {
-                // case2: instance is both in K8s, but not in MfwRegistry.
-                // Instance is newer than MfwRegistry, subject to the data in K8s
+                // case2: instance is both in K8s, but not in the discovery center.
+                // Instance is newer than the discovery center, subject to the data in K8s
                 log.Logger.Infof("k8s match much id: %v , status : %v \n", k8sIns.InstanceId, k8sIns.Status)
                 if k8sIns.Status == 1 {
                     k8sExist = true
@@ -342,8 +342,8 @@ func (k *k8s) CompareAndFlush() {
         if k8sExist {
             notice.Notice("Instance data inconsistency", "Full push: data inconsistency between the discovery center and the K8s clusters, the instances differ between the discovery center and the K8s clusters, some instances exist in the K8s clusters but not in the discovery center")
         }
-        // case3: instance is not is K8s, but in MfwRegistry.
-        // Then instances should not be exists in MfwRegistry, just delete it.
+        // case3: instance is not is K8s, but in the discovery center.
+        // Then instances should not be exists in the discovery center, just delete it.
         if len(servMap) > 0 {
             log.Logger.Infof("atlas server pre delete instance size :%d \n", len(servMap))
             for _, servIns := range servMap {
@@ -381,7 +381,7 @@ func (k *k8s) buildAndSendEvent(instance *sv.Instance) {
 }
 
 func (k *k8s) GetAll() (result []*sv.Instance) {
-    items := k.robot.List(client.Pods)
+    items := k.robot.List(k8srobot.Pods)
     for _, item := range items {
         pod := item.(*v1.Pod)
         instance := formatInstance(nil, pod)
@@ -402,8 +402,8 @@ func (k *k8s) GetAll() (result []*sv.Instance) {
     return
 }
 
-// ProcessIntervalFullPush will sync all Instances of the current Provider to the MfwRegistry.
-// Note: The current synchronization behavior is not to directly call the SyncAll method of MfwRegistry,
+// ProcessIntervalFullPush will sync all Instances of the current Provider to the the discovery center.
+// Note: The current synchronization behavior is not to directly call the SyncAll method of the discovery center,
 // but to perform instances comparison and do instance synchronization one by one using Method CompareAndFlush.
 func (k *k8s) ProcessIntervalFullPush() {
     interval := providers.FullPushInterval

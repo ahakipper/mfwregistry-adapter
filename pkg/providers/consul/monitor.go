@@ -5,9 +5,9 @@ import (
     "github.com/hashicorp/consul/api"
     consulwatch "github.com/hashicorp/consul/api/watch"
     "github.com/pkg/errors"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/notice"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers/consul/watch"
+    "github.com/ahakipper/spotter/pkg/log"
+    "github.com/ahakipper/spotter/pkg/notice"
+    "github.com/ahakipper/spotter/pkg/providers/consul/watch"
     "golang.org/x/sync/errgroup"
     "time"
 )

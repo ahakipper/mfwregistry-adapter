@@ -1,11 +1,11 @@
 package k8s
 
 import (
-    sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/config"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers"
-    client "gitlab.mfwdev.com/servicemesh/robot"
+    sv "github.com/ahakipper/spotter/pkg/beehive/service/v2"
+    "github.com/ahakipper/spotter/config"
+    "github.com/ahakipper/spotter/pkg/log"
+    "github.com/ahakipper/spotter/pkg/providers"
+    k8srobot "github.com/ahakipper/spotter/pkg/k8srobot"
     v1 "k8s.io/api/core/v1"
     "k8s.io/apimachinery/pkg/api/resource"
     "regexp"
@@ -14,7 +14,7 @@ import (
 )
 
 // TODO obj param optimize
-func formatInstance(obj *client.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
+func formatInstance(obj *k8srobot.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
     if pod == nil {
         return ins
     }
@@ -215,11 +215,11 @@ func formatAppCode(pod *v1.Pod) (appCode string) {
 }
 
 // formatInstanceStatus convert instance status
-func formatStatus(obj *client.QueueObject, pod *v1.Pod) (status int32) {
+func formatStatus(obj *k8srobot.QueueObject, pod *v1.Pod) (status int32) {
     status = providers.InstanceStatusOffline
     if pod == nil {
         status = providers.InstanceStatusOffline
-    } else if obj != nil && obj.Event == client.EventDelete {
+    } else if obj != nil && obj.Event == k8srobot.EventDelete {
         status = providers.InstanceStatusOffline
     } else if !pod.DeletionTimestamp.IsZero() {
         status = providers.InstanceStatusOffline

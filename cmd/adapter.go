@@ -17,23 +17,23 @@ package cmd
 import (
     "fmt"
     "github.com/spf13/cobra"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/config"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/internal"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/notice"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers"
+    "github.com/ahakipper/spotter/config"
+    "github.com/ahakipper/spotter/internal"
+    "github.com/ahakipper/spotter/pkg/log"
+    "github.com/ahakipper/spotter/pkg/notice"
+    "github.com/ahakipper/spotter/pkg/providers"
 )
 
-// k8sadapterCmd represents the k8sadapter command
+// adapterCmd represents the adapter command
 var adapterCmd = &cobra.Command{
     Use:   "adapter",
-    Short: "A brief description of your command",
-    Long: `A longer description that spans multiple lines and likely contains examples
-and usage of using your command. For example:
+    Short: "Run the instance adapter",
+    Long: `The adapter command is the main entry point of spotter.
 
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
+It watches the configured providers (Kubernetes clusters and Consul servers),
+converts the observed pods/endpoints into instance data, and pushes the
+resulting instance events (incremental and full) to the discovery center
+(Atlas) over gRPC.`,
     Run: func(cmd *cobra.Command, args []string) {
         fmt.Println("starting adapter")
         // init flags
@@ -76,7 +76,7 @@ func init() {
     
     // Cobra supports Persistent Flags which will work for this command
     // and all subcommands, e.g.:
-    // k8sadapterCmd.PersistentFlags().String("foo", "", "A help for foo")
+    // adapterCmd.PersistentFlags().String("foo", "", "A help for foo")
     
     // Cobra supports local flags which will only run when this command
     // is called directly, e.g.:

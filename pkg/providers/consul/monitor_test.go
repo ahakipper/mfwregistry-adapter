@@ -4,8 +4,8 @@ import (
     "context"
     "github.com/hashicorp/consul/api"
     "github.com/k0kubun/pp"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers"
+    "github.com/ahakipper/spotter/pkg/log"
+    "github.com/ahakipper/spotter/pkg/providers"
     "testing"
 )
 

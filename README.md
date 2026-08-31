@@ -1,3 +1,5 @@
+# spotter
+
 ## Project Description
 
 The Instance data of the discovery center — among which the container Instance data mainly comes from this project.
@@ -18,11 +20,11 @@ make OS=linux
 
 The official build uses a docker image build approach: you only need to tag the target branch on gitlab.
 
-Build process: https://drone-pub.mfwdev.com/PaaS/mfwregistry-adapter (private page; do not modify the related content. The page will be connected to CAS login later.)
+The build process is managed by the internal CI system (private page; do not modify the related content. The page will be connected to CAS login later.)
 
 When the build is finished, an image is generated
 
-> For example, if the tag you pushed is v0.0.1, then the generated image is: hub.mfwdev.com/paas/mfwregistry-adapter:v0.0.1
+> For example, if the tag you pushed is v0.0.1, then the generated image is: hub.mfwdev.com/paas/spotter:v0.0.1
 
 ## How to Deploy
 
@@ -34,11 +36,11 @@ Address: https://wiki.mafengwo.cn/pages/viewpage.action?pageId=63422398
 
 1. Show the supported parameters
 ```
-./mfwregistry-adapter -h
+./spotter -h
 ```
 2. Run the k8s adapter
 ```
-./mfwregistry-adapter adapter
+./spotter adapter
 ```
 3. By default, it connects to all the K8s clusters defined in config/kubeconfigs (multiple K8s cluster support).
 By default, it converts the K8s data into Instance data and pushes it to the target discovery center.
@@ -48,7 +50,7 @@ By default, it converts the K8s data into Instance data and pushes it to the tar
 The target discovery center may have multiple environments, which can be viewed via parameters
 
 ```
-./mfwregistry-adapter adapter -h
+./spotter adapter -h
 ```
 
 Different environments connect to different discovery centers and etcd clusters. The etcd cluster is mainly used for member master election. Only the master node
@@ -59,25 +61,25 @@ can connect to K8s and push data to the discovery center; the other nodes are in
 
 When this project watches K8s clusters, it must wait for all clusters to be ready before it can receive the incremental Watch messages.
 
-That is to say, if there are 3 K8s clusters, mfwregistry-adapter has to wait until all clusters are reachable before it proceeds to the next step.
+That is to say, if there are 3 K8s clusters, spotter has to wait until all clusters are reachable before it proceeds to the next step.
 
 This may cause the following problem:
 
-1. If some cluster has been destroyed and can no longer be reached, then once the mfwregistry-adapter service restarts, it will block as a whole because that cluster is unreachable, and it cannot receive any incremental K8s messages.
+1. If some cluster has been destroyed and can no longer be reached, then once the spotter service restarts, it will block as a whole because that cluster is unreachable, and it cannot receive any incremental K8s messages.
 
-Therefore, to prevent this problem, whenever there is a cluster change it must be synchronized into the mfwregistry-adapter project, and the service must be restarted online.
+Therefore, to prevent this problem, whenever there is a cluster change it must be synchronized into the spotter project, and the service must be restarted online.
 
 So, why is it designed this way?
 
-The core point is that mfwregistry-adapter is the aggregation of all instances. When doing a full push to Atlas, it fetches all the instances, compares them, and syncs them into Atlas.
+The core point is that spotter is the aggregation of all instances. When doing a full push to Atlas, it fetches all the instances, compares them, and syncs them into Atlas.
 
-However, if some cluster is unreachable, the instances of mfwregistry-adapter itself are incomplete. If at that moment the incomplete instances are compared with Atlas and pushed, the data in Atlas would become incomplete.
+However, if some cluster is unreachable, the instances of spotter itself are incomplete. If at that moment the incomplete instances are compared with Atlas and pushed, the data in Atlas would become incomplete.
 
 For example:
 
-1. mfwregistry-adapter has all the instance data of clusters A, B and C, and has already synced them to Atlas.
-2. Cluster A may be temporarily unreachable by mfwregistry-adapter due to a network problem.
-3. mfwregistry-adapter restarted. If at that moment B + C are considered to be all the instances, then when pushing to Atlas, all the instances of cluster A would be marked as offline.
+1. spotter has all the instance data of clusters A, B and C, and has already synced them to Atlas.
+2. Cluster A may be temporarily unreachable by spotter due to a network problem.
+3. spotter restarted. If at that moment B + C are considered to be all the instances, then when pushing to Atlas, all the instances of cluster A would be marked as offline.
 4. Atlas marks all the instances of cluster A as offline. All the instances of cluster A would become inaccessible through the gateway and the Java SDK.
 
 ## Project Features

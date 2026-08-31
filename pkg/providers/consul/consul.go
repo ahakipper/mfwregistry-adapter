@@ -5,14 +5,14 @@ import (
     "github.com/hashicorp/consul/api"
     "github.com/panjf2000/ants/v2"
     "github.com/pkg/errors"
-    "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
-    sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/metrics"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/notice"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/worker"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/tools/unit"
+    "github.com/ahakipper/spotter/pkg/beehive/service/v2"
+    sv "github.com/ahakipper/spotter/pkg/beehive/service/v2"
+    "github.com/ahakipper/spotter/pkg/log"
+    "github.com/ahakipper/spotter/pkg/metrics"
+    "github.com/ahakipper/spotter/pkg/notice"
+    "github.com/ahakipper/spotter/pkg/providers"
+    "github.com/ahakipper/spotter/pkg/worker"
+    "github.com/ahakipper/spotter/tools/unit"
     "sync"
     "time"
 )
@@ -55,7 +55,7 @@ func NewConsulProvider(ctx context.Context, worker worker.Worker, pushInterval i
         clientFactory: cf,
         cache:         providers.NewCache(8),
     }
-    // Create pool for sending instance events to MfwRegistry
+    // Create pool for sending instance events to the discovery center
     p, _ := ants.NewPool(providers.PoolBenchSize, withExpiryDuration(time.Second*providers.PoolExpireTime))
     consulProvider.pool = p
     // Init instance fiter
@@ -87,8 +87,8 @@ func (c *consul) Run() (err error) {
     return err
 }
 
-// syncInstance will sync consul endpoints to MfwRegistry.
-// It will get all the services tagged as "microservice", and convert consul endpoint model to MfwRegistry Model.
+// syncInstance will sync consul endpoints to the discovery center.
+// It will get all the services tagged as "microservice", and convert consul endpoint model to the discovery center Model.
 // Then compare the new instances list with the instances we cached before so that we can generate the instances which are
 // added, updated and deleted.
 func (c *consul) syncInstance() (err error) {
@@ -276,8 +276,8 @@ func (c *consul) eventSync(ins *sv.Instance, triggerTime int64) {
     })
 }
 
-// ProcessIntervalFullPush will sync all Instances of the current Provider to the MfwRegistry.
-// Note: The current synchronization behavior is not to directly call the SyncAll method of MfwRegistry,
+// ProcessIntervalFullPush will sync all Instances of the current Provider to the the discovery center.
+// Note: The current synchronization behavior is not to directly call the SyncAll method of the discovery center,
 // but to perform instances comparison and do instance synchronization one by one using Method CompareAndFlush.
 // TODO: the Provider methods are duplicated, this needs to be optimized later
 func (c *consul) ProcessIntervalFullPush() {
@@ -322,7 +322,7 @@ func (c *consul) CompareAndFlush() {
         // compare diffs and sync incrementally
         registryList, err := c.worker.GetAll([]int32{providers.InstanceStatusOnline}, providers.ProviderEcs)
         if err != nil {
-            err = errors.WithMessage(err, "get all instances from mfwregistry")
+            err = errors.WithMessage(err, "get all instances from the discovery center")
             log.Logger.Errorf(err.Error())
             return
         }
@@ -335,13 +335,13 @@ func (c *consul) CompareAndFlush() {
         remoteInstances := providers.ListToMap(registryList.GetInstance())
         // pp.Println(remoteInstances)
         currentProviderInstances := providers.ListToMap(all)
-        log.Logger.Infof("mfwregistry online ecs instances size :%d  consul online instance size :%d  total :%d", len(remoteInstances), onlineCount, len(currentProviderInstances))
+        log.Logger.Infof("discovery center online ecs instances size :%d  consul online instance size :%d  total :%d", len(remoteInstances), onlineCount, len(currentProviderInstances))
         //bothExist,k8sExist two flag to notice
         bothExist := false
         ecsExist := false
         registryExist := false
         for consulKey, consulIns := range currentProviderInstances {
-            // For these instances in both Provider and MfwRegistry, if the information in Provider is newer, push is performed.
+            // For these instances in both Provider and the discovery center, if the information in Provider is newer, push is performed.
             if servIns, exist := remoteInstances[consulKey]; exist {
                 diff := false
                 // If K8s instance Version > Finder instance version
@@ -370,7 +370,7 @@ func (c *consul) CompareAndFlush() {
                 delete(currentProviderInstances, consulKey)
                 delete(remoteInstances, consulKey)
             } else {
-                // For these instances in both Provider but not in MfwRegistry, the instance should be added to MfwRegistry.
+                // For these instances in both Provider but not in the discovery center, the instance should be added to the discovery center.
                 log.Logger.Infof("consul match much id : %s, status: %d", consulIns.InstanceId, consulIns.Status)
                 if consulIns.Status == 1 {
                     ecsExist = true
@@ -387,13 +387,13 @@ func (c *consul) CompareAndFlush() {
         if ecsExist {
             notice.Notice("Instance data inconsistency", "Data inconsistency between the discovery center and the ecs cluster: the instances differ between the discovery center and the ecs cluster, some instances exist in the ecs cluster but not in the discovery center")
         }
-        // The instances remaining in the MfwRegistry variable (remoteInstances) are either old or not in the Provider instance list.
-        // In this case, we should delete it from MfwRegistry (that is, set it to Status=2 and push it).
+        // The instances remaining in the the discovery center variable (remoteInstances) are either old or not in the Provider instance list.
+        // In this case, we should delete it from the discovery center (that is, set it to Status=2 and push it).
         if len(remoteInstances) > 0 {
-            log.Logger.Infof("process mfwregistry instance deleting. instance size: %d", len(remoteInstances))
+            log.Logger.Infof("process discovery center instance deleting. instance size: %d", len(remoteInstances))
             for _, servIns := range remoteInstances {
                 servIns.Status = 2
-                log.Logger.Infof("mfwregistry server has the old instance, set its Status filed as 2, and trigger a push. instance: %v", servIns)
+                log.Logger.Infof("the discovery center has the old instance, set its Status filed as 2, and trigger a push. instance: %v", servIns)
                 registryExist = true
                 c.buildAndSendEvent(servIns)
             }

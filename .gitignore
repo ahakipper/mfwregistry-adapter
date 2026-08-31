@@ -1,5 +1,5 @@
-mfwregistry-k8sadapter
-mfwregistry-adapter
+/spotter
+*.log
 logfiles
 .idea
 .DS_Store

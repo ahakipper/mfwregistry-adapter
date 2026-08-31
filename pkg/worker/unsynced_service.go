@@ -2,23 +2,23 @@ package worker
 
 import (
     "context"
-    v2 "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/metrics"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/mfwregistry"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/tools"
+    v2 "github.com/ahakipper/spotter/pkg/beehive/service/v2"
+    "github.com/ahakipper/spotter/pkg/log"
+    "github.com/ahakipper/spotter/pkg/metrics"
+    "github.com/ahakipper/spotter/pkg/discoverycenter"
+    "github.com/ahakipper/spotter/tools"
     "sync"
     "time"
 )
 
 type UnsyncedService struct {
     ctx    context.Context
-    pusher mfwregistry.Pusher
+    pusher discoverycenter.Pusher
     store  map[string]*Event
     sync.RWMutex
 }
 
-func NewUnsyncedService(ctx context.Context, pusher mfwregistry.Pusher) *UnsyncedService {
+func NewUnsyncedService(ctx context.Context, pusher discoverycenter.Pusher) *UnsyncedService {
     us := &UnsyncedService{
         ctx:    ctx,
         pusher: pusher,

@@ -14,7 +14,7 @@
 
 package main
 
-import "gitlab.mfwdev.com/paas/mfwregistry-adapter/cmd"
+import "github.com/ahakipper/spotter/cmd"
 
 func main() {
 	cmd.Execute()

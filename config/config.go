@@ -41,7 +41,7 @@ func InitTest() {
     KubeConfigPath = []string{"./config/kubeconfigs/k8s-sailor"}
     ConsulAddress = []string{"10.72.73.172:8520", "10.72.73.173:8520", "10.72.73.174:8520"}
     Providers = []string{}
-    LockCampaignKey = "/paas/mfwregistry-adapter-test"
+    LockCampaignKey = "/paas/spotter-test"
 }
 
 func InitDev() {
@@ -56,7 +56,7 @@ func InitDev() {
     }
     ConsulAddress = []string{"10.72.73.172:8520", "10.72.73.173:8520", "10.72.73.174:8520"}
     Providers = []string{}
-    LockCampaignKey = "/paas/mfwregistry-adapter"
+    LockCampaignKey = "/paas/spotter"
 }
 
 func InitProd() {
@@ -74,5 +74,5 @@ func InitProd() {
     }
     ConsulAddress = []string{"10.132.2.40:8520", "10.132.2.42:8520", "10.132.2.43:8520"}
     Providers = []string{}
-    LockCampaignKey = "/paas/mfwregistry-adapter"
+    LockCampaignKey = "/paas/spotter"
 }

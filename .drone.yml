@@ -21,13 +21,12 @@ pipeline:
     refer_stage: git
     environment:
       GOPROXY: https://goproxy.cn
-      GOPRIVATE: gitlab.mfwdev.com
     volumes:
       - /DATA/golang-mod/mod:/go/pkg/mod
 
   docker-build:
     image: hub.mfwdev.com/paas/drone-docker:v0.5.8
-    repo: hub.mfwdev.com/paas/mfwregistry-adapter
+    repo: hub.mfwdev.com/paas/spotter
     auth_config:
       innerid: hub.mfwdev.com
     auth_config_innerid: hub.mfwdev.com

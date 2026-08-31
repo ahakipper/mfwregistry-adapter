@@ -9,4 +9,4 @@ OS ?= linux
 DOCKER_VERSION ?= latest
 
 build:
-	GOOS=$(OS) go build -o mfwregistry-adapter
+	GOOS=$(OS) go build -o spotter

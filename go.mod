@@ -1,4 +1,4 @@
-module gitlab.mfwdev.com/paas/mfwregistry-adapter
+module github.com/ahakipper/spotter
 
 go 1.15
 
@@ -18,13 +18,11 @@ require (
 	github.com/satori/go.uuid v1.2.0
 	github.com/spf13/cobra v1.0.0
 	github.com/spf13/viper v1.4.0
-	gitlab.mfwdev.com/mtech/appcenter-notice/client v0.0.0-20221011081521-a4ff9172818a
-	gitlab.mfwdev.com/mtech/beehive-proto v0.2.60
-	gitlab.mfwdev.com/servicemesh/robot v0.1.5
 	go.uber.org/zap v1.10.0
 	golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4
 	google.golang.org/grpc v1.27.1
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
 	k8s.io/api v0.22.4
 	k8s.io/apimachinery v0.22.4
+	k8s.io/client-go v0.22.4
 )

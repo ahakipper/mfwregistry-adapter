@@ -2,16 +2,16 @@ package k8s
 
 import (
 	"fmt"
-	"gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers"
-	client "gitlab.mfwdev.com/servicemesh/robot"
+	"github.com/ahakipper/spotter/pkg/providers"
+	k8srobot "github.com/ahakipper/spotter/pkg/k8srobot"
 	v1 "k8s.io/api/core/v1"
 	"testing"
 )
 
 func TestFormatInstance(t *testing.T) {
 	// test for env test in New FengXiao
-	obj := &client.QueueObject{
-		Event: client.EventDelete,
+	obj := &k8srobot.QueueObject{
+		Event: k8srobot.EventDelete,
 	}
 	pod := &v1.Pod{
 	}
@@ -61,8 +61,8 @@ func TestFormatInstance(t *testing.T) {
 	}
 
 	// test for env test in Old FengXiao
-	obj = &client.QueueObject{
-		Event: client.EventDelete,
+	obj = &k8srobot.QueueObject{
+		Event: k8srobot.EventDelete,
 	}
 	pod = &v1.Pod{
 	}
@@ -154,8 +154,8 @@ func TestFormatInstance(t *testing.T) {
 	}
 
 	// test for env dev in Aos microservice
-	obj = &client.QueueObject{
-		Event: client.EventDelete,
+	obj = &k8srobot.QueueObject{
+		Event: k8srobot.EventDelete,
 	}
 	pod = &v1.Pod{
 	}
@@ -217,8 +217,8 @@ func TestFormatInstance(t *testing.T) {
 	}
 
 	// test for env product in Aos microservice
-	obj = &client.QueueObject{
-		Event: client.EventDelete,
+	obj = &k8srobot.QueueObject{
+		Event: k8srobot.EventDelete,
 	}
 	pod = &v1.Pod{
 	}
@@ -323,8 +323,8 @@ func TestFormatInstance(t *testing.T) {
 	}
 
 	// test for env product in Aos microservice with no env-type label
-	obj = &client.QueueObject{
-		Event: client.EventDelete,
+	obj = &k8srobot.QueueObject{
+		Event: k8srobot.EventDelete,
 	}
 	pod = &v1.Pod{
 	}
@@ -409,8 +409,8 @@ func TestFormatInstance(t *testing.T) {
 	}
 
 	// test for env staging in Aos microservice
-	obj = &client.QueueObject{
-		Event: client.EventDelete,
+	obj = &k8srobot.QueueObject{
+		Event: k8srobot.EventDelete,
 	}
 	pod = &v1.Pod{
 	}
@@ -517,8 +517,8 @@ func TestFormatInstance(t *testing.T) {
 	}
 
 	// test for env staging in Aos microservice with no env label
-	obj = &client.QueueObject{
-		Event: client.EventDelete,
+	obj = &k8srobot.QueueObject{
+		Event: k8srobot.EventDelete,
 	}
 	pod = &v1.Pod{
 	}

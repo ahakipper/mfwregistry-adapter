@@ -1,14 +1,14 @@
-package mfwregistry
+package discoverycenter
 
 import (
     "context"
     "encoding/json"
     "errors"
     "fmt"
-    v2 "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/config"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/metrics"
+    v2 "github.com/ahakipper/spotter/pkg/beehive/service/v2"
+    "github.com/ahakipper/spotter/config"
+    "github.com/ahakipper/spotter/pkg/log"
+    "github.com/ahakipper/spotter/pkg/metrics"
     "google.golang.org/grpc"
     "time"
 )

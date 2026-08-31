@@ -2,8 +2,8 @@ package consul
 
 import (
     "context"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/providers"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/worker"
+    "github.com/ahakipper/spotter/pkg/providers"
+    "github.com/ahakipper/spotter/pkg/worker"
     "testing"
 )
 

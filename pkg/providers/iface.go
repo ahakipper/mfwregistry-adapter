@@ -1,7 +1,7 @@
 package providers
 
 import (
-    sv "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
+    sv "github.com/ahakipper/spotter/pkg/beehive/service/v2"
 )
 
 // Provider is a interface

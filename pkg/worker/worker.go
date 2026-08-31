@@ -2,16 +2,16 @@ package worker
 
 import (
     "context"
-    v2 "gitlab.mfwdev.com/mtech/beehive-proto/api/service/v2"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/log"
-    "gitlab.mfwdev.com/paas/mfwregistry-adapter/pkg/mfwregistry"
+    v2 "github.com/ahakipper/spotter/pkg/beehive/service/v2"
+    "github.com/ahakipper/spotter/pkg/log"
+    "github.com/ahakipper/spotter/pkg/discoverycenter"
 )
 
 type DefaultWorker struct {
     Handlers        map[OperateType]EventResourceHandler
     ctx             context.Context
     unsyncedService *UnsyncedService
-    pusher          mfwregistry.Pusher
+    pusher          discoverycenter.Pusher
 }
 
 func NewResourceWorker(ctx context.Context) (w *DefaultWorker) {
@@ -21,7 +21,7 @@ func NewResourceWorker(ctx context.Context) (w *DefaultWorker) {
     // init handlers
     w.InitEventHandlers()
     // create a registry pusher
-    w.pusher = mfwregistry.NewMFWRegistry()
+    w.pusher = discoverycenter.NewDiscoveryCenter()
 
     // init the unsynced service to sync the instances that pushed failed before
     w.unsyncedService = NewUnsyncedService(w.ctx, w.pusher)
