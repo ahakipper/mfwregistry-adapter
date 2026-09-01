@@ -3,10 +3,10 @@ package discoverycenter
 import (
     "strings"
 
-    v2 "github.com/ahakipper/spotter/pkg/beehive/service/v2"
-    "github.com/ahakipper/spotter/config"
-    "github.com/ahakipper/spotter/pkg/log"
-    "github.com/ahakipper/spotter/pkg/notice"
+    v2 "spotter/pkg/beehive/service/v2"
+    "spotter/config"
+    "spotter/pkg/log"
+    "spotter/pkg/notice"
 )
 
 // Pusher is the contract used by the workers to talk to the discovery center.

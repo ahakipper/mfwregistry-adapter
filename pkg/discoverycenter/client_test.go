@@ -4,10 +4,10 @@ import (
     "testing"
 
     "github.com/k0kubun/pp"
-    sv "github.com/ahakipper/spotter/pkg/beehive/service/v2"
-    "github.com/ahakipper/spotter/config"
-    "github.com/ahakipper/spotter/pkg/log"
-    "github.com/ahakipper/spotter/pkg/providers"
+    sv "spotter/pkg/beehive/service/v2"
+    "spotter/config"
+    "spotter/pkg/log"
+    "spotter/pkg/providers"
 )
 
 var atlasDevAddr = "172.18.27.63:50051"

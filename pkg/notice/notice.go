@@ -1,8 +1,8 @@
 package notice
 
 import (
-    "github.com/ahakipper/spotter/pkg/log"
-    "github.com/ahakipper/spotter/pkg/notice/appcenternotice"
+    "spotter/pkg/log"
+    "spotter/pkg/notice/appcenternotice"
     "net"
 )
 

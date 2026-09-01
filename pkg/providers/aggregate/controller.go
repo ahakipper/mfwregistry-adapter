@@ -3,7 +3,7 @@ package aggregate
 import (
     "context"
     "github.com/panjf2000/ants/v2"
-    "github.com/ahakipper/spotter/pkg/providers"
+    "spotter/pkg/providers"
 )
 
 var Providers []providers.Provider

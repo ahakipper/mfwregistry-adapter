@@ -5,7 +5,7 @@ import (
     "github.com/hashicorp/consul/api"
     consulwatch "github.com/hashicorp/consul/api/watch"
     "github.com/pkg/errors"
-    "github.com/ahakipper/spotter/pkg/log"
+    "spotter/pkg/log"
     "golang.org/x/sync/errgroup"
 )
 

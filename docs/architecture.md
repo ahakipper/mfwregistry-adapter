@@ -2,7 +2,7 @@
 
 This document describes the architecture of **spotter**, the discovery-center
 adapter, reflecting the current state of the code after the module was renamed
-to `github.com/ahakipper/spotter` and made self-contained (the former private
+to `spotter` and made self-contained (the former private
 dependencies are now local mirror packages, see
 [Layered Architecture](#layered-architecture)).
 

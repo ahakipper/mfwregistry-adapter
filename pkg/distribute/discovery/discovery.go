@@ -2,14 +2,14 @@ package discovery
 
 import (
     "context"
-    "github.com/ahakipper/spotter/tools/net"
+    "spotter/tools/net"
     "time"
 
     "github.com/coreos/etcd/clientv3"
     "github.com/coreos/etcd/mvcc/mvccpb"
 
-    "github.com/ahakipper/spotter/pkg/log"
-    "github.com/ahakipper/spotter/tools/cache"
+    "spotter/pkg/log"
+    "spotter/tools/cache"
 )
 
 var (

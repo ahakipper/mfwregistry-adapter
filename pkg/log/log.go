@@ -2,7 +2,7 @@ package log
 
 import (
     "github.com/natefinch/lumberjack"
-    "github.com/ahakipper/spotter/config"
+    "spotter/config"
     "go.uber.org/zap"
     "go.uber.org/zap/zapcore"
     "os"

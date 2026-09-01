@@ -1,7 +1,7 @@
 # spotter Documentation
 
 Documentation set for **spotter**, the discovery-center adapter
-(`github.com/ahakipper/spotter`) that aggregates instance data from multiple
+(`spotter`) that aggregates instance data from multiple
 Kubernetes clusters and Consul/ECS and pushes standardized instance events to
 the discovery center ("Atlas") over gRPC.
 

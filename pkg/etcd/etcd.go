@@ -5,7 +5,7 @@ import (
     "errors"
     "github.com/coreos/etcd/clientv3"
     "github.com/coreos/etcd/pkg/transport"
-    "github.com/ahakipper/spotter/config"
+    "spotter/config"
     "time"
 )
 

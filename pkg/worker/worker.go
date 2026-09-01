@@ -2,9 +2,9 @@ package worker
 
 import (
     "context"
-    v2 "github.com/ahakipper/spotter/pkg/beehive/service/v2"
-    "github.com/ahakipper/spotter/pkg/log"
-    "github.com/ahakipper/spotter/pkg/discoverycenter"
+    v2 "spotter/pkg/beehive/service/v2"
+    "spotter/pkg/log"
+    "spotter/pkg/discoverycenter"
 )
 
 type DefaultWorker struct {

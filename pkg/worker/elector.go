@@ -3,9 +3,9 @@ package worker
 import (
     "context"
     "github.com/coreos/etcd/clientv3"
-    "github.com/ahakipper/spotter/pkg/distribute/election"
-    "github.com/ahakipper/spotter/pkg/etcd"
-    "github.com/ahakipper/spotter/pkg/log"
+    "spotter/pkg/distribute/election"
+    "spotter/pkg/etcd"
+    "spotter/pkg/log"
     "time"
 )
 

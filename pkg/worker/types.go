@@ -1,6 +1,6 @@
 package worker
 
-import v2 "github.com/ahakipper/spotter/pkg/beehive/service/v2"
+import v2 "spotter/pkg/beehive/service/v2"
 
 type Worker interface {
 	AddEventHandler(opt OperateType, handler EventResourceHandler)

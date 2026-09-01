@@ -1,11 +1,11 @@
 package k8s
 
 import (
-    sv "github.com/ahakipper/spotter/pkg/beehive/service/v2"
-    "github.com/ahakipper/spotter/config"
-    "github.com/ahakipper/spotter/pkg/log"
-    "github.com/ahakipper/spotter/pkg/providers"
-    k8srobot "github.com/ahakipper/spotter/pkg/k8srobot"
+    sv "spotter/pkg/beehive/service/v2"
+    "spotter/config"
+    "spotter/pkg/log"
+    "spotter/pkg/providers"
+    k8srobot "spotter/pkg/k8srobot"
     v1 "k8s.io/api/core/v1"
     "k8s.io/apimachinery/pkg/api/resource"
     "regexp"

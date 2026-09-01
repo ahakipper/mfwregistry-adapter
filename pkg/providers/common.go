@@ -3,7 +3,7 @@ package providers
 import (
     "fmt"
     "github.com/pkg/errors"
-    sv "github.com/ahakipper/spotter/pkg/beehive/service/v2"
+    sv "spotter/pkg/beehive/service/v2"
     "time"
 )
 

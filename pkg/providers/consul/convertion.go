@@ -5,8 +5,8 @@ import (
     "fmt"
     "github.com/hashicorp/consul/api"
     "github.com/pkg/errors"
-    sv "github.com/ahakipper/spotter/pkg/beehive/service/v2"
-    "github.com/ahakipper/spotter/pkg/providers"
+    sv "spotter/pkg/beehive/service/v2"
+    "spotter/pkg/providers"
 )
 
 const (

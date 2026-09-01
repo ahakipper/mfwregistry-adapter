@@ -1,4 +1,4 @@
-module github.com/ahakipper/spotter
+module spotter
 
 go 1.15
 

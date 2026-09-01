@@ -17,11 +17,11 @@ package cmd
 import (
     "fmt"
     "github.com/spf13/cobra"
-    "github.com/ahakipper/spotter/config"
-    "github.com/ahakipper/spotter/internal"
-    "github.com/ahakipper/spotter/pkg/log"
-    "github.com/ahakipper/spotter/pkg/notice"
-    "github.com/ahakipper/spotter/pkg/providers"
+    "spotter/config"
+    "spotter/internal"
+    "spotter/pkg/log"
+    "spotter/pkg/notice"
+    "spotter/pkg/providers"
 )
 
 // adapterCmd represents the adapter command

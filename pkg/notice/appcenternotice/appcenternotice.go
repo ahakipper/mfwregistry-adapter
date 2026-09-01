@@ -9,7 +9,7 @@
 package appcenternotice
 
 import (
-	"github.com/ahakipper/spotter/pkg/log"
+	"spotter/pkg/log"
 )
 
 // Level is the severity level of a notice message.

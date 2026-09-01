@@ -2,8 +2,8 @@ package consul
 
 import (
     "context"
-    "github.com/ahakipper/spotter/pkg/providers"
-    "github.com/ahakipper/spotter/pkg/worker"
+    "spotter/pkg/providers"
+    "spotter/pkg/worker"
     "testing"
 )
 

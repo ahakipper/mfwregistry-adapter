@@ -3,7 +3,7 @@ package providers
 import (
     "github.com/google/btree"
     "github.com/mohae/deepcopy"
-    sv "github.com/ahakipper/spotter/pkg/beehive/service/v2"
+    sv "spotter/pkg/beehive/service/v2"
     "strings"
     "sync"
 )

@@ -2,8 +2,8 @@ package k8s
 
 import (
 	"fmt"
-	"github.com/ahakipper/spotter/pkg/providers"
-	k8srobot "github.com/ahakipper/spotter/pkg/k8srobot"
+	"spotter/pkg/providers"
+	k8srobot "spotter/pkg/k8srobot"
 	v1 "k8s.io/api/core/v1"
 	"testing"
 )

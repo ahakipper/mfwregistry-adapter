@@ -2,11 +2,11 @@ package worker
 
 import (
     "context"
-    v2 "github.com/ahakipper/spotter/pkg/beehive/service/v2"
-    "github.com/ahakipper/spotter/pkg/log"
-    "github.com/ahakipper/spotter/pkg/metrics"
-    "github.com/ahakipper/spotter/pkg/discoverycenter"
-    "github.com/ahakipper/spotter/tools"
+    v2 "spotter/pkg/beehive/service/v2"
+    "spotter/pkg/log"
+    "spotter/pkg/metrics"
+    "spotter/pkg/discoverycenter"
+    "spotter/tools"
     "sync"
     "time"
 )

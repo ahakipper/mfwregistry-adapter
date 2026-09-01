@@ -6,9 +6,9 @@ import (
     "github.com/coreos/etcd/clientv3"
     "github.com/coreos/etcd/clientv3/concurrency"
     uuid "github.com/satori/go.uuid"
-    "github.com/ahakipper/spotter/config"
-    "github.com/ahakipper/spotter/pkg/log"
-    "github.com/ahakipper/spotter/pkg/notice"
+    "spotter/config"
+    "spotter/pkg/log"
+    "spotter/pkg/notice"
     "sync"
     "time"
 )

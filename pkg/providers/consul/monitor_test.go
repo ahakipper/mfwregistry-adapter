@@ -4,8 +4,8 @@ import (
     "context"
     "github.com/hashicorp/consul/api"
     "github.com/k0kubun/pp"
-    "github.com/ahakipper/spotter/pkg/log"
-    "github.com/ahakipper/spotter/pkg/providers"
+    "spotter/pkg/log"
+    "spotter/pkg/providers"
     "testing"
 )
 

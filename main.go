@@ -14,7 +14,7 @@
 
 package main
 
-import "github.com/ahakipper/spotter/cmd"
+import "spotter/cmd"
 
 func main() {
 	cmd.Execute()
