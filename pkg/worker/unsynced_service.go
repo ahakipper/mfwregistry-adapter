@@ -1,84 +1,105 @@
 package worker
 
 import (
-    "context"
-    v2 "spotter/pkg/beehive/service/v2"
-    "spotter/pkg/log"
-    "spotter/pkg/metrics"
-    "spotter/pkg/discoverycenter"
-    "spotter/tools"
-    "sync"
-    "time"
+	"context"
+	"sync"
+	"time"
+
+	"spotter/internal/ports"
+	v2 "spotter/pkg/beehive/service/v2"
+	"spotter/pkg/discoverycenter"
+	"spotter/tools"
 )
 
 type UnsyncedService struct {
-    ctx    context.Context
-    pusher discoverycenter.Pusher
-    store  map[string]*Event
-    sync.RWMutex
+	ctx     context.Context
+	pusher  discoverycenter.Pusher
+	logger  ports.Logger
+	metrics ports.MetricsRecorder
+	store   map[string]*Event
+	sync.RWMutex
 }
 
-func NewUnsyncedService(ctx context.Context, pusher discoverycenter.Pusher) *UnsyncedService {
-    us := &UnsyncedService{
-        ctx:    ctx,
-        pusher: pusher,
-        store:  make(map[string]*Event),
-    }
-
-    return us
+func NewUnsyncedService(ctx context.Context, pusher discoverycenter.Pusher, logger ports.Logger, metrics ports.MetricsRecorder) *UnsyncedService {
+	if logger == nil {
+		logger = ports.NopLogger{}
+	}
+	if metrics == nil {
+		metrics = nopMetricsRecorder{}
+	}
+	return &UnsyncedService{
+		ctx:     ctx,
+		pusher:  pusher,
+		logger:  logger,
+		metrics: metrics,
+		store:   make(map[string]*Event),
+	}
 }
 
-func (s *UnsyncedService) Add(triggerTime int64, instance []*v2.Instance) {
-    log.Logger.Infof("unsyncService add instance, instance: %v", instance)
-    if instance != nil {
-        if s.store == nil {
-            s.store = make(map[string]*Event)
-        }
-        s.Lock()
-        defer s.Unlock()
-        // just store the latest event, the old event is not needed
-        for _, item := range instance {
-            if old, ok := s.store[item.InstanceId]; ok {
-                oldIns := old.Data[0]
-                if item.Reversion > oldIns.Reversion {
-                    old.Data[0] = item
-                    s.store[item.InstanceId] = old
-                }
-            } else {
-                newIns := make([]*v2.Instance, 1)
-                newIns[0] = item
-                newEvent := &Event{Trigger: triggerTime, Data: newIns, Operate: OperateTypeSync}
-                s.store[item.InstanceId] = newEvent
-            }
-        }
-    }
+func (s *UnsyncedService) Add(triggerTime int64, instances []*v2.Instance) {
+	s.logger.Infof("unsyncService add instance, instance: %v", instances)
+	if instances == nil {
+		return
+	}
+	s.Lock()
+	defer s.Unlock()
+	if s.store == nil {
+		s.store = make(map[string]*Event)
+	}
+	for _, item := range instances {
+		if item == nil {
+			continue
+		}
+		if old, ok := s.store[item.InstanceId]; ok {
+			oldIns := old.Data[0]
+			if item.Reversion > oldIns.Reversion {
+				old.Data[0] = item
+				s.store[item.InstanceId] = old
+			}
+			continue
+		}
+		s.store[item.InstanceId] = &Event{
+			Trigger: triggerTime,
+			Data:    []*v2.Instance{item},
+			Operate: OperateTypeSync,
+		}
+	}
 }
 
-func (us *UnsyncedService) Sync() {
-    ticker := time.NewTicker(5000 * time.Millisecond)
-    for {
-        select {
-        case <-us.ctx.Done():
-            ticker.Stop()
-            return
-        case <-ticker.C:
-            tools.WithRecover(func() {
-                us.Lock()
-                defer us.Unlock()
-                // call with WithRecover is to prevent subsequent function calls from panic
-                if len(us.store) > 0 {
-                    log.Logger.Infof("unsync service worked count :%d \n", len(us.store))
-                }
-                metrics.SyncErrorGauge.WithLabelValues("sync_error_gauge").Set(float64(len(us.store)))
-                for k, v := range us.store {
-                    // if the push is successful, delete the event
-                    if err := us.pusher.Push(v.Trigger, v.Data); err == nil {
-                        delete(us.store, k)
-                    } else {
-                        log.Logger.Errorf("retry trying to push instance failed again, data: %v, err: %s", v.Data, err.Error())
-                    }
-                }
-            })
-        }
-    }
+func (s *UnsyncedService) Len() int {
+	if s == nil {
+		return 0
+	}
+	s.RLock()
+	defer s.RUnlock()
+	return len(s.store)
+}
+
+func (s *UnsyncedService) Sync() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			tools.WithRecover(s.syncOnce)
+		}
+	}
+}
+
+func (s *UnsyncedService) syncOnce() {
+	s.Lock()
+	defer s.Unlock()
+	if len(s.store) > 0 {
+		s.logger.Infof("unsync service worked count :%d \n", len(s.store))
+	}
+	s.metrics.SetSyncErrorQueueDepth(len(s.store))
+	for key, event := range s.store {
+		if err := s.pusher.Push(event.Trigger, event.Data); err == nil {
+			delete(s.store, key)
+		} else {
+			s.logger.Errorf("retry trying to push instance failed again, data: %v, err: %s", event.Data, err.Error())
+		}
+	}
 }

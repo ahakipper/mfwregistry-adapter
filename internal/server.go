@@ -3,8 +3,14 @@ package internal
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
+
 	"github.com/pkg/errors"
+	"golang.org/x/sync/errgroup"
+
 	"spotter/config"
+	"spotter/pkg/discoverycenter"
 	"spotter/pkg/log"
 	"spotter/pkg/metrics"
 	"spotter/pkg/notice"
@@ -13,8 +19,6 @@ import (
 	"spotter/pkg/providers/k8s"
 	worker "spotter/pkg/worker"
 	"spotter/tools"
-	"golang.org/x/sync/errgroup"
-	"sync"
 )
 
 // Distribute Core Server configuration providers provider
@@ -23,6 +27,16 @@ type Server struct {
 	// When server stop need to call this funcs
 	stopProviderFunc context.CancelFunc
 	stopElectorFunc  context.CancelFunc
+	stopOnce         sync.Once
+	lifecycleMu      sync.Mutex
+
+	startupGeneration uint64
+	stopped           bool
+
+	dialDiscovery       func(context.Context) (*discoverycenter.Client, error)
+	waitRetry           func(context.Context, time.Duration) error
+	initializeProviders func(context.Context, worker.Worker) ([]providers.Provider, error)
+	lifecycleLocker     sync.Locker
 
 	// providers providers
 	Providers []providers.Provider
@@ -66,13 +80,16 @@ func NewServer() (*Server, error) {
 	}
 	// init Server
 	return &Server{
-		stopElectorFunc:  ecancel,
-		stopProviderFunc: nil,
-		Providers:        nil,
-		elector:          elector,
-		leaderChCh:       leaderChanges,
-		stop:             make(chan struct{}),
-		promesvr:         metrics.NewPrometheusServer(config.MetricsAddr),
+		stopElectorFunc:     ecancel,
+		stopProviderFunc:    nil,
+		Providers:           nil,
+		elector:             elector,
+		leaderChCh:          leaderChanges,
+		stop:                make(chan struct{}),
+		promesvr:            metrics.NewPrometheusServer(config.MetricsAddr),
+		dialDiscovery:       dialDiscoveryClient,
+		waitRetry:           waitForRetry,
+		initializeProviders: InitializeProviders,
 	}, nil
 }
 
@@ -96,12 +113,15 @@ func (s *Server) Run() {
 		}
 		select {
 		case isLeader := <-s.leaderChCh:
-			// if the leader status is set repeatedly, ignore the change
-			if s.isLeader == isLeader {
+			s.Lock()
+			if s.isLeader == isLeader || s.stopped {
+				s.Unlock()
 				continue
 			}
+			s.isLeader = isLeader
+			s.Unlock()
 			// if current leader is true, but changes to false, then stop the worker
-			if !isLeader && isLeader != s.isLeader {
+			if !isLeader {
 				log.Logger.Warn("i am losing the leader state")
 				// Switch the leader,notice
 				currentIP, err := notice.GetLocalIP()
@@ -109,17 +129,14 @@ func (s *Server) Run() {
 					log.Logger.Errorf("get the current node IP error:%s", err.Error())
 				}
 				notice.Notice("Leader role lost", fmt.Sprintf("Current node: %s lost the Leader role. After stopping the work of the current server, it re-enters the election process", currentIP))
-				s.isLeader = isLeader
 				// if the current node is not the leader, stop the work of the worker (the election work will continue)
 				// s.stopWorkerFunc()
 				s.stopProviders()
 				continue
 			}
 			// if current leader is false, but changes to true, then start the worker again
-			if !s.isLeader && isLeader != s.isLeader {
+			if isLeader {
 				log.Logger.Info("i successfully competed for the leader")
-				// set current sate
-				s.isLeader = isLeader
 				// if is leader again, create worker again
 				go func() {
 					err := s.stopAndStartProviders()
@@ -133,10 +150,14 @@ func (s *Server) Run() {
 
 			continue
 		case <-s.stop:
-			// stop background context
-			s.stopElectorFunc()
-			s.stopProviderFunc()
-			// break the loop
+			s.Lock()
+			s.stopped = true
+			s.isLeader = false
+			s.Unlock()
+			if s.stopElectorFunc != nil {
+				s.stopElectorFunc()
+			}
+			_ = s.stopProviders()
 			isBreak = true
 		}
 	}
@@ -147,75 +168,226 @@ func (s *Server) Run() {
 
 // Stop server and release resources
 func (s *Server) Stop() {
-	s.stop <- struct{}{}
+	s.stopOnce.Do(func() {
+		s.Lock()
+		s.stopped = true
+		s.isLeader = false
+		cancel := s.stopProviderFunc
+		s.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		if s.stop != nil {
+			close(s.stop)
+		}
+	})
 	log.Logger.Info("internal server stop background context")
 }
 
-func (s *Server) stopProviders() (err error) {
-	// stop the previous worker
+func (s *Server) stopProviders() error {
 	log.Logger.Infof("stop providers activly, the stopWorkerFunc will be called and providers will be clear")
-	if s.stopProviderFunc != nil {
-		// Use a protection mechanism to execute stopProviderFunc
-		tools.WithRecover(s.stopProviderFunc)
-		s.stopProviderFunc = nil
-	}
+	s.Lock()
+	s.startupGeneration++
+	cancel := s.stopProviderFunc
+	s.stopProviderFunc = nil
 	s.Providers = nil
+	s.Unlock()
+	if cancel != nil {
+		tools.WithRecover(cancel)
+	}
+	return nil
+}
 
+func (s *Server) startProviders() error {
+	wctx, wcancel := context.WithCancel(context.Background())
+	s.Lock()
+	if !s.isLeader || s.stopped {
+		s.Unlock()
+		wcancel()
+		return context.Canceled
+	}
+	s.startupGeneration++
+	generation := s.startupGeneration
+	s.stopProviderFunc = wcancel
+	s.Unlock()
+
+	client, err := s.dialDiscoveryWithRetry(wctx)
+	if err != nil {
+		s.clearStartup(generation, wcancel)
+		return errors.WithMessage(err, "dial discovery center")
+	}
+	registry, err := discoverycenter.NewDiscoveryCenter(client, log.Logger, noticeNotifier{}, config.DisablePushWorker)
+	if err != nil {
+		wcancel()
+		_ = client.Close()
+		s.clearStartup(generation, nil)
+		return errors.WithMessage(err, "new discovery center")
+	}
+	var cleanupOnce sync.Once
+	cleanup := func() {
+		cleanupOnce.Do(func() {
+			wcancel()
+			if closeErr := registry.Close(); closeErr != nil {
+				log.Logger.Errorf("close discovery center client: %s", closeErr)
+			}
+		})
+	}
+
+	w, err := worker.NewResourceWorker(wctx, registry, log.Logger, globalMetricsRecorder{})
+	if err != nil {
+		cleanup()
+		s.clearStartup(generation, nil)
+		return errors.WithMessage(err, "new resource worker")
+	}
+	initialize := s.initializeProviders
+	if initialize == nil {
+		initialize = InitializeProviders
+	}
+	prs, err := initialize(wctx, w)
+	if err != nil {
+		cleanup()
+		s.clearStartup(generation, nil)
+		return err
+	}
+
+	s.Lock()
+	if s.startupGeneration != generation || !s.isLeader || s.stopped || wctx.Err() != nil {
+		s.Unlock()
+		cleanup()
+		return context.Canceled
+	}
+	s.stopProviderFunc = cleanup
+	s.Providers = prs
+	s.Unlock()
+
+	eg := errgroup.Group{}
+	for _, provider := range prs {
+		provider := provider
+		eg.Go(func() error {
+			defer tools.WithRecover(cleanup)
+			return provider.Run()
+		})
+	}
+	err = eg.Wait()
+	cleanup()
+	s.clearStartup(generation, nil)
 	return err
 }
 
-func (s *Server) startProviders() (err error) {
-	// start new worker
-	// init cancel context
-	wctx, wcancel := context.WithCancel(context.Background())
-	s.stopProviderFunc = wcancel
-	// new error group
-	eg := errgroup.Group{}
-	// create and start the worker, init the unsynced service to sync the instances that pushed failed before
-	w := worker.NewResourceWorker(wctx)
+const (
+	discoveryDialAttempts = 3
+	discoveryDialTimeout  = 5 * time.Second
+	discoveryRetryDelay   = 5 * time.Second
+)
 
-	prs := []providers.Provider{}
-	if prs, err = InitializeProviders(wctx, w); err != nil {
-		return err
+func dialDiscoveryClient(ctx context.Context) (*discoverycenter.Client, error) {
+	dialCtx, cancel := context.WithTimeout(ctx, discoveryDialTimeout)
+	defer cancel()
+	return discoverycenter.Dial(dialCtx, config.GrpcAddr, log.Logger, globalMetricsRecorder{})
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
-	// assign providers
-	s.Providers = prs
+}
 
-	// start and wait
-	for _, p := range s.Providers {
-		p := p
-		eg.Go(func() error {
-			// Note: what we expect is that if one provider exits, all the other providers exit as well
-			defer tools.WithRecover(s.stopProviderFunc)
-			return p.Run()
-		})
-
+func (s *Server) dialDiscoveryWithRetry(ctx context.Context) (*discoverycenter.Client, error) {
+	dial := s.dialDiscovery
+	if dial == nil {
+		dial = dialDiscoveryClient
 	}
-	// wait to stop
-	err = eg.Wait()
+	wait := s.waitRetry
+	if wait == nil {
+		wait = waitForRetry
+	}
+	var err error
+	for attempt := 0; attempt < discoveryDialAttempts; attempt++ {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		var client *discoverycenter.Client
+		client, err = dial(ctx)
+		if err == nil {
+			return client, nil
+		}
+		log.Logger.Errorf("connect fail: %s", err)
+		if attempt == discoveryDialAttempts-1 {
+			break
+		}
+		if waitErr := wait(ctx, discoveryRetryDelay); waitErr != nil {
+			return nil, waitErr
+		}
+	}
+	return nil, err
+}
 
-	return err
+func (s *Server) clearStartup(generation uint64, cancel context.CancelFunc) {
+	s.Lock()
+	if s.startupGeneration == generation {
+		s.stopProviderFunc = nil
+		s.Providers = nil
+	}
+	s.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+type noticeNotifier struct{}
+
+func (noticeNotifier) Notify(title, content string) {
+	notice.Notice(title, content)
+}
+
+type globalMetricsRecorder struct{}
+
+func (globalMetricsRecorder) ObserveSyncOnceDuration(duration time.Duration) {
+	metrics.SyncOnceDurationsHistogram.Observe(float64(duration.Milliseconds()))
+}
+
+func (globalMetricsRecorder) ObserveSyncAllDuration(provider string, duration time.Duration) {
+	switch provider {
+	case providers.ProviderK8s:
+		metrics.SyncAllK8sDurationsHistogram.Observe(float64(duration.Milliseconds()))
+	case providers.ProviderEcs:
+		metrics.SyncAllEcsDurationsHistogram.Observe(float64(duration.Milliseconds()))
+	default:
+		metrics.SyncAllDurationsHistogram.Observe(float64(duration.Milliseconds()))
+	}
+}
+
+func (globalMetricsRecorder) SetSyncErrorQueueDepth(depth int) {
+	metrics.SyncErrorGauge.WithLabelValues("sync_error_gauge").Set(float64(depth))
+}
+
+func (globalMetricsRecorder) MarkSyncOnce() {
+	metrics.SyncOnceGauge.WithLabelValues("sync_once_gauge").Set(1)
 }
 
 // stopAndStartProviders will stop providers and then start new providers
 // If an error occurs when stopping providers, ignore it.
 func (s *Server) stopAndStartProviders() (err error) {
-	log.Logger.Info("stop and start providers begin..")
-	s.Lock()
-	defer func() {
-		s.Unlock()
-		log.Logger.Info("stop and start providers stopped..")
-	}()
-	// stop the previous providers
-	if err = s.stopProviders(); err != nil {
-		// do nothing
+	locker := s.lifecycleLocker
+	if locker == nil {
+		locker = &s.lifecycleMu
 	}
-	// start new providers
+	locker.Lock()
+	defer locker.Unlock()
+	log.Logger.Info("stop and start providers begin..")
+	defer log.Logger.Info("stop and start providers stopped..")
+	if err = s.stopProviders(); err != nil {
+		return err
+	}
 	if err = s.startProviders(); err != nil {
 		err = errors.WithMessage(err, "start providers")
 		log.Logger.Errorf(err.Error())
 	}
-
 	return err
 }
 
