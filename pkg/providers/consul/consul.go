@@ -44,7 +44,7 @@ func NewConsulProvider(ctx context.Context, worker worker.Worker, pushInterval i
         return nil, err
     }
     var monitor Monitor
-    if monitor, err = NewConsulMonitor(cf); err != nil {
+    if monitor, err = NewConsulMonitor(cf, log.Logger, legacyNotifier{}, nil); err != nil {
         return nil, err
     }
     consulProvider := &consul{
