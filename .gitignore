@@ -3,3 +3,6 @@
 logfiles
 .idea
 .DS_Store
+/build
+coverage.out
+coverage.html
