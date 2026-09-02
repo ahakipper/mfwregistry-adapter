@@ -40,8 +40,20 @@ test-fast:
 	go test -count=1 $(TEST_PKGS)
 
 # Black-box tier: behavioral suites selected by test-name prefix.
+# The loop is the empty-match guard from docs/testing.md section 5.1:
+# `go test -list` prints "ok <pkg>" followed by one line per matching test,
+# so a package with zero TestBlackbox* tests yields only the "ok" line and
+# the guard fails the target instead of silently passing.
 test-blackbox:
-	go test -race -count=1 -run '^TestBlackbox' -count=1 $(BLACKBOX_PKGS)
+	@for pkg in $(BLACKBOX_PKGS); do \
+		matched=$$(go test -list '^TestBlackbox' $$pkg 2>/dev/null | grep -c '^TestBlackbox' || true); \
+		if [ "$$matched" -eq 0 ]; then \
+			echo "FAIL test-blackbox: no TestBlackbox* tests matched in $$pkg" >&2; \
+			exit 1; \
+		fi; \
+		echo "test-blackbox: $$matched TestBlackbox* test(s) in $$pkg"; \
+	done
+	go test -race -count=1 -run '^TestBlackbox' $(BLACKBOX_PKGS)
 
 # Smoke tier: build once, then run the offline binary checks.
 SMOKE_BIN := ./build/spotter

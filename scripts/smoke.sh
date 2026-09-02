@@ -129,6 +129,57 @@ run_with_timeout() {
     return "$status"
 }
 
+# Ensure no artifacts leak into the repository during the smoke run. The
+# legacy artifacts are app.log files and logfiles/ directories (written by
+# the legacy logger into its working directory); both names are gitignored,
+# so a plain `git status --porcelain` never reports them. The guard below
+# snapshots the artifact state BEFORE case 1 and runs ONE final check AFTER
+# the last case: any artifact that appears in between fails the run.
+#
+# Two complementary listings:
+#   - smoke_git_artifacts: `git status --porcelain --ignored` with a
+#     pathspec covering app.log anywhere ("**/app.log"), a top-level
+#     logfiles/ directory ("logfiles") and the contents of any nested
+#     logfiles/ directory ("**/logfiles/**"). The plain "logfiles" spec
+#     and the "/**" glob are both required: a bare ":(glob)**/logfiles"
+#     matches nothing, because git collapses ignored directories and
+#     reports the collapsed entry only when its contents are matched.
+#   - smoke_find_artifacts: a find over the tree (excluding .git/ and
+#     build/) for app.log files and logfiles/ directories. git cannot see
+#     EMPTY ignored directories at all, so the find listing is what makes
+#     an empty leaked logfiles/ detectable.
+smoke_git_artifacts() {
+    git -C "$REPO_ROOT" status --porcelain --ignored -- \
+        ':(glob)**/app.log' 'logfiles' ':(glob)**/logfiles/**' 2>/dev/null || true
+}
+
+smoke_find_artifacts() {
+    find "$REPO_ROOT" \
+        \( -path "$REPO_ROOT/.git" -o -path "$REPO_ROOT/build" \) -prune -o \
+        \( -name app.log -o -name logfiles -type d \) -print 2>/dev/null | sort || true
+}
+
+# check_new_artifacts diffs the current artifact listings against the
+# baselines captured before case 1; it reports only artifacts created by
+# this smoke run (pre-existing artifacts are in the baseline).
+check_new_artifacts() {
+    local new_git new_find
+    new_git=$(comm -13 <(printf '%s\n' "$BASELINE_GIT_ARTIFACTS" | sort) \
+                        <(smoke_git_artifacts | sort))
+    new_find=$(comm -13 <(printf '%s\n' "$BASELINE_FIND_ARTIFACTS" | sort) \
+                        <(smoke_find_artifacts))
+    if [ -n "$new_git$new_find" ]; then
+        echo "FAIL: smoke run left new artifacts in the repository:" >&2
+        [ -n "$new_git" ] && printf '     %s\n' $new_git >&2
+        [ -n "$new_find" ] && printf '     %s\n' $new_find >&2
+        FAILED=$((FAILED + 1))
+    fi
+}
+
+# Baseline: captured once, BEFORE any case runs.
+BASELINE_GIT_ARTIFACTS=$(smoke_git_artifacts)
+BASELINE_FIND_ARTIFACTS=$(smoke_find_artifacts)
+
 echo "== smoke: $SPOTTER_BIN =="
 
 # Case 1: root help shows usage, the command list and the adapter command
@@ -165,11 +216,10 @@ run_case 5 0 "spotter adapter with a bad provider reports the etcd dial failure"
     assert_output 5 "spotter adapter with a bad provider reports the etcd dial failure" "connect to etcd server failed" &&
     echo "PASS case 5: spotter adapter with a bad provider reports connect to etcd server failed, exit 0"
 
-# Ensure no artifacts leaked into the repository by the smoke run.
-if [ -n "$(git -C "$REPO_ROOT" status --porcelain -- logfiles app.log 2>/dev/null)" ]; then
-    echo "FAIL: smoke run left artifacts (logfiles/ or app.log) in the repository" >&2
-    FAILED=$((FAILED + 1))
-fi
+# Final artifact check: one check after the last case, diffed against the
+# baseline captured before case 1 (see smoke_git_artifacts /
+# smoke_find_artifacts above).
+check_new_artifacts
 
 if [ "$FAILED" -ne 0 ]; then
     echo "== smoke: $FAILED case(s) failed ==" >&2
