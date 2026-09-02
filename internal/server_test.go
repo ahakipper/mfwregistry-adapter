@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/grpc"
 
+	infraconfig "spotter/internal/infra/config"
 	v2 "spotter/pkg/beehive/service/v2"
 	"spotter/pkg/discoverycenter"
 	"spotter/pkg/providers"
@@ -338,5 +339,257 @@ func TestDialDiscoveryRetriesThreeTimesAtFiveSecondCadence(t *testing.T) {
 		if entry.Message != "connect fail: offline" {
 			t.Fatalf("log %d = %q, want %q", i, entry.Message, "connect fail: offline")
 		}
+	}
+}
+
+// newFakeLeaderServer builds a Server whose Run loop can be driven offline:
+// leader election is disabled (Run promotes the process itself to a fake
+// leader by sending true on leaderChCh, so the nil elector is never
+// consulted), the metrics server binds an ephemeral loopback port, and the
+// discovery dial and provider initialization are injected seams.
+func newFakeLeaderServer(logger *zap.SugaredLogger, initialize func(context.Context) []providers.Provider) *Server {
+	return &Server{
+		cfg: infraconfig.Config{
+			EnableLeaderElection: false,
+			MetricsAddr:          "127.0.0.1:0",
+		},
+		leaderChCh: make(chan bool, 8),
+		stop:       make(chan struct{}),
+		logger:     logger,
+		notifier:   recordingNotifier{},
+		localIP:    func() (string, error) { return "127.0.0.1", nil },
+		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
+			return discoverycenter.NewClient(noopDiscoveryService{}, nil, nil)
+		},
+		initializeProviders: func(ctx context.Context, _ worker.Worker) ([]providers.Provider, error) {
+			return initialize(ctx), nil
+		},
+	}
+}
+
+func TestRunFakeLeaderStartsProviders(t *testing.T) {
+	logger := zap.NewNop().Sugar()
+	providerStarted := make(chan struct{})
+	providerStopped := make(chan struct{})
+	var initializeMu sync.Mutex
+	initializeCalls := 0
+	s := newFakeLeaderServer(logger, func(ctx context.Context) []providers.Provider {
+		initializeMu.Lock()
+		initializeCalls++
+		initializeMu.Unlock()
+		return []providers.Provider{&blockingProvider{
+			ctx:     ctx,
+			started: providerStarted,
+			stopped: providerStopped,
+		}}
+	})
+
+	runDone := make(chan struct{})
+	go func() {
+		s.Run()
+		close(runDone)
+	}()
+
+	// The fake-leader branch of Run sends true itself; the loop must start
+	// the providers through the injected initializeProviders seam.
+	select {
+	case <-providerStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fake leader promotion did not start the providers")
+	}
+
+	// Losing the leadership must stop the running providers.
+	s.leaderChCh <- false
+	select {
+	case <-providerStopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("leader loss did not cancel the running provider")
+	}
+
+	s.Stop()
+	select {
+	case <-runDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop() did not terminate the Run loop")
+	}
+
+	initializeMu.Lock()
+	defer initializeMu.Unlock()
+	if initializeCalls != 1 {
+		t.Fatalf("InitializeProviders calls = %d, want 1", initializeCalls)
+	}
+	s.Lock()
+	providers := s.Providers
+	s.Unlock()
+	if providers != nil {
+		t.Fatalf("Providers = %#v, want nil after stop", providers)
+	}
+}
+
+func TestRunIgnoresDuplicateLeaderState(t *testing.T) {
+	logger := zap.NewNop().Sugar()
+	firstStarted := make(chan struct{})
+	firstStopped := make(chan struct{})
+	secondStarted := make(chan struct{})
+	secondStopped := make(chan struct{})
+	var initializeMu sync.Mutex
+	initializeCalls := 0
+	s := newFakeLeaderServer(logger, func(ctx context.Context) []providers.Provider {
+		initializeMu.Lock()
+		initializeCalls++
+		call := initializeCalls
+		initializeMu.Unlock()
+		if call == 1 {
+			return []providers.Provider{&blockingProvider{
+				ctx:     ctx,
+				started: firstStarted,
+				stopped: firstStopped,
+			}}
+		}
+		return []providers.Provider{&blockingProvider{
+			ctx:     ctx,
+			started: secondStarted,
+			stopped: secondStopped,
+		}}
+	})
+
+	runDone := make(chan struct{})
+	go func() {
+		s.Run()
+		close(runDone)
+	}()
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fake leader promotion did not start the first provider generation")
+	}
+
+	// Duplicate leader-gain notifications carry no state change: the loop
+	// must ignore them instead of restarting the providers.
+	s.leaderChCh <- true
+	s.leaderChCh <- true
+	time.Sleep(300 * time.Millisecond)
+	initializeMu.Lock()
+	calls := initializeCalls
+	initializeMu.Unlock()
+	if calls != 1 {
+		t.Fatalf("InitializeProviders calls after duplicate leader gains = %d, want 1", calls)
+	}
+	select {
+	case <-firstStopped:
+		t.Fatal("duplicate leader gain stopped the running provider")
+	default:
+	}
+
+	// A real state change still works after the duplicates: leader loss
+	// stops the first provider generation.
+	s.leaderChCh <- false
+	select {
+	case <-firstStopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("leader loss did not cancel the first provider generation")
+	}
+
+	// A duplicate leader-loss is ignored as well, and the loop keeps
+	// processing genuine transitions afterwards: a new gain starts a second
+	// provider generation.
+	s.leaderChCh <- false
+	s.leaderChCh <- true
+	select {
+	case <-secondStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("leader regain did not start the second provider generation")
+	}
+
+	s.Stop()
+	select {
+	case <-secondStopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop() did not cancel the second provider generation")
+	}
+	select {
+	case <-runDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop() did not terminate the Run loop")
+	}
+
+	initializeMu.Lock()
+	defer initializeMu.Unlock()
+	if initializeCalls != 2 {
+		t.Fatalf("InitializeProviders calls = %d, want 2", initializeCalls)
+	}
+	s.Lock()
+	providers := s.Providers
+	s.Unlock()
+	if providers != nil {
+		t.Fatalf("Providers = %#v, want nil after stop", providers)
+	}
+}
+
+func TestRunStopAfterProvidersInstalledCancelsProviders(t *testing.T) {
+	logger := zap.NewNop().Sugar()
+	providerStarted := make(chan struct{})
+	providerStopped := make(chan struct{})
+	s := newFakeLeaderServer(logger, func(ctx context.Context) []providers.Provider {
+		return []providers.Provider{&blockingProvider{
+			ctx:     ctx,
+			started: providerStarted,
+			stopped: providerStopped,
+		}}
+	})
+
+	runDone := make(chan struct{})
+	go func() {
+		s.Run()
+		close(runDone)
+	}()
+	select {
+	case <-providerStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fake leader promotion did not start the providers")
+	}
+
+	// Plain server shutdown (no leader loss) must cancel the running
+	// provider and terminate the Run loop. The existing
+	// TestStopCancelsDialDuringProviderStartup covers Stop during the dial
+	// phase; this exercises Stop after the providers are installed.
+	s.Stop()
+	select {
+	case <-providerStopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop() did not cancel the running provider")
+	}
+	select {
+	case <-runDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop() did not terminate the Run loop")
+	}
+
+	// The metrics server started by Run must have been stopped on the way
+	// out of the loop.
+	s.Lock()
+	stopMetrics := s.stopMetrics
+	s.Unlock()
+	if stopMetrics != nil {
+		t.Fatal("stopMetrics still set after Run exited, want the metrics server stopped")
+	}
+
+	// Stop is idempotent: a second call must neither block nor panic.
+	stopReturned := make(chan struct{})
+	go func() {
+		s.Stop()
+		close(stopReturned)
+	}()
+	select {
+	case <-stopReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second Stop() blocked")
+	}
+
+	s.Lock()
+	providers := s.Providers
+	s.Unlock()
+	if providers != nil {
+		t.Fatalf("Providers = %#v, want nil after stop", providers)
 	}
 }
