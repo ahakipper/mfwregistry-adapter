@@ -157,6 +157,7 @@ func TestLoadDefaults(t *testing.T) {
 
 	want := Config{
 		Endpoints:            wantEndpoints,
+		Env:                  "test",
 		LogFilePath:          "./logfiles/",
 		LogSize:              100,
 		LogLevel:             -1,
@@ -208,6 +209,7 @@ func TestLoadFlagValues(t *testing.T) {
 
 	want := Config{
 		Endpoints:            wantEndpoints,
+		Env:                  "product",
 		LogFilePath:          "/var/log/spotter",
 		LogSize:              5,
 		LogLevel:             1,
@@ -357,6 +359,8 @@ func TestLoadLeaderElectionTriState(t *testing.T) {
 	}
 }
 
+// TestLoadInvalidEnv verifies unsupported environments fail with the exact
+// legacy error.
 func TestLoadInvalidEnv(t *testing.T) {
 	tests := []struct {
 		name string
@@ -384,6 +388,124 @@ func TestLoadInvalidEnv(t *testing.T) {
 	}
 }
 
+// TestLoadTriStateExplicitZero verifies the tri-state pointer fields honor
+// explicit zero values that the plain int fields cannot express: an
+// explicit --log-level=0 (info) must not be replaced by the -1 default,
+// and an explicit --push-interval=0 must not become 21600.
+func TestLoadTriStateExplicitZero(t *testing.T) {
+	flags := Flags{
+		Providers:       []string{"k8s"},
+		LogLevelPtr:     intPtr(0),
+		PushIntervalPtr: intPtr(0),
+	}
+	got, err := Load("test", flags)
+	if err != nil {
+		t.Fatalf("Load(\"test\", ...) returned error: %v", err)
+	}
+	if got.LogLevel != 0 {
+		t.Errorf("LogLevel = %d, want 0 (explicit zero honored)", got.LogLevel)
+	}
+	if got.PushAllInterval != 0 {
+		t.Errorf("PushAllInterval = %d, want 0 (explicit zero honored)", got.PushAllInterval)
+	}
+}
+
+// TestLoadTriStateExplicitFalse verifies the tri-state LogToStdPtr field
+// honors an explicit --log-to-std=false instead of coercing it back to the
+// default true.
+func TestLoadTriStateExplicitFalse(t *testing.T) {
+	got, err := Load("test", Flags{
+		Providers:   []string{"k8s"},
+		LogToStdPtr: boolPtr(false),
+	})
+	if err != nil {
+		t.Fatalf("Load(\"test\", ...) returned error: %v", err)
+	}
+	if got.LogToStd {
+		t.Errorf("LogToStd = true, want false (explicit false honored)")
+	}
+}
+
+// TestLoadTriStateExplicitValues verifies non-zero tri-state values are
+// used verbatim for every mapped flag.
+func TestLoadTriStateExplicitValues(t *testing.T) {
+	flags := Flags{
+		Providers:       []string{"k8s"},
+		LogSizePtr:      intPtr(5),
+		LogBackupsPtr:   intPtr(3),
+		LogAgePtr:       intPtr(14),
+		LogToStdPtr:     boolPtr(true),
+		PushIntervalPtr: intPtr(60),
+	}
+	got, err := Load("test", flags)
+	if err != nil {
+		t.Fatalf("Load(\"test\", ...) returned error: %v", err)
+	}
+	if got.LogSize != 5 {
+		t.Errorf("LogSize = %d, want 5", got.LogSize)
+	}
+	if got.LogBackups != 3 {
+		t.Errorf("LogBackups = %d, want 3", got.LogBackups)
+	}
+	if got.LogAge != 14 {
+		t.Errorf("LogAge = %d, want 14", got.LogAge)
+	}
+	if !got.LogToStd {
+		t.Errorf("LogToStd = false, want true")
+	}
+	if got.PushAllInterval != 60 {
+		t.Errorf("PushAllInterval = %d, want 60", got.PushAllInterval)
+	}
+}
+
+// TestLoadTriStateNilKeepsDefaults verifies nil tri-state pointers leave
+// the plain-field/default resolution untouched (defaults still applied
+// when no flag value is present).
+func TestLoadTriStateNilKeepsDefaults(t *testing.T) {
+	got, err := Load("test", Flags{Providers: []string{"k8s"}})
+	if err != nil {
+		t.Fatalf("Load(\"test\", ...) returned error: %v", err)
+	}
+	if got.LogSize != defaultLogSize {
+		t.Errorf("LogSize = %d, want default %d", got.LogSize, defaultLogSize)
+	}
+	if got.LogLevel != defaultLogLevel {
+		t.Errorf("LogLevel = %d, want default %d", got.LogLevel, defaultLogLevel)
+	}
+	if got.LogBackups != defaultLogBackups {
+		t.Errorf("LogBackups = %d, want default %d", got.LogBackups, defaultLogBackups)
+	}
+	if got.LogAge != defaultLogAge {
+		t.Errorf("LogAge = %d, want default %d", got.LogAge, defaultLogAge)
+	}
+	if !got.LogToStd {
+		t.Errorf("LogToStd = false, want default true")
+	}
+	if got.PushAllInterval != defaultPushAllInterval {
+		t.Errorf("PushAllInterval = %d, want default %d", got.PushAllInterval, defaultPushAllInterval)
+	}
+}
+
+// TestLoadTriStateOverridesPlainField verifies a set tri-state pointer
+// wins over a value supplied through the plain field.
+func TestLoadTriStateOverridesPlainField(t *testing.T) {
+	got, err := Load("test", Flags{
+		Providers:   []string{"k8s"},
+		LogLevel:    1,
+		LogLevelPtr: intPtr(0),
+	})
+	if err != nil {
+		t.Fatalf("Load(\"test\", ...) returned error: %v", err)
+	}
+	if got.LogLevel != 0 {
+		t.Errorf("LogLevel = %d, want 0 (tri-state field wins)", got.LogLevel)
+	}
+}
+
+// intPtr boxes an int value for the tri-state Flags fields.
+// (boolPtr is already declared at the top of this file.)
+func intPtr(v int) *int { return &v }
+
 func TestLoadCaseInsensitiveEnv(t *testing.T) {
 	tests := []struct {
 		env        string
@@ -405,5 +527,27 @@ func TestLoadCaseInsensitiveEnv(t *testing.T) {
 				t.Errorf("Load(%q, ...).Endpoints = %+v, want %+v", tt.env, got.Endpoints, tt.wantPreset)
 			}
 		})
+	}
+}
+
+func TestLoadPropagatesEnvVerbatim(t *testing.T) {
+	// The env name selects the preset case-insensitively but is carried
+	// through Config.Env verbatim so notice wiring sees the original value.
+	got, err := Load("Product", Flags{Providers: []string{"k8s"}})
+	if err != nil {
+		t.Fatalf("Load(\"Product\", ...) returned error: %v", err)
+	}
+	if got.Env != "Product" {
+		t.Errorf("Env = %q, want %q", got.Env, "Product")
+	}
+}
+
+func TestLoadErrorKeepsEnvEmpty(t *testing.T) {
+	got, err := Load("bogus", Flags{Providers: []string{"k8s"}})
+	if err == nil {
+		t.Fatal("Load(\"bogus\", ...) succeeded, want error")
+	}
+	if got.Env != "" {
+		t.Errorf("Env = %q, want empty on error", got.Env)
 	}
 }

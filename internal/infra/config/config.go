@@ -113,9 +113,27 @@ func PresetFor(env string) (Endpoints, error) {
 
 // Flags carries the raw command-line flag values.
 //
-// The zero value means "flag not set"; Load fills unset fields with
-// defaults. The field set mirrors the flags registered by cmd/root.go and
-// cmd/adapter.go.
+// The field set mirrors the flags registered by cmd/root.go and
+// cmd/adapter.go. Two flag styles are supported:
+//
+//   - Plain fields (LogSize, LogLevel, ...): the zero value means "flag not
+//     set" and Load fills in the default. An explicit zero value (for
+//     example --log-level=0) cannot be expressed through these fields.
+//   - Pointer fields (LogLevelPtr, LogSizePtr, ..., LogToStdPtr): tri-state
+//     values that distinguish "flag not set" (nil pointer -> default) from
+//     an explicit value, including explicit zero and explicit false. cmd
+//     sets them from cobra's Flags().Changed so --log-level=0,
+//     --log-to-std=false and --push-interval=0 are honored verbatim,
+//     exactly like the legacy flag reader.
+//
+// String fields (LogFilePath, GrpcAddr, MetricsAddr, ...) follow the plain
+// style: an empty string means "unset" and falls back to the default, so
+// --metrics-addr= (explicit empty) resolves to the default. This matches
+// the legacy cmd semantics of the new API surface; the pre-composition code
+// assigned the raw (possibly empty) flag value directly into the global.
+//
+// When both the plain and the pointer field of the same flag are set, the
+// pointer field wins.
 type Flags struct {
 	// LogFilePath is the log file path flag.
 	LogFilePath string
@@ -152,6 +170,18 @@ type Flags struct {
 	LeaderElection *bool
 	// MetricsAddr is the Prometheus metrics address.
 	MetricsAddr string
+
+	// Tri-state flag values, set by callers that can distinguish an unset
+	// flag from an explicit zero/false value (for example cobra's
+	// Flags().Changed). nil means "flag not set" and Load applies the
+	// default; a non-nil pointer value is used verbatim, including 0 and
+	// false. Each pointer field overrides its plain counterpart above.
+	LogSizePtr      *int
+	LogLevelPtr     *int
+	LogBackupsPtr   *int
+	LogAgePtr       *int
+	LogToStdPtr     *bool
+	PushIntervalPtr *int
 }
 
 // Config is the fully resolved runtime configuration.
@@ -160,6 +190,11 @@ type Flags struct {
 // its slices as read-only and must not mutate them after Load returns.
 type Config struct {
 	Endpoints
+
+	// Env is the environment name passed to Load ("test", "dev" or
+	// "product"), carried along so downstream components (for example the
+	// notice adapter) need no separate environment wiring.
+	Env string
 
 	// Log settings.
 	LogFilePath string
@@ -211,7 +246,9 @@ const (
 
 // Load resolves the runtime configuration for env from the flag values.
 //
-// env is matched case-insensitively against "test", "dev" and "product".
+// env is matched case-insensitively against "test", "dev" and "product";
+// the verbatim env name is exposed as Config.Env. Flag fields left at their
+// zero value fall back to the defaults above.
 // Flag fields left at their zero value fall back to the defaults above.
 // The providers flag list overrides the preset provider list; both lists
 // are trimmed of surrounding whitespace and blank entries are dropped.
@@ -233,7 +270,12 @@ func Load(env string, flags Flags) (Config, error) {
 
 	cfg := Config{Endpoints: endpoints}
 
-	// Log settings.
+	// Environment name, propagated verbatim for components that need it.
+	cfg.Env = env
+
+	// Log settings. The pointer (tri-state) fields win over the plain
+	// fields when set, so explicit zero values are honored; nil pointers
+	// keep the plain-field/default resolution.
 	cfg.LogFilePath = strOrDefault(flags.LogFilePath, defaultLogFilePath)
 	cfg.LogSize = intOrDefault(flags.LogSize, defaultLogSize)
 	cfg.LogLevel = intOrDefault(flags.LogLevel, defaultLogLevel)
@@ -241,16 +283,34 @@ func Load(env string, flags Flags) (Config, error) {
 	cfg.LogAge = intOrDefault(flags.LogAge, defaultLogAge)
 	cfg.LogEncoding = strOrDefault(flags.LogEncoding, defaultLogEncoding)
 	// LogToStd is a plain bool, so the zero value (false) is treated as
-	// "not set" and defaults to true, matching the legacy flag default.
-	// An explicit false cannot be expressed through this field.
+	// "not set" and defaults to true, matching the legacy flag default;
+	// the tri-state LogToStdPtr field must be used to express an explicit
+	// false.
+	cfg.LogToStd = defaultLogToStd
 	if flags.LogToStd {
 		cfg.LogToStd = true
-	} else {
-		cfg.LogToStd = defaultLogToStd
+	}
+	if flags.LogSizePtr != nil {
+		cfg.LogSize = *flags.LogSizePtr
+	}
+	if flags.LogLevelPtr != nil {
+		cfg.LogLevel = *flags.LogLevelPtr
+	}
+	if flags.LogBackupsPtr != nil {
+		cfg.LogBackups = *flags.LogBackupsPtr
+	}
+	if flags.LogAgePtr != nil {
+		cfg.LogAge = *flags.LogAgePtr
+	}
+	if flags.LogToStdPtr != nil {
+		cfg.LogToStd = *flags.LogToStdPtr
 	}
 
 	// Push settings.
 	cfg.PushAllInterval = intOrDefault(flags.PushAllInterval, defaultPushAllInterval)
+	if flags.PushIntervalPtr != nil {
+		cfg.PushAllInterval = *flags.PushIntervalPtr
+	}
 
 	// gRPC and worker settings.
 	cfg.GrpcAddr = strOrDefault(flags.GrpcAddr, defaultGrpcAddr)

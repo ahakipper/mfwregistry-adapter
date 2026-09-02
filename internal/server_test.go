@@ -15,13 +15,18 @@ import (
 
 	v2 "spotter/pkg/beehive/service/v2"
 	"spotter/pkg/discoverycenter"
-	"spotter/pkg/log"
 	"spotter/pkg/providers"
 	"spotter/pkg/worker"
 )
 
+// recordingNotifier is a no-op notifier used by the server tests; the
+// lifecycle paths under test must never block on notification.
+type recordingNotifier struct{}
+
+func (recordingNotifier) Notify(title, content string) {}
+
 func TestStartProvidersCancelsDialWhenLeadershipIsLost(t *testing.T) {
-	log.Logger = zap.NewNop().Sugar()
+	logger := zap.NewNop().Sugar()
 	dialStarted := make(chan struct{})
 	dialCanceled := make(chan struct{})
 	var startedOnce sync.Once
@@ -30,6 +35,9 @@ func TestStartProvidersCancelsDialWhenLeadershipIsLost(t *testing.T) {
 	s := &Server{
 		isLeader: true,
 		stop:     make(chan struct{}),
+		logger:   logger,
+		notifier: recordingNotifier{},
+		localIP:  func() (string, error) { return "", nil },
 		dialDiscovery: func(ctx context.Context) (*discoverycenter.Client, error) {
 			startedOnce.Do(func() { close(dialStarted) })
 			<-ctx.Done()
@@ -73,7 +81,7 @@ func TestStartProvidersCancelsDialWhenLeadershipIsLost(t *testing.T) {
 }
 
 func TestStopCancelsDialDuringProviderStartup(t *testing.T) {
-	log.Logger = zap.NewNop().Sugar()
+	logger := zap.NewNop().Sugar()
 	dialStarted := make(chan struct{})
 	dialCanceled := make(chan struct{})
 	releaseDial := make(chan struct{})
@@ -82,6 +90,9 @@ func TestStopCancelsDialDuringProviderStartup(t *testing.T) {
 	s := &Server{
 		isLeader: true,
 		stop:     make(chan struct{}, 1),
+		logger:   logger,
+		notifier: recordingNotifier{},
+		localIP:  func() (string, error) { return "", nil },
 		dialDiscovery: func(ctx context.Context) (*discoverycenter.Client, error) {
 			startedOnce.Do(func() { close(dialStarted) })
 			select {
@@ -125,7 +136,7 @@ func TestStopCancelsDialDuringProviderStartup(t *testing.T) {
 }
 
 func TestStopAndStartProvidersSerializesConcurrentGenerations(t *testing.T) {
-	log.Logger = zap.NewNop().Sugar()
+	logger := zap.NewNop().Sugar()
 	firstInitializeStarted := make(chan struct{})
 	releaseFirstInitialize := make(chan struct{})
 	secondAttempted := make(chan struct{})
@@ -141,6 +152,9 @@ func TestStopAndStartProvidersSerializesConcurrentGenerations(t *testing.T) {
 	s := &Server{
 		isLeader:        true,
 		stop:            make(chan struct{}),
+		logger:          logger,
+		notifier:        recordingNotifier{},
+		localIP:         func() (string, error) { return "", nil },
 		lifecycleLocker: locker,
 		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
 			return discoverycenter.NewClient(noopDiscoveryService{}, nil, nil)
@@ -286,10 +300,13 @@ func (*blockingProvider) GetAll() []*v2.Instance { return nil }
 
 func TestDialDiscoveryRetriesThreeTimesAtFiveSecondCadence(t *testing.T) {
 	core, observed := observer.New(zapcore.DebugLevel)
-	log.Logger = zap.New(core).Sugar()
+	logger := zap.New(core).Sugar()
 	attempts := 0
 	var waits []time.Duration
 	s := &Server{
+		logger:   logger,
+		notifier: recordingNotifier{},
+		localIP:  func() (string, error) { return "", nil },
 		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
 			attempts++
 			return nil, errors.New("offline")
