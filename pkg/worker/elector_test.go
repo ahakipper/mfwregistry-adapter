@@ -6,8 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coreos/etcd/clientv3"
-
 	"spotter/pkg/distribute/election"
 )
 
@@ -52,8 +50,6 @@ func (f *fakeCandidate) Campaign(timeout time.Duration) error {
 
 func (f *fakeCandidate) IsLeader() (bool, error) { return false, nil }
 
-func (f *fakeCandidate) Resign() error { return nil }
-
 func (f *fakeCandidate) AddObserveCallFunc(fn election.LeaderChangeFunc) {
 	if fn == nil {
 		return
@@ -62,10 +58,6 @@ func (f *fakeCandidate) AddObserveCallFunc(fn election.LeaderChangeFunc) {
 	f.callbacks = append(f.callbacks, fn)
 	f.mu.Unlock()
 }
-
-func (f *fakeCandidate) Tag() string { return "fake-candidate-tag" }
-
-func (f *fakeCandidate) LeaseID() clientv3.LeaseID { return 0 }
 
 func (f *fakeCandidate) Wait() {
 	f.mu.Lock()

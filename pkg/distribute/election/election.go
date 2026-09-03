@@ -3,9 +3,9 @@ package election
 import (
 	"context"
 	"errors"
-	"github.com/coreos/etcd/clientv3"
-	"github.com/coreos/etcd/clientv3/concurrency"
 	uuid "github.com/satori/go.uuid"
+	"go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/client/v3/concurrency"
 	"spotter/config"
 	"spotter/pkg/log"
 	"spotter/pkg/notice"
@@ -26,20 +26,11 @@ type Candidate interface {
 	// IsLeader judge this candidate whether it is a leader
 	IsLeader() (bool, error)
 
-	// Resign lets a leader start a new election.
-	Resign() error
-
 	// AddObserveCallFunc add a callback func for leader changes
 	AddObserveCallFunc(f LeaderChangeFunc)
 
-	// Tag represent a tag for this node participate in the election campaign
-	Tag() string
-
 	// Wait will
 	Wait()
-
-	// LeaseID return the lease id for this candidate need to keepalive
-	LeaseID() clientv3.LeaseID
 }
 
 // node implement Candidate
@@ -56,8 +47,6 @@ type candidate struct {
 	tag string
 
 	client *clientv3.Client
-
-	leaseID clientv3.LeaseID
 
 	callBackFuncs []LeaderChangeFunc
 
@@ -93,8 +82,7 @@ func NewCandidate(ctx context.Context, etcdclient *clientv3.Client, campaignKey 
 		// log
 		return nil, err
 	}
-	leaseID := resp.ID
-	session, err := concurrency.NewSession(cd.client, concurrency.WithLease(leaseID))
+	session, err := concurrency.NewSession(cd.client, concurrency.WithLease(resp.ID))
 	if err != nil {
 		// log
 		return nil, err
@@ -119,8 +107,7 @@ func (c *candidate) NewElectionSession(timeout time.Duration) {
 		// log
 		return
 	}
-	leaseID := resp.ID
-	session, err := concurrency.NewSession(c.client, concurrency.WithLease(leaseID), concurrency.WithTTL(10))
+	session, err := concurrency.NewSession(c.client, concurrency.WithLease(resp.ID), concurrency.WithTTL(10))
 	if err != nil {
 		// log
 		return
@@ -187,27 +174,10 @@ func (c *candidate) IsLeader() (bool, error) {
 	return string(resp.Kvs[0].Value) == c.tag, nil
 }
 
-func (c *candidate) Resign() (err error) {
-	if err = c.election.Resign(c.ctx); err != nil {
-		return
-	}
-	log.Logger.Info("leader resign")
-
-	return
-}
-
 func (c *candidate) AddObserveCallFunc(callback LeaderChangeFunc) {
 	if callback != nil {
 		c.callBackFuncs = append(c.callBackFuncs, callback)
 	}
-}
-
-func (c *candidate) Tag() string {
-	return c.tag
-}
-
-func (c *candidate) LeaseID() clientv3.LeaseID {
-	return c.leaseID
 }
 
 func (c *candidate) Close() {

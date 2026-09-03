@@ -3,17 +3,15 @@ package etcd
 import (
 	"context"
 	"errors"
-	"github.com/coreos/etcd/clientv3"
-	"github.com/coreos/etcd/pkg/transport"
-	"spotter/config"
+	"go.etcd.io/etcd/client/pkg/v3/transport"
+	"go.etcd.io/etcd/client/v3"
 	"time"
 )
 
 // NewClientWithEndpoints creates an etcd client from explicit endpoints and
-// TLS file paths. It mirrors NewEtcdClient (including the 5 second
-// member-list connectivity probe) but takes its inputs as parameters
-// instead of reading the config package globals. Empty TLS file values
-// disable TLS, exactly like NewEtcdClient.
+// TLS file paths. It probes connectivity with a 5 second member-list
+// deadline and returns an error if the cluster is unreachable. Empty TLS
+// file values disable TLS.
 func NewClientWithEndpoints(endpoints []string, certFile, keyFile, caFile string) (client *clientv3.Client, err error) {
 	cfg := clientv3.Config{
 		Endpoints: endpoints,
@@ -21,9 +19,9 @@ func NewClientWithEndpoints(endpoints []string, certFile, keyFile, caFile string
 
 	if caFile != "" && keyFile != "" && certFile != "" {
 		tlsInfo := transport.TLSInfo{
-			CertFile: certFile,
-			KeyFile:  keyFile,
-			CAFile:   caFile,
+			CertFile:      certFile,
+			KeyFile:       keyFile,
+			TrustedCAFile: caFile,
 		}
 		tlsConfig, err := tlsInfo.ClientConfig()
 		if err != nil {
@@ -42,11 +40,4 @@ func NewClientWithEndpoints(endpoints []string, certFile, keyFile, caFile string
 	}
 
 	return
-}
-
-// NewEtcdClient creates an etcd client from the config package globals. It
-// is the legacy wrapper kept for callers that are not wired through the
-// composition root yet.
-func NewEtcdClient() (client *clientv3.Client, err error) {
-	return NewClientWithEndpoints(config.EtcdEndpoints, config.CertFile, config.KeyFile, config.CAFile)
 }
