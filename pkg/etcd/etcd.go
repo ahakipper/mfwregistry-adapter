@@ -32,11 +32,15 @@ func NewClientWithEndpoints(endpoints []string, certFile, keyFile, caFile string
 	client, err = clientv3.New(cfg)
 	if err != nil {
 		return nil, err
-	} else {
-		ctx, _ := context.WithDeadline(context.Background(), time.Now().Add(5*time.Second))
-		if _, er := client.Cluster.MemberList(ctx); er != nil {
-			return nil, errors.New("connect to etcd server failed: " + er.Error())
-		}
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(5*time.Second))
+	defer cancel()
+	if _, er := client.Cluster.MemberList(ctx); er != nil {
+		// clientv3.New dials lazily, so the failed probe leaves a live
+		// client behind: close it instead of leaking its connection and
+		// goroutines on every failed construction (F4).
+		_ = client.Close()
+		return nil, errors.New("connect to etcd server failed: " + er.Error())
 	}
 
 	return

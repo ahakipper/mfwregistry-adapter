@@ -2,10 +2,12 @@ package worker
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
 
+	"go.etcd.io/etcd/client/v3"
 	"spotter/pkg/distribute/election"
 )
 
@@ -28,6 +30,11 @@ type fakeCandidate struct {
 	waitCalls     int
 	waitStarted   chan struct{}
 	waitReleases  []chan struct{}
+	// ctxDone optionally mirrors the elector context's Done channel: when
+	// it fires, Wait returns, mimicking the real candidate whose Wait loop
+	// exits when the context is canceled. A nil channel parks forever,
+	// which keeps the legacy fake behavior unchanged.
+	ctxDone <-chan struct{}
 }
 
 // compile-time assertion: the fake must satisfy the exact Candidate seam.
@@ -72,7 +79,10 @@ func (f *fakeCandidate) Wait() {
 	}
 	f.mu.Unlock()
 	f.waitStarted <- struct{}{}
-	<-release
+	select {
+	case <-release:
+	case <-f.ctxDone:
+	}
 }
 
 // notify synchronously invokes every registered leader-change callback,
@@ -259,4 +269,279 @@ func TestElectorStopMarksStopped(t *testing.T) {
 		t.Fatalf("leader channel received %v after Stop, want no send", got)
 	case <-time.After(200 * time.Millisecond):
 	}
+}
+
+// --- F1 regression: stopped-flag data race ---------------------------------
+
+// TestStopConcurrentWithCallbackDispatch verifies the F1 regression: the
+// leader-change callback reads the stopped flag from dispatch goroutines
+// (the real candidate fires callbacks via `go call(isLeader)`) while Stop
+// writes it. Under the race detector this must stay clean, which requires
+// every access to the stopped flag to be synchronized.
+func TestStopConcurrentWithCallbackDispatch(t *testing.T) {
+	fake := newFakeCandidate()
+	leaderCh := make(chan bool, 128)
+	w := &ElectWorker{
+		ctx:       context.Background(),
+		candidate: fake,
+		logger:    nopElectorLogger{},
+	}
+	w.setLeaderChangeNotifyCall(leaderCh)
+
+	// Keep draining so callback sends never block during the hammer.
+	drainDone := make(chan struct{})
+	go func() {
+		for range leaderCh {
+		}
+		close(drainDone)
+	}()
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	// Callback dispatchers: hammer the notify path the way the real
+	// candidate's Wait loop does (each call lands in a goroutine that
+	// reads the stopped flag).
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					fake.notify(true)
+				}
+			}
+		}()
+	}
+	// Stop writer: repeatedly writes the stopped flag.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				w.Stop()
+			}
+		}
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+	close(leaderCh)
+	select {
+	case <-drainDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("leader channel drainer did not finish")
+	}
+}
+
+// --- F2 regression: hot-spin watcher + per-iteration goroutine leak -------
+
+// TestSyncStoppedStateReturnsAfterContextCancel verifies the F2 regression:
+// syncStoppedState is a one-shot watcher that must return after the owner
+// cancels the context (the legacy single-case select span forever at 100%
+// CPU once the context was canceled) and must flip the elector into the
+// stopped state so leader-change forwarding is suppressed.
+func TestSyncStoppedStateReturnsAfterContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fake := newFakeCandidate()
+	leaderCh := make(chan bool, 1)
+	w := &ElectWorker{
+		ctx:       ctx,
+		candidate: fake,
+		logger:    nopElectorLogger{},
+	}
+	w.setLeaderChangeNotifyCall(leaderCh)
+
+	done := make(chan struct{})
+	go func() {
+		w.syncStoppedState()
+		close(done)
+	}()
+	time.Sleep(100 * time.Millisecond) // let the watcher park on ctx.Done
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("syncStoppedState did not return after the context was canceled")
+	}
+
+	// After the watcher fired, forwarding must be suppressed.
+	fake.notify(true)
+	select {
+	case got := <-leaderCh:
+		t.Fatalf("leader channel received %v after context cancel, want no send", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestElectWaitExitsAfterContextCancel verifies the F2 regression: once the
+// owner cancels the context, the real candidate's Wait returns immediately,
+// so ElectWait must exit instead of re-campaigning in a tight loop forever.
+func TestElectWaitExitsAfterContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fake := newFakeCandidate()
+	fake.ctxDone = ctx.Done()
+	w := &ElectWorker{
+		ctx:       ctx,
+		candidate: fake,
+		logger:    nopElectorLogger{},
+	}
+	w.setLeaderChangeNotifyCall(make(chan bool, 1))
+
+	baseline := goroutineMin(100 * time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		w.ElectWait()
+		close(done)
+	}()
+	select {
+	case <-fake.waitStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ElectWait did not reach candidate.Wait()")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ElectWait did not exit after the context was canceled")
+	}
+
+	// Post-cancel iterations must not accumulate goroutines: both the
+	// elector goroutine and its stopped-state watcher are gone.
+	assertGoroutinesAtMost(t, baseline+1, 3*time.Second)
+}
+
+// TestElectWaitDoesNotAccumulateGoroutines verifies the F2 regression:
+// ElectWait must not spawn a permanent goroutine per loop iteration (the
+// legacy code spawned syncStoppedState, which never exits, on every
+// iteration). Goroutine counting is a documented approximation: the
+// baseline is sampled after the first iteration started (the elector
+// goroutine and its single watcher already alive), then several more
+// iterations run and the count must settle back to baseline.
+func TestElectWaitDoesNotAccumulateGoroutines(t *testing.T) {
+	const iterations = 6
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	releases := make([]chan struct{}, iterations)
+	for i := range releases {
+		releases[i] = make(chan struct{})
+	}
+	fake := newFakeCandidate(releases...)
+	w := &ElectWorker{
+		ctx:       ctx,
+		candidate: fake,
+		logger:    nopElectorLogger{},
+	}
+	w.setLeaderChangeNotifyCall(make(chan bool, 1))
+
+	go w.ElectWait()
+
+	select {
+	case <-fake.waitStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ElectWait did not reach candidate.Wait()")
+	}
+	// Baseline with the elector goroutine and its single watcher alive.
+	baseline := goroutineMin(200 * time.Millisecond)
+
+	for i := 1; i < iterations; i++ {
+		close(releases[i-1])
+		select {
+		case <-fake.waitStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("ElectWait iteration %d did not start", i+1)
+		}
+	}
+
+	// iterations-1 more loop iterations ran; none may leave a permanent
+	// goroutine behind. A tolerance of 1 covers runtime noise.
+	assertGoroutinesAtMost(t, baseline+1, 3*time.Second)
+
+	// Let the elector wind down so the test leaves no residue.
+	cancel()
+	close(releases[iterations-1])
+}
+
+// --- F6 regression: Stop must close the owned etcd client exactly once ----
+
+// TestStopClosesEtcdClientOnce verifies the F6 regression: Stop must close
+// the etcd client this worker owns (observable through the client's context
+// being canceled) exactly once, and repeated Stop calls must stay safe.
+func TestStopClosesEtcdClientOnce(t *testing.T) {
+	cl, err := clientv3.New(clientv3.Config{Endpoints: []string{"127.0.0.1:1"}})
+	if err != nil {
+		t.Fatalf("clientv3.New() error = %v, want lazy client for refused endpoint", err)
+	}
+	w := &ElectWorker{
+		ctx:        context.Background(),
+		candidate:  newFakeCandidate(),
+		etcdclient: cl,
+		logger:     nopElectorLogger{},
+	}
+
+	w.Stop()
+	if cl.Ctx().Err() == nil {
+		t.Fatal("Stop() did not close the etcd client")
+	}
+
+	// A second Stop must not panic or re-close.
+	w.Stop()
+	if cl.Ctx().Err() == nil {
+		t.Fatal("etcd client context became live again after the second Stop")
+	}
+}
+
+// TestStopWithNilEtcdClient verifies the F6 nil guard: test-constructed
+// workers without an etcd client must be able to Stop safely.
+func TestStopWithNilEtcdClient(t *testing.T) {
+	w := &ElectWorker{
+		ctx:       context.Background(),
+		candidate: newFakeCandidate(),
+		logger:    nopElectorLogger{},
+	}
+	w.Stop()
+	w.Stop()
+}
+
+// --- goroutine-leak helpers (documented approximations) --------------------
+
+// goroutineMin samples runtime.NumGoroutine for dur and returns the minimum
+// seen, smoothing out transient runtime and test-framework goroutines.
+func goroutineMin(dur time.Duration) int {
+	minimum := runtime.NumGoroutine()
+	deadline := time.Now().Add(dur)
+	for time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+		if n := runtime.NumGoroutine(); n < minimum {
+			minimum = n
+		}
+	}
+	return minimum
+}
+
+// assertGoroutinesAtMost polls until the sampled goroutine count settles at
+// or below limit, failing the test when the deadline passes. Leaked
+// goroutines keep the count permanently high, so a single low sample only
+// occurs after genuine cleanup.
+func assertGoroutinesAtMost(t *testing.T, limit int, deadline time.Duration) {
+	t.Helper()
+	end := time.Now().Add(deadline)
+	for time.Now().Before(end) {
+		if runtime.NumGoroutine() <= limit {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("goroutine count did not settle at or below %d within %v (now %d)",
+		limit, deadline, runtime.NumGoroutine())
 }
