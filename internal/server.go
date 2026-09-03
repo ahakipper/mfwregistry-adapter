@@ -48,7 +48,10 @@ type Server struct {
 	// providers providers
 	Providers []providers.Provider
 
-	elector worker.Elector
+	// elector coordinates the leader election. Typed as the port (not the
+	// concrete worker.Elector) so tests inject fakes.FakeLeaderElector and
+	// any ports.LeaderElector implementation works interchangeably.
+	elector ports.LeaderElector
 
 	// the channel of leader changes
 	leaderChCh chan bool
@@ -89,10 +92,10 @@ func NewServerFromDeps(rt *composition.Runtime) (*Server, error) {
 	// this channel must have a buffer, otherwise, the operation of leader change notification of the elector that sendting to
 	// the channel may be blocked.
 	leaderChanges := make(chan bool, 2048)
-	var elector worker.Elector
+	var elector ports.LeaderElector
 	elector, err = worker.NewElectorWithDeps(ectx, leaderChanges,
 		rt.Config.EtcdEndpoints, rt.Config.CertFile, rt.Config.KeyFile, rt.Config.CAFile,
-		rt.Config.LockCampaignKey, rt.Logger)
+		rt.Config.LockCampaignKey, rt.Logger, rt.Notifier)
 	if err != nil {
 		ecancel()
 		rt.Notifier.Notify("Failed to initialize the elector", err.Error())
@@ -121,7 +124,10 @@ func (s *Server) Run() {
 	if s.cfg.EnableLeaderElection {
 		// start and process leader election
 		s.logger.Info("trying to become to master through election")
-		go s.elector.ElectWait()
+		// ElectWait binds the server's leader-change channel at call time
+		// (the port signature), so the elector forwards transitions to
+		// exactly this channel.
+		go s.elector.ElectWait(s.leaderChCh)
 	} else {
 		s.logger.Warnf("the election is disabled, just make current process as fake leadere forever")
 		s.leaderChCh <- true

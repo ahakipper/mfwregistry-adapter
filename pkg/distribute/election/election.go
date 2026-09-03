@@ -7,8 +7,7 @@ import (
 	"go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"spotter/config"
-	"spotter/pkg/log"
-	"spotter/pkg/notice"
+	"spotter/internal/ports"
 	"sync"
 	"time"
 )
@@ -48,6 +47,19 @@ type candidate struct {
 
 	client *clientv3.Client
 
+	// clock drives the Wait poll cadence; the default realClock reproduces
+	// the legacy time.Sleep behavior exactly. It is the seam that makes the
+	// 2s poll deterministically testable (F8).
+	clock ports.Clock
+
+	// logger receives the candidate's operational logs; nil means nop (the
+	// pkg/log global is no longer referenced from this package — F9).
+	logger ports.Logger
+
+	// notifier receives campaign failure notices; nil means nop (the
+	// pkg/notice global is no longer referenced from this package — F9).
+	notifier ports.Notifier
+
 	// observed deduplicates consecutive leadership observations so ticks
 	// without a change are not re-dispatched (F5b). Only the Wait loop
 	// goroutine touches it.
@@ -80,6 +92,28 @@ func (s *leaderState) shouldDispatch(value bool) bool {
 
 type LeaderChangeFunc func(isLeader bool)
 
+// realClock is the default Clock: it reproduces the legacy time.Sleep/time.
+// After behavior exactly. A private adapter, like the consul monitor's.
+type realClock struct{}
+
+func (realClock) Now() time.Time { return time.Now() }
+
+func (realClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
+
+// nopNotifier discards notices; used when none was injected. A private
+// adapter, like the consul monitor's.
+type nopNotifier struct{}
+
+func (nopNotifier) Notify(string, string) {}
+
+// isNilCandidateDeps reports whether an injected interface value is nil,
+// including a nil pointer stored in a non-nil interface (the consul
+// monitor's reflect-based check, kept simple here since Logger/Notifier/
+// Clock implementors in this codebase are never typed-nil pointers).
+func isNilCandidateDeps(value interface{}) bool {
+	return value == nil
+}
+
 // NewCandidate new a Candidate
 //
 // campaignKey is the etcd prefix key used for the leader campaign (the
@@ -87,16 +121,47 @@ type LeaderChangeFunc func(isLeader bool)
 // campaignKey to fall back to that global, which keeps older callers
 // working unchanged.
 func NewCandidate(ctx context.Context, etcdclient *clientv3.Client, campaignKey string) (can Candidate, err error) {
+	return NewCandidateWithClock(ctx, etcdclient, campaignKey, nil)
+}
+
+// NewCandidateWithClock builds a candidate with an injected clock that
+// drives the Wait poll cadence (default realClock when nil — the legacy
+// 2s behavior). Logger and notifier default to nops.
+func NewCandidateWithClock(ctx context.Context, etcdclient *clientv3.Client, campaignKey string, clock ports.Clock) (can Candidate, err error) {
+	return NewCandidateWithDeps(ctx, etcdclient, campaignKey, clock, nil, nil)
+}
+
+// NewCandidateWithDeps is the full-dependency constructor: clock drives the
+// Wait poll cadence, logger receives operational logs, notifier receives
+// campaign failure notices. Nil arguments select the defaults (realClock,
+// nop logger, nop notifier), so callers migrate incrementally.
+func NewCandidateWithDeps(ctx context.Context, etcdclient *clientv3.Client, campaignKey string, clock ports.Clock, logger ports.Logger, notifier ports.Notifier) (can Candidate, err error) {
 	if etcdclient == nil {
 		return nil, errors.New("invalid etcd client")
 	}
 	if campaignKey == "" {
+		// This global fallback REMAINS intentionally (E3 scope): production
+		// passes the campaign key explicitly through NewElectorWithDeps;
+		// removing the fallback would break the legacy NewElector wrapper
+		// which still reads config.LockCampaignKey.
 		campaignKey = config.LockCampaignKey
+	}
+	if isNilCandidateDeps(clock) {
+		clock = realClock{}
+	}
+	if isNilCandidateDeps(logger) {
+		logger = ports.NopLogger{}
+	}
+	if isNilCandidateDeps(notifier) {
+		notifier = nopNotifier{}
 	}
 	cd := &candidate{
 		ctx:           ctx,
 		client:        etcdclient,
 		campaignKey:   campaignKey,
+		clock:         clock,
+		logger:        logger,
+		notifier:      notifier,
 		callBackFuncs: []LeaderChangeFunc{},
 	}
 	//
@@ -138,12 +203,12 @@ func (c *candidate) NewElectionSession(timeout time.Duration) {
 		// F3: the failure was silent before, leaving the closed session
 		// in place with zero observability. Log it; the Wait loop retries
 		// the rebuild on its next tick.
-		log.Logger.Errorf("election session rebuild failed: grant lease: %s", err.Error())
+		c.logger.Errorf("election session rebuild failed: grant lease: %s", err.Error())
 		return
 	}
 	session, err := concurrency.NewSession(c.client, concurrency.WithLease(resp.ID), concurrency.WithTTL(10))
 	if err != nil {
-		log.Logger.Errorf("election session rebuild failed: new session: %s", err.Error())
+		c.logger.Errorf("election session rebuild failed: new session: %s", err.Error())
 		return
 	}
 	c.session = session
@@ -156,36 +221,43 @@ func (c *candidate) Wait() {
 	for {
 		select {
 		case <-c.ctx.Done():
-			log.Logger.Info("exit the candidate")
+			c.logger.Info("exit the candidate")
 			return
 		default:
-			time.Sleep(LeaderChangePeriod * time.Second)
-			isLeader, err := c.IsLeader()
-			if err != nil && err != concurrency.ErrElectionNoLeader {
-				log.Logger.Errorf("get leader state error: %s", err.Error())
-				continue
-			}
-			// Dispatch callbacks only when the observed leadership
-			// CHANGED from the previous tick (F5b). The legacy code fired
-			// every callback on every 2s tick (~30 events/min/channel
-			// forever). This is behavior-compatible for the only consumer
-			// (the server), which already deduplicates identical values
-			// (server.go: `isLeader == s.isLeader → continue`); the first
-			// observation still dispatches. The channel-send blocking
-			// hazard is deferred to the next phase (channel semantics
-			// redesign).
-			if c.observed.shouldDispatch(isLeader) {
-				// Here note!!!!
-				// must use goroutine for asynchronous notification to prevent it from blocking elections
-				go c.notify(isLeader)
-			}
-			if !isLeader {
-				// Relese the candidate resources
-				c.Close()
-				// Assign new candidate resources
-				c.NewElectionSession(CampainTimeout * time.Second)
-				c.Campaign(CampainTimeout * time.Second)
-			}
+		}
+		// The poll cadence goes through the clock seam (F8): the default
+		// realClock is behavior-identical to the legacy time.Sleep, and a
+		// injected FakeClock makes the tick deterministic. The select
+		// honors ctx cancellation while parked (E3: no real sleep).
+		select {
+		case <-c.ctx.Done():
+			c.logger.Info("exit the candidate")
+			return
+		case <-c.clock.After(LeaderChangePeriod * time.Second):
+		}
+		isLeader, err := c.IsLeader()
+		if err != nil && err != concurrency.ErrElectionNoLeader {
+			c.logger.Errorf("get leader state error: %s", err.Error())
+			continue
+		}
+		// Dispatch callbacks only when the observed leadership
+		// CHANGED from the previous tick (F5b). The legacy code fired
+		// every callback on every 2s tick (~30 events/min/channel
+		// forever). This is behavior-compatible for the only consumer
+		// (the server), which already deduplicates identical values
+		// (server.go: `isLeader == s.isLeader → continue`); the first
+		// observation still dispatches.
+		if c.observed.shouldDispatch(isLeader) {
+			// Here note!!!!
+			// must use goroutine for asynchronous notification to prevent it from blocking elections
+			go c.notify(isLeader)
+		}
+		if !isLeader {
+			// Relese the candidate resources
+			c.Close()
+			// Assign new candidate resources
+			c.NewElectionSession(CampainTimeout * time.Second)
+			c.Campaign(CampainTimeout * time.Second)
 		}
 	}
 }
@@ -210,7 +282,7 @@ func (c *candidate) notify(isLeader bool) {
 func (c *candidate) dispatch(call LeaderChangeFunc, isLeader bool) {
 	defer func() {
 		if e := recover(); e != nil {
-			log.Logger.Errorf("leader change callback panicked: %v", e)
+			c.logger.Errorf("leader change callback panicked: %v", e)
 		}
 	}()
 	call(isLeader)
@@ -231,11 +303,13 @@ func (c *candidate) Campaign(timeout time.Duration) (err error) {
 			// Expected when the campaign did not win within the timeout.
 			return err
 		}
-		// Notice
-		notice.Notice("Candidate server node election failed", err.Error())
+		// Notice (F7 severity is deliberately unchanged in E3: campaign
+		// failures still page at EMERGENCY level, now through the injected
+		// notifier instead of the global).
+		c.notifier.Notify("Candidate server node election failed", err.Error())
 		return err
 	}
-	log.Logger.Info("Campaign finish, I`m leader")
+	c.logger.Info("Campaign finish, I`m leader")
 
 	return nil
 }

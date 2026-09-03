@@ -14,6 +14,8 @@ import (
 	"google.golang.org/grpc"
 
 	infraconfig "spotter/internal/infra/config"
+	"spotter/internal/ports"
+	"spotter/internal/testkit/fakes"
 	v2 "spotter/pkg/beehive/service/v2"
 	"spotter/pkg/discoverycenter"
 	"spotter/pkg/providers"
@@ -342,17 +344,21 @@ func TestDialDiscoveryRetriesThreeTimesAtFiveSecondCadence(t *testing.T) {
 	}
 }
 
-// newFakeLeaderServer builds a Server whose Run loop can be driven offline:
-// leader election is disabled (Run promotes the process itself to a fake
-// leader by sending true on leaderChCh, so the nil elector is never
-// consulted), the metrics server binds an ephemeral loopback port, and the
-// discovery dial and provider initialization are injected seams.
-func newFakeLeaderServer(logger *zap.SugaredLogger, initialize func(context.Context) []providers.Provider) *Server {
+// newElectorDrivenServer builds a Server whose Run loop can be driven
+// offline through the REAL elector path: leader election is enabled and the
+// elector is a fakes.NewFakeLeaderElector (which satisfies the same
+// ports.LeaderElector port ElectWorker now satisfies), so Run hands its
+// leaderChCh to ElectWait and consumes the transitions the fake emits —
+// no more EnableLeaderElection:false bypass. The metrics server binds an
+// ephemeral loopback port, and the discovery dial and provider
+// initialization are injected seams.
+func newElectorDrivenServer(logger *zap.SugaredLogger, elector ports.LeaderElector, initialize func(context.Context) []providers.Provider) *Server {
 	return &Server{
 		cfg: infraconfig.Config{
-			EnableLeaderElection: false,
+			EnableLeaderElection: true,
 			MetricsAddr:          "127.0.0.1:0",
 		},
+		elector:    elector,
 		leaderChCh: make(chan bool, 8),
 		stop:       make(chan struct{}),
 		logger:     logger,
@@ -367,13 +373,20 @@ func newFakeLeaderServer(logger *zap.SugaredLogger, initialize func(context.Cont
 	}
 }
 
-func TestRunFakeLeaderStartsProviders(t *testing.T) {
+// TestRunRealElectorPathStartsAndStopsProviders drives Run with
+// EnableLeaderElection:true and a FakeLeaderElector injected through the
+// ports.LeaderElector field: the server starts providers when the fake
+// reports leadership gained, and stops them when the fake reports it lost.
+// This proves the unified port end-to-end — the same interface the
+// production ElectWorker satisfies (seam 5) — without bypassing the elector.
+func TestRunRealElectorPathStartsAndStopsProviders(t *testing.T) {
 	logger := zap.NewNop().Sugar()
 	providerStarted := make(chan struct{})
 	providerStopped := make(chan struct{})
 	var initializeMu sync.Mutex
 	initializeCalls := 0
-	s := newFakeLeaderServer(logger, func(ctx context.Context) []providers.Provider {
+	elector := fakes.NewFakeLeaderElector(true)
+	s := newElectorDrivenServer(logger, elector, func(ctx context.Context) []providers.Provider {
 		initializeMu.Lock()
 		initializeCalls++
 		initializeMu.Unlock()
@@ -390,16 +403,18 @@ func TestRunFakeLeaderStartsProviders(t *testing.T) {
 		close(runDone)
 	}()
 
-	// The fake-leader branch of Run sends true itself; the loop must start
-	// the providers through the injected initializeProviders seam.
+	// The fake elector reports leadership gained through ElectWait's
+	// channel; the loop must start the providers through the injected
+	// initializeProviders seam.
 	select {
 	case <-providerStarted:
 	case <-time.After(2 * time.Second):
-		t.Fatal("fake leader promotion did not start the providers")
+		t.Fatal("elector-driven leader promotion did not start the providers")
 	}
 
-	// Losing the leadership must stop the running providers.
-	s.leaderChCh <- false
+	// The fake elector reports leadership lost; the loop must stop the
+	// running providers.
+	elector.Emit(false)
 	select {
 	case <-providerStopped:
 	case <-time.After(2 * time.Second):
@@ -434,7 +449,8 @@ func TestRunIgnoresDuplicateLeaderState(t *testing.T) {
 	secondStopped := make(chan struct{})
 	var initializeMu sync.Mutex
 	initializeCalls := 0
-	s := newFakeLeaderServer(logger, func(ctx context.Context) []providers.Provider {
+	elector := fakes.NewFakeLeaderElector(true)
+	s := newElectorDrivenServer(logger, elector, func(ctx context.Context) []providers.Provider {
 		initializeMu.Lock()
 		initializeCalls++
 		call := initializeCalls
@@ -461,13 +477,13 @@ func TestRunIgnoresDuplicateLeaderState(t *testing.T) {
 	select {
 	case <-firstStarted:
 	case <-time.After(2 * time.Second):
-		t.Fatal("fake leader promotion did not start the first provider generation")
+		t.Fatal("elector-driven leader promotion did not start the first provider generation")
 	}
 
 	// Duplicate leader-gain notifications carry no state change: the loop
 	// must ignore them instead of restarting the providers.
-	s.leaderChCh <- true
-	s.leaderChCh <- true
+	elector.Emit(true)
+	elector.Emit(true)
 	time.Sleep(300 * time.Millisecond)
 	initializeMu.Lock()
 	calls := initializeCalls
@@ -483,7 +499,7 @@ func TestRunIgnoresDuplicateLeaderState(t *testing.T) {
 
 	// A real state change still works after the duplicates: leader loss
 	// stops the first provider generation.
-	s.leaderChCh <- false
+	elector.Emit(false)
 	select {
 	case <-firstStopped:
 	case <-time.After(2 * time.Second):
@@ -493,8 +509,8 @@ func TestRunIgnoresDuplicateLeaderState(t *testing.T) {
 	// A duplicate leader-loss is ignored as well, and the loop keeps
 	// processing genuine transitions afterwards: a new gain starts a second
 	// provider generation.
-	s.leaderChCh <- false
-	s.leaderChCh <- true
+	elector.Emit(false)
+	elector.Emit(true)
 	select {
 	case <-secondStarted:
 	case <-time.After(2 * time.Second):
@@ -530,7 +546,8 @@ func TestRunStopAfterProvidersInstalledCancelsProviders(t *testing.T) {
 	logger := zap.NewNop().Sugar()
 	providerStarted := make(chan struct{})
 	providerStopped := make(chan struct{})
-	s := newFakeLeaderServer(logger, func(ctx context.Context) []providers.Provider {
+	elector := fakes.NewFakeLeaderElector(true)
+	s := newElectorDrivenServer(logger, elector, func(ctx context.Context) []providers.Provider {
 		return []providers.Provider{&blockingProvider{
 			ctx:     ctx,
 			started: providerStarted,

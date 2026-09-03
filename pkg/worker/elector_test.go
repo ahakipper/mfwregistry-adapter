@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"go.etcd.io/etcd/client/v3"
+	"spotter/internal/ports"
 	"spotter/pkg/distribute/election"
 )
 
@@ -122,6 +123,49 @@ type nopElectorLogger struct{}
 
 func (nopElectorLogger) Info(...interface{}) {}
 
+// newTestElector builds an elector through the exported candidate-injection
+// seam (NewElectorWithCandidate) instead of assigning unexported fields.
+// It returns the concrete worker so tests exercising unexported helpers
+// (syncStoppedState) or the owned-client field can still reach them.
+func newTestElector(t *testing.T, ctx context.Context, candidate election.Candidate, leaderCh chan bool) *ElectWorker {
+	t.Helper()
+	elector, err := NewElectorWithCandidate(ctx, candidate, leaderCh, ports.NopLogger{})
+	if err != nil {
+		t.Fatalf("NewElectorWithCandidate() error = %v, want nil", err)
+	}
+	w, ok := elector.(*ElectWorker)
+	if !ok {
+		t.Fatalf("NewElectorWithCandidate() returned %T, want *ElectWorker", elector)
+	}
+	return w
+}
+
+// TestNewElectorWithCandidateRejectsNilCandidate locks the input guard of
+// the injection seam: a nil candidate must surface an error instead of
+// returning a worker that would nil-deref inside ElectWait.
+func TestNewElectorWithCandidateRejectsNilCandidate(t *testing.T) {
+	elector, err := NewElectorWithCandidate(context.Background(), nil, make(chan bool, 1), ports.NopLogger{})
+	if err == nil {
+		t.Fatal("NewElectorWithCandidate() error = nil, want error for nil candidate")
+	}
+	if elector != nil {
+		t.Fatalf("NewElectorWithCandidate() elector = %#v, want nil on error", elector)
+	}
+}
+
+// TestNewElectorWithCandidateNilLoggerIsSafe verifies the nil-safe logger
+// default: constructing with a nil logger and stopping immediately must not
+// panic (the pkg/log global is not initialized in this package's tests, so
+// a global fallback would nil-deref here).
+func TestNewElectorWithCandidateNilLoggerIsSafe(t *testing.T) {
+	elector, err := NewElectorWithCandidate(context.Background(), newFakeCandidate(), make(chan bool, 1), nil)
+	if err != nil {
+		t.Fatalf("NewElectorWithCandidate() error = %v, want nil", err)
+	}
+	elector.Stop()
+	elector.Stop()
+}
+
 // TestNewElectorWithDepsUnreachableEtcdFailsFast verifies the constructor
 // surfaces a connectivity failure against an unreachable endpoint instead
 // of hanging: the etcd client probes the member list with a 5s deadline, so
@@ -141,6 +185,7 @@ func TestNewElectorWithDepsUnreachableEtcdFailsFast(t *testing.T) {
 			"", "", "",
 			"/spotter-test/unreachable",
 			nopElectorLogger{},
+			nil,
 		)
 		results <- electorResult{elector, err}
 	}()
@@ -158,6 +203,97 @@ func TestNewElectorWithDepsUnreachableEtcdFailsFast(t *testing.T) {
 	}
 }
 
+// TestElectWaitBindsChannelAtCallTime verifies seam 5's channel-binding
+// behavior: ElectWait(changes) registers the notify callback targeting
+// exactly the channel passed at call time, overriding the
+// constructor-registered one. Transitions observed by the candidate arrive
+// on the ElectWait channel, not on the constructor channel.
+func TestElectWaitBindsChannelAtCallTime(t *testing.T) {
+	fake := newFakeCandidate()
+	constructorCh := make(chan bool, 8)
+	electorCh := make(chan bool, 8)
+	w := newTestElector(t, context.Background(), fake, constructorCh)
+
+	// Sanity: before ElectWait, the constructor-registered callback
+	// forwards to the constructor channel.
+	fake.notify(true)
+	select {
+	case got := <-constructorCh:
+		if !got {
+			t.Fatal("constructor channel received false before ElectWait, want true")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("transition was not forwarded to the constructor channel before ElectWait")
+	}
+
+	go w.ElectWait(electorCh)
+	select {
+	case <-fake.waitStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ElectWait did not reach candidate.Wait()")
+	}
+
+	// After ElectWait(electorCh), forwarding targets the ElectWait channel.
+	fake.notify(true)
+	select {
+	case got := <-electorCh:
+		if !got {
+			t.Fatal("ElectWait channel received false, want true")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("transition was not forwarded to the ElectWait-provided channel")
+	}
+	select {
+	case got := <-constructorCh:
+		t.Fatalf("constructor channel received %v after ElectWait bound a new channel, want no send", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestElectWaitChannelSendIsNonFatalOnStalledConsumer verifies the F5c
+// regression: when nobody ever reads the leader channel, a leader-change
+// dispatch must not park forever — canceling the elector context must free
+// the dispatch goroutine (the legacy bare `ch <- isLeader` blocked
+// indefinitely, wedging every subsequent dispatch).
+func TestElectWaitChannelSendIsNonFatalOnStalledConsumer(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fake := newFakeCandidate()
+	fake.ctxDone = ctx.Done()
+	// Unbuffered channel with no reader: every send parks.
+	stalled := make(chan bool)
+	w := newTestElector(t, ctx, fake, stalled)
+
+	go w.ElectWait(stalled)
+	select {
+	case <-fake.waitStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ElectWait did not reach candidate.Wait()")
+	}
+
+	// Fire a transition with nobody reading: the dispatch goroutine parks
+	// on the channel send. The elector context must bound the park.
+	dispatchReturned := make(chan struct{})
+	go func() {
+		defer close(dispatchReturned)
+		fake.notify(true)
+	}()
+
+	cancel()
+	select {
+	case <-dispatchReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("dispatch goroutine did not return after the context was canceled (F5c: stalled consumer parks it forever)")
+	}
+	// The transition is dropped at shutdown: the send must not have
+	// delivered (nobody read it).
+	select {
+	case got := <-stalled:
+		t.Fatalf("stalled channel received %v, want the transition dropped at shutdown", got)
+	default:
+	}
+}
+
 // TestElectWaitForwardsLeadershipTransitions drives ElectWait with a fake
 // candidate and verifies the seam wired by setLeaderChangeNotifyCall: leader
 // transitions observed by the candidate are forwarded on the leader channel
@@ -167,14 +303,12 @@ func TestElectWaitForwardsLeadershipTransitions(t *testing.T) {
 	firstWaitRelease := make(chan struct{})
 	fake := newFakeCandidate(firstWaitRelease)
 	leaderCh := make(chan bool, 8)
-	w := &ElectWorker{
-		ctx:       context.Background(),
-		candidate: fake,
-		logger:    nopElectorLogger{},
-	}
-	w.setLeaderChangeNotifyCall(leaderCh)
+	w := newTestElector(t, context.Background(), fake, leaderCh)
 
-	go w.ElectWait()
+	// ElectWait(nil) keeps the constructor-registered callback target
+	// (leaderCh): the back-compat path for callers that already bound the
+	// channel at construction.
+	go w.ElectWait(nil)
 
 	select {
 	case <-fake.waitStarted:
@@ -244,12 +378,7 @@ func TestElectWaitForwardsLeadershipTransitions(t *testing.T) {
 func TestElectorStopMarksStopped(t *testing.T) {
 	fake := newFakeCandidate()
 	leaderCh := make(chan bool, 8)
-	w := &ElectWorker{
-		ctx:       context.Background(),
-		candidate: fake,
-		logger:    nopElectorLogger{},
-	}
-	w.setLeaderChangeNotifyCall(leaderCh)
+	w := newTestElector(t, context.Background(), fake, leaderCh)
 
 	// Sanity: the callback forwards before Stop.
 	fake.notify(true)
@@ -281,12 +410,7 @@ func TestElectorStopMarksStopped(t *testing.T) {
 func TestStopConcurrentWithCallbackDispatch(t *testing.T) {
 	fake := newFakeCandidate()
 	leaderCh := make(chan bool, 128)
-	w := &ElectWorker{
-		ctx:       context.Background(),
-		candidate: fake,
-		logger:    nopElectorLogger{},
-	}
-	w.setLeaderChangeNotifyCall(leaderCh)
+	w := newTestElector(t, context.Background(), fake, leaderCh)
 
 	// Keep draining so callback sends never block during the hammer.
 	drainDone := make(chan struct{})
@@ -352,12 +476,7 @@ func TestSyncStoppedStateReturnsAfterContextCancel(t *testing.T) {
 	defer cancel()
 	fake := newFakeCandidate()
 	leaderCh := make(chan bool, 1)
-	w := &ElectWorker{
-		ctx:       ctx,
-		candidate: fake,
-		logger:    nopElectorLogger{},
-	}
-	w.setLeaderChangeNotifyCall(leaderCh)
+	w := newTestElector(t, ctx, fake, leaderCh)
 
 	done := make(chan struct{})
 	go func() {
@@ -390,17 +509,12 @@ func TestElectWaitExitsAfterContextCancel(t *testing.T) {
 	defer cancel()
 	fake := newFakeCandidate()
 	fake.ctxDone = ctx.Done()
-	w := &ElectWorker{
-		ctx:       ctx,
-		candidate: fake,
-		logger:    nopElectorLogger{},
-	}
-	w.setLeaderChangeNotifyCall(make(chan bool, 1))
+	w := newTestElector(t, ctx, fake, make(chan bool, 1))
 
 	baseline := goroutineMin(100 * time.Millisecond)
 	done := make(chan struct{})
 	go func() {
-		w.ElectWait()
+		w.ElectWait(nil)
 		close(done)
 	}()
 	select {
@@ -437,14 +551,9 @@ func TestElectWaitDoesNotAccumulateGoroutines(t *testing.T) {
 		releases[i] = make(chan struct{})
 	}
 	fake := newFakeCandidate(releases...)
-	w := &ElectWorker{
-		ctx:       ctx,
-		candidate: fake,
-		logger:    nopElectorLogger{},
-	}
-	w.setLeaderChangeNotifyCall(make(chan bool, 1))
+	w := newTestElector(t, ctx, fake, make(chan bool, 1))
 
-	go w.ElectWait()
+	go w.ElectWait(nil)
 
 	select {
 	case <-fake.waitStarted:
@@ -482,12 +591,12 @@ func TestStopClosesEtcdClientOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clientv3.New() error = %v, want lazy client for refused endpoint", err)
 	}
-	w := &ElectWorker{
-		ctx:        context.Background(),
-		candidate:  newFakeCandidate(),
-		etcdclient: cl,
-		logger:     nopElectorLogger{},
-	}
+	w := newTestElector(t, context.Background(), newFakeCandidate(), make(chan bool, 1))
+	// No exported constructor pairs an injected candidate with an owned etcd
+	// client (that combination only arises from NewElectorWithDeps with a
+	// live cluster), so mirror the ownership handoff that constructor
+	// performs. The candidate is still injected through the exported seam.
+	w.etcdclient = cl
 
 	w.Stop()
 	if cl.Ctx().Err() == nil {
