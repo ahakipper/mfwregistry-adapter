@@ -18,12 +18,13 @@ build:
 # (fmt.Sprintf with arguments but no formatting directives, cache.go:52).
 TEST_PKGS := ./internal/... \
 	./pkg/discoverycenter \
+	./pkg/nacos \
 	./pkg/worker \
 	./pkg/providers/consul \
 	./pkg/providers/k8s
 
 # Packages hosting black-box suites (tests named TestBlackbox*).
-BLACKBOX_PKGS := ./pkg/discoverycenter ./pkg/worker ./pkg/providers/consul
+BLACKBOX_PKGS := ./pkg/discoverycenter ./pkg/worker ./pkg/providers/consul ./pkg/nacos
 
 # White-box tier: every allowlisted package, race detector on, cache off.
 test-unit:

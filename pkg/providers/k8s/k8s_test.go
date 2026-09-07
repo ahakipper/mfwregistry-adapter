@@ -2,9 +2,9 @@ package k8s
 
 import (
 	"fmt"
-	"spotter/pkg/providers"
-	k8srobot "spotter/pkg/k8srobot"
 	v1 "k8s.io/api/core/v1"
+	k8srobot "spotter/pkg/k8srobot"
+	"spotter/pkg/providers"
 	"testing"
 )
 
@@ -13,8 +13,7 @@ func TestFormatInstance(t *testing.T) {
 	obj := &k8srobot.QueueObject{
 		Event: k8srobot.EventDelete,
 	}
-	pod := &v1.Pod{
-	}
+	pod := &v1.Pod{}
 	pod.Labels = map[string]string{
 		"app":               "testiterationc-msp",
 		"app-code":          "testiterationc-msp",
@@ -64,8 +63,7 @@ func TestFormatInstance(t *testing.T) {
 	obj = &k8srobot.QueueObject{
 		Event: k8srobot.EventDelete,
 	}
-	pod = &v1.Pod{
-	}
+	pod = &v1.Pod{}
 	pod.Labels = map[string]string{
 		"app":               "governance-order-beta-122",
 		"app-code":          "governance-order",
@@ -157,8 +155,7 @@ func TestFormatInstance(t *testing.T) {
 	obj = &k8srobot.QueueObject{
 		Event: k8srobot.EventDelete,
 	}
-	pod = &v1.Pod{
-	}
+	pod = &v1.Pod{}
 	pod.Labels = map[string]string{
 		"app":               "oudder.mservice",
 		"cadvisor-app":      "oudder-mservice",
@@ -220,8 +217,7 @@ func TestFormatInstance(t *testing.T) {
 	obj = &k8srobot.QueueObject{
 		Event: k8srobot.EventDelete,
 	}
-	pod = &v1.Pod{
-	}
+	pod = &v1.Pod{}
 	pod.Labels = map[string]string{
 		"app":               "oudder.mservice",
 		"cadvisor-app":      "oudder-mservice",
@@ -326,8 +322,7 @@ func TestFormatInstance(t *testing.T) {
 	obj = &k8srobot.QueueObject{
 		Event: k8srobot.EventDelete,
 	}
-	pod = &v1.Pod{
-	}
+	pod = &v1.Pod{}
 	pod.Labels = map[string]string{
 		"app":               "coeussimulation.msp",
 		"cadvisor-app":      "coeussimulation-msp",
@@ -412,8 +407,7 @@ func TestFormatInstance(t *testing.T) {
 	obj = &k8srobot.QueueObject{
 		Event: k8srobot.EventDelete,
 	}
-	pod = &v1.Pod{
-	}
+	pod = &v1.Pod{}
 	pod.Labels = map[string]string{
 		"app":               "useraccount.muser",
 		"cadvisor-app":      "useraccount-muser",
@@ -520,8 +514,7 @@ func TestFormatInstance(t *testing.T) {
 	obj = &k8srobot.QueueObject{
 		Event: k8srobot.EventDelete,
 	}
-	pod = &v1.Pod{
-	}
+	pod = &v1.Pod{}
 	pod.Labels = map[string]string{
 		"app":               "mgateway.msales",
 		"cadvisor-app":      "mgateway-msales",

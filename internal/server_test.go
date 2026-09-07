@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	infraconfig "spotter/internal/infra/config"
 	"spotter/internal/ports"
 	"spotter/internal/testkit/fakes"
+	"spotter/internal/testkit/nacosmock"
 	v2 "spotter/pkg/beehive/service/v2"
 	"spotter/pkg/discoverycenter"
 	"spotter/pkg/providers"
@@ -608,5 +610,171 @@ func TestRunStopAfterProvidersInstalledCancelsProviders(t *testing.T) {
 	s.Unlock()
 	if providers != nil {
 		t.Fatalf("Providers = %#v, want nil after stop", providers)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Nacos sink wiring (plan §6.5 / §7.6)
+// -----------------------------------------------------------------------------
+
+// capturedWorkerProvider is a providers.Provider that captures the worker
+// the server handed to initializeProviders and blocks until the startup
+// context is canceled (the lifecycle the cleanup exercises).
+type capturedWorkerProvider struct {
+	ctx     context.Context
+	started chan struct{}
+}
+
+func (p *capturedWorkerProvider) Run() error {
+	close(p.started)
+	<-p.ctx.Done()
+	return nil
+}
+
+func (p *capturedWorkerProvider) CompareAndFlush() {}
+
+func (p *capturedWorkerProvider) GetAll() []*v2.Instance { return nil }
+
+// startProvidersWithNacosAddr runs startProviders on an offline server with
+// the given NacosAddr and returns the worker the fanout was built around.
+// The nacosmock server supplies the address; the discovery dial and the
+// provider construction are injected seams.
+func startProvidersWithNacosAddr(t *testing.T, nacosAddr string) (worker.Worker, *Server, chan error) {
+	t.Helper()
+	logger := zap.NewNop().Sugar()
+
+	var captured worker.Worker
+	providerStarted := make(chan struct{})
+	s := &Server{
+		isLeader: true,
+		stop:     make(chan struct{}),
+		logger:   logger,
+		notifier: recordingNotifier{},
+		localIP:  func() (string, error) { return "127.0.0.1", nil },
+		cfg: infraconfig.Config{
+			EnableLeaderElection: true,
+			MetricsAddr:          "127.0.0.1:0",
+			NacosAddr:            nacosAddr,
+		},
+		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
+			return discoverycenter.NewClient(noopDiscoveryService{}, nil, nil)
+		},
+		initializeProviders: func(ctx context.Context, w worker.Worker) ([]providers.Provider, error) {
+			captured = w
+			return []providers.Provider{&capturedWorkerProvider{ctx: ctx, started: providerStarted}}, nil
+		},
+	}
+
+	result := make(chan error, 1)
+	go func() { result <- s.startProviders() }()
+	<-providerStarted
+	return captured, s, result
+}
+
+// TestStartProvidersWiresNacosSinkWhenAddrSet: with --nacos-addr set to a
+// nacosmock address, the server constructs the Nacos sink and registers it
+// as the SECOND fanout sink alongside Atlas (plan §6.5). Proven end-to-end
+// through the worker's public Handle seam: one SyncAll event fans out to
+// both sinks, and the nacosmock observes the registered instance.
+func TestStartProvidersWiresNacosSinkWhenAddrSet(t *testing.T) {
+	server := nacosmock.Start()
+	defer server.Close()
+
+	captured, s, result := startProvidersWithNacosAddr(t, server.URL())
+	if captured == nil {
+		t.Fatal("initializeProviders received a nil worker")
+	}
+
+	// Exercise the full path: one SyncAll event through Handle must reach
+	// the nacosmock (register) AND the noop discovery service.
+	ins := &v2.Instance{
+		InstanceId: "pod-a", AppCode: "pay-user", Ip: "10.0.0.1",
+		Ports: []*v2.PortInfo{{Port: 8080}}, Provider: "k8s",
+		Status: 1, Reversion: 1, EnvType: "test",
+	}
+	captured.Handle(&worker.Event{Trigger: 1, Data: []*v2.Instance{ins}, Operate: worker.OperateTypeSyncAll})
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(server.Instances("pay-user", "k8s")) == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := len(server.Instances("pay-user", "k8s")); got != 1 {
+		t.Fatalf("nacosmock instances after SyncAll = %d, want 1 (the sink pushed); requests = %d", got, len(server.Requests()))
+	}
+
+	s.Stop()
+	select {
+	case <-result:
+	case <-time.After(3 * time.Second):
+		t.Fatal("startProviders() did not return after Stop")
+	}
+}
+
+// TestStartProvidersOmitsNacosSinkWhenAddrEmpty: with --nacos-addr empty
+// (the default) the fanout holds exactly one sink — the pre-F5 behavior:
+// the SyncAll event reaches only the discovery service, never any Nacos.
+func TestStartProvidersOmitsNacosSinkWhenAddrEmpty(t *testing.T) {
+	captured, s, result := startProvidersWithNacosAddr(t, "")
+	if captured == nil {
+		t.Fatal("initializeProviders received a nil worker")
+	}
+
+	ins := &v2.Instance{
+		InstanceId: "pod-a", AppCode: "pay-user", Ip: "10.0.0.1",
+		Ports: []*v2.PortInfo{{Port: 8080}}, Provider: "k8s",
+		Status: 1, Reversion: 1, EnvType: "test",
+	}
+	captured.Handle(&worker.Event{Trigger: 1, Data: []*v2.Instance{ins}, Operate: worker.OperateTypeSyncAll})
+
+	// No Nacos traffic can exist: there is no Nacos sink at all. The
+	// discovery noop service answers, so the handler returns without error.
+	time.Sleep(100 * time.Millisecond)
+
+	s.Stop()
+	select {
+	case <-result:
+	case <-time.After(3 * time.Second):
+		t.Fatal("startProviders() did not return after Stop")
+	}
+}
+
+// TestStartProvidersNacosReadinessGate: the construction health-checks the
+// Nacos address; an unreachable address fails the provider startup with the
+// readiness error, before any provider runs.
+func TestStartProvidersNacosReadinessGate(t *testing.T) {
+	logger := zap.NewNop().Sugar()
+	initializeCalls := 0
+	s := &Server{
+		isLeader: true,
+		stop:     make(chan struct{}),
+		logger:   logger,
+		notifier: recordingNotifier{},
+		localIP:  func() (string, error) { return "127.0.0.1", nil },
+		cfg: infraconfig.Config{
+			EnableLeaderElection: true,
+			MetricsAddr:          "127.0.0.1:0",
+			NacosAddr:            "http://127.0.0.1:1", // nothing listens
+		},
+		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
+			return discoverycenter.NewClient(noopDiscoveryService{}, nil, nil)
+		},
+		initializeProviders: func(context.Context, worker.Worker) ([]providers.Provider, error) {
+			initializeCalls++
+			return nil, nil
+		},
+	}
+
+	err := s.startProviders()
+	if err == nil {
+		t.Fatal("startProviders() error = nil, want the Nacos readiness failure")
+	}
+	if !strings.Contains(err.Error(), "nacos") {
+		t.Fatalf("startProviders() error = %q, want it to name the Nacos gate", err)
+	}
+	if initializeCalls != 0 {
+		t.Fatalf("InitializeProviders calls = %d, want 0 (startup failed at the gate)", initializeCalls)
 	}
 }

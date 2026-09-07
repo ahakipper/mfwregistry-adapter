@@ -1192,6 +1192,125 @@ func TestObj2InstanceId(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
+// ProcessIntervalFullPush SyncAll trigger (plan §7.4)
+// -----------------------------------------------------------------------------
+
+// findSyncAllEvents returns every recorded SyncAll event.
+func findSyncAllEvents(events []*worker.Event) []*worker.Event {
+	var found []*worker.Event
+	for _, e := range events {
+		if e.Operate == worker.OperateTypeSyncAll {
+			found = append(found, e)
+		}
+	}
+	return found
+}
+
+// findSyncEvent returns the first incremental (OperateTypeSync) event
+// carrying the given instance id.
+func findSyncEvent(events []*worker.Event, instanceID string) *worker.Event {
+	for _, e := range events {
+		if e.Operate != worker.OperateTypeSync {
+			continue
+		}
+		if len(e.Data) == 1 && e.Data[0].InstanceId == instanceID {
+			return e
+		}
+	}
+	return nil
+}
+
+// TestProcessIntervalFullPushEmitsSyncAllAfterCompareAndFlush: after each
+// interval tick's CompareAndFlush, the provider also emits exactly one
+// OperateTypeSyncAll event carrying the full GetAll list — the dormant
+// worker path plan §7.4 revives so the fan-out (and the Nacos PushAll prune)
+// runs every push interval.
+func TestProcessIntervalFullPushEmitsSyncAllAfterCompareAndFlush(t *testing.T) {
+	pod := newValidPod("msp", "pod-a")
+	robot := newFakeRobot(nil, []interface{}{pod}, false)
+	w := &fakeWorker{getAllResponse: &sv.InstanceList{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	k := newTestProvider(robot, w)
+	k.ctx = ctx
+	k.interval = 2
+
+	done := make(chan struct{})
+	go func() {
+		k.ProcessIntervalFullPush()
+		close(done)
+	}()
+
+	// One tick: the CompareAndFlush pushes (empty remote list: one Sync
+	// event for pod-a) plus the SyncAll event carrying the full list. The
+	// incremental push is pool-submitted (asynchronous), so wait for each
+	// observable separately with tick-specific conditions: exactly one
+	// SyncAll, and at least one Sync event for pod-a.
+	interval := 2 * time.Second
+	deadline := time.Now().Add(interval + 2*time.Second)
+	var events []*worker.Event
+	for time.Now().Before(deadline) {
+		events = w.handleSnapshot()
+		if len(findSyncAllEvents(events)) == 1 && findSyncEvent(events, "pod-a") != nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// The SyncAll event must be present exactly once, carrying the full list.
+	syncAlls := findSyncAllEvents(events)
+	if len(syncAlls) != 1 {
+		t.Fatalf("SyncAll events = %d, want exactly 1 per tick; events = %#v", len(syncAlls), events)
+	}
+	// The tick's CompareAndFlush also ran: its incremental push for pod-a.
+	if e := findSyncEvent(events, "pod-a"); e == nil {
+		t.Fatalf("no incremental push after the tick; events = %#v", events)
+	}
+	event := syncAlls[0]
+	if len(event.Data) != 1 || event.Data[0].InstanceId != "pod-a" {
+		t.Fatalf("SyncAll data = %#v, want the full provider list (pod-a)", event.Data)
+	}
+	if event.Trigger <= 0 {
+		t.Fatalf("SyncAll trigger = %d, want the tick timestamp", event.Trigger)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ProcessIntervalFullPush did not return after context cancel")
+	}
+}
+
+// TestProcessIntervalFullPushEmitsNoSyncAllWithoutInstances: a tick whose
+// provider source is empty emits no SyncAll event (there is no full list to
+// reconcile with), mirroring the flushInstances guard.
+func TestProcessIntervalFullPushEmitsNoSyncAllWithoutInstances(t *testing.T) {
+	robot := newFakeRobot(nil, nil, false)
+	w := &fakeWorker{getAllResponse: &sv.InstanceList{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	k := newTestProvider(robot, w)
+	k.ctx = ctx
+	k.interval = 1
+
+	done := make(chan struct{})
+	go func() {
+		k.ProcessIntervalFullPush()
+		close(done)
+	}()
+
+	// Wait past one tick, then cancel: nothing may have been emitted.
+	time.Sleep(1500 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ProcessIntervalFullPush did not return after context cancel")
+	}
+	if events := w.handleSnapshot(); len(events) != 0 {
+		t.Fatalf("events = %d, want 0 (empty provider list: no SyncAll, no incremental pushes)", len(events))
+	}
+}
+
+// -----------------------------------------------------------------------------
 // Guard against repository artifacts (docs/testing.md section 7).
 // -----------------------------------------------------------------------------
 

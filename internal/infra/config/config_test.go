@@ -172,6 +172,7 @@ func TestLoadDefaults(t *testing.T) {
 		PushAppCodes:         []string{},
 		EnableLeaderElection: true,
 		MetricsAddr:          ":8090",
+		NacosAddr:            "",
 	}
 
 	if !reflect.DeepEqual(got, want) {
@@ -200,6 +201,7 @@ func TestLoadFlagValues(t *testing.T) {
 		PushAppCodes:      []string{"app-code-1", "app-code-2"},
 		LeaderElection:    boolPtr(false),
 		MetricsAddr:       ":9091",
+		NacosAddr:         "http://127.0.0.1:18848",
 	}
 
 	got, err := Load("product", flags)
@@ -224,6 +226,7 @@ func TestLoadFlagValues(t *testing.T) {
 		PushAppCodes:         []string{"app-code-1", "app-code-2"},
 		EnableLeaderElection: false,
 		MetricsAddr:          ":9091",
+		NacosAddr:            "http://127.0.0.1:18848",
 	}
 
 	if !reflect.DeepEqual(got, want) {
@@ -549,5 +552,34 @@ func TestLoadErrorKeepsEnvEmpty(t *testing.T) {
 	}
 	if got.Env != "" {
 		t.Errorf("Env = %q, want empty on error", got.Env)
+	}
+}
+
+// TestLoadNacosAddr: the additive --nacos-addr flag of plan §7.6. Empty
+// (the default) stays empty — the Nacos sink is disabled and the resolved
+// config is byte-identical to the pre-F5 shape; a set value is carried
+// verbatim.
+func TestLoadNacosAddr(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags Flags
+		want  string
+	}{
+		{name: "unset flag disables the sink", flags: Flags{Providers: []string{"k8s"}}, want: ""},
+		{name: "explicit empty disables the sink", flags: Flags{Providers: []string{"k8s"}, NacosAddr: ""}, want: ""},
+		{name: "set address is carried verbatim", flags: Flags{Providers: []string{"k8s"}, NacosAddr: "http://127.0.0.1:18848"}, want: "http://127.0.0.1:18848"},
+		{name: "no default is applied", flags: Flags{Providers: []string{"k8s"}, NacosAddr: ""}, want: ""},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Load("test", tt.flags)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if got.NacosAddr != tt.want {
+				t.Errorf("NacosAddr = %q, want %q", got.NacosAddr, tt.want)
+			}
+		})
 	}
 }

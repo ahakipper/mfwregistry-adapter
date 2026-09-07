@@ -2,6 +2,7 @@ package consul
 
 import (
 	"context"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -9,9 +10,35 @@ import (
 
 	"github.com/hashicorp/consul/api"
 
+	"spotter/config"
 	"spotter/internal/testkit/consulmock"
 	"spotter/internal/testkit/fakes"
+	sv "spotter/pkg/beehive/service/v2"
+	"spotter/pkg/log"
+	"spotter/pkg/notice"
+	"spotter/pkg/worker"
 )
+
+// TestMain isolates the legacy package globals the consul provider depends
+// on (docs/testing.md section 7, "legacy globals"): pkg/log writes app.log
+// into config.LogFilePath and pkg/notice delivers through log.Logger. Point
+// both at a per-test-run temporary directory so no artifacts land in the
+// repository (the same guard the k8s whitebox suite uses).
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "consul-blackbox-")
+	if err != nil {
+		panic(err)
+	}
+	config.LogFilePath = dir + string(os.PathSeparator)
+	config.LogToStd = false
+	if err := log.LoggerInit(); err != nil {
+		panic(err)
+	}
+	notice.InitNoticeClient("test")
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
 
 // The black-box tier for package consul exercises the public contracts of
 // ClientFactorySimple (NewClientFactory, ConsulClientFactory) and Monitor
@@ -323,4 +350,163 @@ func contains(haystack, needle string) bool {
 		}
 	}
 	return false
+}
+
+// -----------------------------------------------------------------------------
+// ProcessIntervalFullPush SyncAll trigger (plan §7.4)
+// -----------------------------------------------------------------------------
+
+// fakeWorker records every Handle call and serves a scripted GetAll
+// response; the consul provider's SyncAll-trigger tests drive
+// ProcessIntervalFullPush through it.
+type fakeWorker struct {
+	handles []*worker.Event
+	mu      sync.Mutex
+}
+
+func (w *fakeWorker) AddEventHandler(opt worker.OperateType, handler worker.EventResourceHandler) {}
+
+func (w *fakeWorker) Handle(d *worker.Event) {
+	if d == nil {
+		return
+	}
+	w.mu.Lock()
+	w.handles = append(w.handles, d)
+	w.mu.Unlock()
+}
+
+func (w *fakeWorker) ProcessUnsynced() {}
+
+func (w *fakeWorker) GetAll(enable []int32, provider string) (*sv.InstanceList, error) {
+	return &sv.InstanceList{}, nil
+}
+
+func (w *fakeWorker) handleSnapshot() []*worker.Event {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]*worker.Event(nil), w.handles...)
+}
+
+func (w *fakeWorker) syncAllEvents() []*worker.Event {
+	var found []*worker.Event
+	for _, e := range w.handleSnapshot() {
+		if e.Operate == worker.OperateTypeSyncAll {
+			found = append(found, e)
+		}
+	}
+	return found
+}
+
+// newBlackboxConsulProvider builds a consul provider over the consulmock
+// server, the fake worker and the given push interval (seconds).
+func newBlackboxConsulProvider(t *testing.T, server *consulmock.Server, w worker.Worker, interval int, ctx context.Context) *consul {
+	t.Helper()
+	provider, err := NewConsulProvider(ctx, w, interval, []string{server.Address()})
+	if err != nil {
+		t.Fatalf("NewConsulProvider() error = %v", err)
+	}
+	return provider.(*consul)
+}
+
+// TestBlackboxConsulIntervalFullPushEmitsSyncAll: after each interval tick's
+// CompareAndFlush, the consul provider also emits exactly one
+// OperateTypeSyncAll event carrying its full instance list — the dormant
+// worker path plan §7.4 revives so every sink's full-push reconcile (the
+// Nacos PushAll prune included) runs each push interval.
+func TestBlackboxConsulIntervalFullPushEmitsSyncAll(t *testing.T) {
+	server := consulmock.Start()
+	defer server.Close()
+
+	// One convertible consul service instance (the full meta schema the
+	// converter requires, docs/nacos-sink-plan.md §8.2).
+	server.SetServices(map[string][]string{"pay-user": {"microservice"}})
+	server.SetEntries("pay-user", []*api.ServiceEntry{
+		{
+			Node: &api.Node{Node: "node-1", Address: "10.0.0.1"},
+			Service: &api.AgentService{ID: "srv-a", Service: "pay-user", Port: 8081,
+				Tags: []string{"microservice"},
+				Meta: map[string]string{
+					"appCode":    "pay-user",
+					"envType":    "test",
+					"envGroup":   "7",
+					"instanceId": "srv-a",
+					"version":    "v1",
+					"namespace":  "default",
+					"ports":      `[{"Name":"http","Protocol":"http","Port":8081}]`,
+				}},
+		},
+	})
+	server.AdvanceIndex()
+
+	w := &fakeWorker{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := newBlackboxConsulProvider(t, server, w, 1, ctx)
+	c.interval = 1
+
+	done := make(chan struct{})
+	go func() {
+		c.ProcessIntervalFullPush()
+		close(done)
+	}()
+
+	// One 1s tick must produce exactly one SyncAll event carrying the full
+	// consul instance list (bounded wait: one tick plus margin).
+	deadline := time.Now().Add(3 * time.Second)
+	var syncAlls []*worker.Event
+	for time.Now().Before(deadline) {
+		if syncAlls = w.syncAllEvents(); len(syncAlls) >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(syncAlls) != 1 {
+		t.Fatalf("SyncAll events = %d, want exactly 1 per tick; recorded = %#v", len(syncAlls), w.handleSnapshot())
+	}
+	event := syncAlls[0]
+	if len(event.Data) != 1 || event.Data[0].InstanceId != "srv-a" {
+		t.Fatalf("SyncAll data = %#v, want the full consul list (srv-a)", event.Data)
+	}
+	if event.Trigger <= 0 {
+		t.Fatalf("SyncAll trigger = %d, want the tick timestamp", event.Trigger)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ProcessIntervalFullPush did not return after context cancel")
+	}
+}
+
+// TestBlackboxConsulIntervalFullPushEmitsNoSyncAllWithoutInstances: a tick
+// whose consul source is empty (GetAll returns nothing) emits no SyncAll
+// event — a full reconcile of nothing is a no-op.
+func TestBlackboxConsulIntervalFullPushEmitsNoSyncAllWithoutInstances(t *testing.T) {
+	server := consulmock.Start()
+	defer server.Close()
+	// No services registered: GetAll yields nothing.
+
+	w := &fakeWorker{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := newBlackboxConsulProvider(t, server, w, 1, ctx)
+	c.interval = 1
+
+	done := make(chan struct{})
+	go func() {
+		c.ProcessIntervalFullPush()
+		close(done)
+	}()
+
+	time.Sleep(1500 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ProcessIntervalFullPush did not return after context cancel")
+	}
+	if events := w.handleSnapshot(); len(events) != 0 {
+		t.Fatalf("events = %d, want 0 (empty consul list: no SyncAll, no incremental pushes)", len(events))
+	}
 }

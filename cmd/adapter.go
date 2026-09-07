@@ -120,6 +120,10 @@ func init() {
 	adapterCmd.Flags().BoolP("disable-worker", "w", false, "disable push worker, just for testing")
 	adapterCmd.Flags().StringSliceP("appcodes", "", []string{}, "only push instances of the appcodes, just for testing")
 	adapterCmd.Flags().StringP("metrics-addr", "", ":8090", "the Prometheus metrics address")
+	// --nacos-addr is the additive F5 flag (docs/nacos-sink-plan.md §7.6):
+	// empty disables the Nacos sink, so the flag-empty binary behavior is
+	// exactly the pre-F5 one. Every flag above is untouched.
+	adapterCmd.Flags().StringP("nacos-addr", "", "", "the Nacos OpenAPI address, e.g. 127.0.0.1:18848; empty disables the Nacos sink")
 }
 
 // adapterFlags maps the cobra flags onto the infra config flag struct. The
@@ -144,6 +148,7 @@ func adapterFlags(cmd *cobra.Command) infraconfig.Flags {
 		Providers:         flagStringSlice(cmd, "providers"),
 		PushAppCodes:      flagStringSlice(cmd, "appcodes"),
 		MetricsAddr:       flagString(cmd, "metrics-addr"),
+		NacosAddr:         flagString(cmd, "nacos-addr"),
 	}
 	if cmd.Flags().Changed("log-maxsize") {
 		flags.LogSizePtr = intPtr(flagInt(cmd, "log-maxsize"))

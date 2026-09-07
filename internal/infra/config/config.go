@@ -170,6 +170,11 @@ type Flags struct {
 	LeaderElection *bool
 	// MetricsAddr is the Prometheus metrics address.
 	MetricsAddr string
+	// NacosAddr is the Nacos v1 OpenAPI base address (e.g.
+	// http://127.0.0.1:18848); empty disables the Nacos sink (plan §7.6).
+	// A plain string: the empty default IS the legal "disabled" value, so
+	// no tri-state distinction is needed.
+	NacosAddr string
 
 	// Tri-state flag values, set by callers that can distinguish an unset
 	// flag from an explicit zero/false value (for example cobra's
@@ -225,6 +230,11 @@ type Config struct {
 
 	// MetricsAddr is the Prometheus metrics address.
 	MetricsAddr string
+
+	// NacosAddr is the Nacos v1 OpenAPI base address; empty disables the
+	// Nacos sink, which keeps the pre-F5 behavior exactly (plan §7.6:
+	// --nacos-addr empty = a one-sink fanout, identical error surface).
+	NacosAddr string
 }
 
 // Default flag values applied by Load when a flag is not set (zero). They
@@ -330,6 +340,11 @@ func Load(env string, flags Flags) (Config, error) {
 
 	// Metrics settings.
 	cfg.MetricsAddr = strOrDefault(flags.MetricsAddr, defaultMetricsAddr)
+
+	// Nacos sink: additive flag of plan §7.6 — empty means disabled (no
+	// default, no preset involvement), so the flag-empty path is exactly
+	// the pre-F5 configuration.
+	cfg.NacosAddr = strOrDefault(flags.NacosAddr, "")
 
 	return cfg, nil
 }

@@ -14,6 +14,7 @@ import (
 	inframetrics "spotter/internal/infra/metrics"
 	"spotter/internal/ports"
 	"spotter/pkg/discoverycenter"
+	"spotter/pkg/nacos"
 	"spotter/pkg/providers"
 	consul2 "spotter/pkg/providers/consul"
 	"spotter/pkg/providers/k8s"
@@ -291,12 +292,33 @@ func (s *Server) startProviders() error {
 	}
 
 	// The fan-out of plan §6.5: the worker talks to named sinks instead of
-	// the concrete registry. Today it holds exactly one sink — Atlas, the
-	// primary; F5 adds the Nacos sink here when --nacos-addr is set. With
-	// one sink the error surface degenerates to nil-or-one and every
-	// observable behavior matches the pre-fanout direct push (the §6.6
-	// single-sink degeneration test is the regression net).
-	fanout, err := worker.NewFanoutSink(s.logger, worker.NamedSink{Name: worker.AtlasSinkName, Sink: registry})
+	// the concrete registry. Atlas is the first sink — the primary; the
+	// Nacos sink (plan §7.6, --nacos-addr) is added here as the second
+	// whenever the address is set. With one sink the error surface
+	// degenerates to nil-or-one and every observable behavior matches the
+	// pre-fanout direct push (the §6.6 single-sink degeneration test is the
+	// regression net).
+	sinks := []worker.NamedSink{{Name: worker.AtlasSinkName, Sink: registry}}
+	var nacosSink *nacos.Sink
+	if s.cfg.NacosAddr != "" {
+		if err := nacos.CheckReadiness(s.cfg.NacosAddr, nacos.RequestTimeout); err != nil {
+			cleanup()
+			s.clearStartup(generation, nil)
+			return errors.WithMessage(err, "nacos readiness check")
+		}
+		nacosSink, err = nacos.NewSink(s.cfg.NacosAddr, s.logger)
+		if err != nil {
+			cleanup()
+			s.clearStartup(generation, nil)
+			return errors.WithMessage(err, "new nacos sink")
+		}
+		// The Nacos HTTP client is stateless, so the sink owns no resources
+		// and its Close is a no-op; the fanout's cleanup below still calls
+		// registry.Close for the Atlas gRPC connection.
+		sinks = append(sinks, worker.NamedSink{Name: nacos.SinkName, Sink: nacosSink})
+		s.logger.Infof("nacos sink registered at %s (persistent instances, group %s)", s.cfg.NacosAddr, nacos.DefaultGroup)
+	}
+	fanout, err := worker.NewFanoutSink(s.logger, sinks...)
 	if err != nil {
 		cleanup()
 		s.clearStartup(generation, nil)
