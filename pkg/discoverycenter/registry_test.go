@@ -5,9 +5,9 @@ import (
 	"reflect"
 	"testing"
 
+	"spotter/internal/domain/instance"
 	"spotter/internal/testkit/discoverymock"
 	"spotter/internal/testkit/fakes"
-	v2 "spotter/pkg/beehive/service/v2"
 )
 
 func TestNewDiscoveryCenterRejectsNilClient(t *testing.T) {
@@ -23,7 +23,7 @@ func TestNewDiscoveryCenterRejectsNilClient(t *testing.T) {
 func TestDiscoveryCenterDisablePushSkipsRPC(t *testing.T) {
 	server, registry, _, _ := newRegistryFixture(t, true)
 
-	if err := registry.Push(123, []*v2.Instance{{InstanceId: "instance-1"}}); err != nil {
+	if err := registry.Push(123, []*instance.Instance{{InstanceId: "instance-1"}}); err != nil {
 		t.Fatalf("Push() error = %v", err)
 	}
 	if calls := server.Calls(); len(calls) != 0 {
@@ -33,7 +33,7 @@ func TestDiscoveryCenterDisablePushSkipsRPC(t *testing.T) {
 
 func TestDiscoveryCenterPushSuccess(t *testing.T) {
 	server, registry, _, notifier := newRegistryFixture(t, false)
-	instances := []*v2.Instance{{InstanceId: "instance-1", Reversion: 42}}
+	instances := []*instance.Instance{{InstanceId: "instance-1", Reversion: 42}}
 
 	if err := registry.Push(123, instances); err != nil {
 		t.Fatalf("Push() error = %v", err)
@@ -54,7 +54,7 @@ func TestDiscoveryCenterPushErrorNotifiesExactContent(t *testing.T) {
 	server, registry, _, notifier := newRegistryFixture(t, false)
 	server.SetResponseCode(17, "rejected")
 
-	err := registry.Push(123, []*v2.Instance{{InstanceId: "instance-1"}})
+	err := registry.Push(123, []*instance.Instance{{InstanceId: "instance-1"}})
 	if err == nil {
 		t.Fatal("Push() error = nil, want non-nil")
 	}
@@ -71,7 +71,7 @@ func TestDiscoveryCenterPushAllErrorNotifiesExactTitle(t *testing.T) {
 	server, registry, _, notifier := newRegistryFixture(t, false)
 	server.SetResponseCode(23, "full rejected")
 
-	err := registry.PushAll(123, []*v2.Instance{{InstanceId: "instance-1"}})
+	err := registry.PushAll(123, []*instance.Instance{{InstanceId: "instance-1"}})
 	if err == nil {
 		t.Fatal("PushAll() error = nil, want non-nil")
 	}

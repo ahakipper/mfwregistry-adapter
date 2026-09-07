@@ -10,15 +10,25 @@ import (
 
 	"google.golang.org/grpc"
 
+	"spotter/internal/domain/instance"
 	"spotter/internal/ports"
-	v2 "spotter/pkg/beehive/service/v2"
 )
 
 const readTimeout = 10 * time.Second
 
+// instanceService is the gRPC service contract this client talks to: the
+// beehive-proto "service.v2.InstanceService" client surface, declared over
+// the domain types (identical to the mirror types via the alias bridge);
+// the RPC paths in grpcServiceClient below are unchanged.
+type instanceService interface {
+	SynInstance(ctx context.Context, in *instance.SynInstancesRequest, opts ...grpc.CallOption) (*instance.CommonResponse, error)
+	SynAllInstance(ctx context.Context, in *instance.SynAllInstancesRequest, opts ...grpc.CallOption) (*instance.CommonResponse, error)
+	GetAllInstance(ctx context.Context, in *instance.GetAllInstancesRequest, opts ...grpc.CallOption) (*instance.InstanceList, error)
+}
+
 // Client calls the discovery-center instance service.
 type Client struct {
-	service v2.InstanceServiceClient
+	service instanceService
 	logger  ports.Logger
 	metrics ports.MetricsRecorder
 
@@ -27,7 +37,10 @@ type Client struct {
 }
 
 // NewClient creates a client from an already constructed instance service.
-func NewClient(service v2.InstanceServiceClient, logger ports.Logger, metrics ports.MetricsRecorder) (*Client, error) {
+// Implementations of the beehive-proto v2 client interface are accepted
+// unchanged: those data types are aliases of the domain types this contract
+// is declared over.
+func NewClient(service instanceService, logger ports.Logger, metrics ports.MetricsRecorder) (*Client, error) {
 	if service == nil {
 		return nil, errors.New("discoverycenter: instance service is required")
 	}
@@ -68,31 +81,31 @@ type grpcServiceClient struct {
 	conn *grpc.ClientConn
 }
 
-func (c *grpcServiceClient) SynInstance(ctx context.Context, request *v2.SynInstancesRequest, opts ...grpc.CallOption) (*v2.CommonResponse, error) {
-	response := new(v2.CommonResponse)
+func (c *grpcServiceClient) SynInstance(ctx context.Context, request *instance.SynInstancesRequest, opts ...grpc.CallOption) (*instance.CommonResponse, error) {
+	response := new(instance.CommonResponse)
 	if err := c.conn.Invoke(ctx, "/service.v2.InstanceService/SynInstance", request, response, opts...); err != nil {
 		return nil, err
 	}
 	return response, nil
 }
 
-func (c *grpcServiceClient) SynAllInstance(ctx context.Context, request *v2.SynAllInstancesRequest, opts ...grpc.CallOption) (*v2.CommonResponse, error) {
-	response := new(v2.CommonResponse)
+func (c *grpcServiceClient) SynAllInstance(ctx context.Context, request *instance.SynAllInstancesRequest, opts ...grpc.CallOption) (*instance.CommonResponse, error) {
+	response := new(instance.CommonResponse)
 	if err := c.conn.Invoke(ctx, "/service.v2.InstanceService/SynAllInstance", request, response, opts...); err != nil {
 		return nil, err
 	}
 	return response, nil
 }
 
-func (c *grpcServiceClient) GetAllInstance(ctx context.Context, request *v2.GetAllInstancesRequest, opts ...grpc.CallOption) (*v2.InstanceList, error) {
-	response := new(v2.InstanceList)
+func (c *grpcServiceClient) GetAllInstance(ctx context.Context, request *instance.GetAllInstancesRequest, opts ...grpc.CallOption) (*instance.InstanceList, error) {
+	response := new(instance.InstanceList)
 	if err := c.conn.Invoke(ctx, "/service.v2.InstanceService/GetAllInstance", request, response, opts...); err != nil {
 		return nil, err
 	}
 	return response, nil
 }
 
-func (c *Client) Sync(instances []*v2.Instance) (response *v2.CommonResponse, err error) {
+func (c *Client) Sync(instances []*instance.Instance) (response *instance.CommonResponse, err error) {
 	if instances != nil {
 		if data, marshalErr := json.Marshal(instances); marshalErr == nil {
 			c.logger.Infof("rsyncing instance: %s", string(data))
@@ -101,7 +114,7 @@ func (c *Client) Sync(instances []*v2.Instance) (response *v2.CommonResponse, er
 
 	ctx, cancel := context.WithTimeout(context.TODO(), readTimeout)
 	defer cancel()
-	req := &v2.SynInstancesRequest{Instance: instances}
+	req := &instance.SynInstancesRequest{Instance: instances}
 	before := time.Now()
 	response, err = c.service.SynInstance(ctx, req)
 	c.metrics.ObserveSyncOnceDuration(time.Since(before))
@@ -115,10 +128,10 @@ func (c *Client) Sync(instances []*v2.Instance) (response *v2.CommonResponse, er
 	return response, err
 }
 
-func (c *Client) SyncAll(instances []*v2.Instance) (response *v2.CommonResponse, err error) {
+func (c *Client) SyncAll(instances []*instance.Instance) (response *instance.CommonResponse, err error) {
 	ctx, cancel := context.WithTimeout(context.TODO(), readTimeout)
 	defer cancel()
-	req := &v2.SynAllInstancesRequest{Instance: instances}
+	req := &instance.SynAllInstancesRequest{Instance: instances}
 	response, err = c.service.SynAllInstance(ctx, req)
 	if err != nil {
 		c.logger.Errorf("SyncAll fail: %v instance: %v", err, req.Instance)
@@ -129,12 +142,12 @@ func (c *Client) SyncAll(instances []*v2.Instance) (response *v2.CommonResponse,
 	return response, err
 }
 
-func (c *Client) GetAll(statuses []int32, provider string) (*v2.InstanceList, error) {
+func (c *Client) GetAll(statuses []int32, provider string) (*instance.InstanceList, error) {
 	ctx, cancel := context.WithTimeout(context.TODO(), readTimeout)
 	defer cancel()
-	instances := &v2.InstanceList{Instance: []*v2.Instance{}}
+	instances := &instance.InstanceList{Instance: []*instance.Instance{}}
 	for _, status := range statuses {
-		req := &v2.GetAllInstancesRequest{Status: status, Provider: provider}
+		req := &instance.GetAllInstancesRequest{Status: status, Provider: provider}
 		list, err := c.service.GetAllInstance(ctx, req)
 		if err != nil {
 			c.logger.Errorf("GetAll fail: %v req: %v", err, req)

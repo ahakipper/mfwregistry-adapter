@@ -4,15 +4,21 @@ import (
 	"errors"
 	"strings"
 
+	"spotter/internal/domain/instance"
 	"spotter/internal/ports"
-	v2 "spotter/pkg/beehive/service/v2"
 )
 
-// Pusher is the contract used by the workers to talk to the discovery center.
+// Pusher is the legacy contract used by the workers to talk to the discovery
+// center.
+//
+// Deprecated: the sink path now speaks ports.InstanceSink over the domain
+// types; this interface is an alias-compatible re-export kept one phase for
+// transition (docs/nacos-sink-plan.md section 4.2) and will be removed once
+// the remaining callers migrate.
 type Pusher interface {
-	Push(triggerTime int64, instance []*v2.Instance) error
-	PushAll(triggerTime int64, instance []*v2.Instance) error
-	GetAll(enable []int32, provider string) (*v2.InstanceList, error)
+	Push(triggerTime int64, instance []*instance.Instance) error
+	PushAll(triggerTime int64, instance []*instance.Instance) error
+	GetAll(enable []int32, provider string) (*instance.InstanceList, error)
 }
 
 // DiscoveryCenter is the client of the discovery center (Atlas).
@@ -22,6 +28,10 @@ type DiscoveryCenter struct {
 	notifier    ports.Notifier
 	disablePush bool
 }
+
+// DiscoveryCenter satisfies the internal/ports.InstanceSink port exactly
+// (the compile-time check fails on any future signature drift).
+var _ ports.InstanceSink = (*DiscoveryCenter)(nil)
 
 // NewDiscoveryCenter creates a pusher bound to an explicit discovery client.
 func NewDiscoveryCenter(client *Client, logger ports.Logger, notifier ports.Notifier, disablePush bool) (*DiscoveryCenter, error) {
@@ -42,7 +52,7 @@ func NewDiscoveryCenter(client *Client, logger ports.Logger, notifier ports.Noti
 	}, nil
 }
 
-func (mr *DiscoveryCenter) Push(triggerTime int64, instance []*v2.Instance) error {
+func (mr *DiscoveryCenter) Push(triggerTime int64, instance []*instance.Instance) error {
 	if mr.disablePush {
 		mr.logger.Infof("perform a fake push operation, instances: %v", instance)
 		return nil
@@ -67,7 +77,7 @@ func (mr *DiscoveryCenter) Push(triggerTime int64, instance []*v2.Instance) erro
 	return nil
 }
 
-func (mr *DiscoveryCenter) PushAll(triggerTime int64, instance []*v2.Instance) error {
+func (mr *DiscoveryCenter) PushAll(triggerTime int64, instance []*instance.Instance) error {
 	res, err := mr.client.SyncAll(instance)
 	if err != nil {
 		mr.notifier.Notify("Failed to sync all data", err.Error())
@@ -77,7 +87,7 @@ func (mr *DiscoveryCenter) PushAll(triggerTime int64, instance []*v2.Instance) e
 	return nil
 }
 
-func (mr *DiscoveryCenter) GetAll(statuses []int32, provider string) (*v2.InstanceList, error) {
+func (mr *DiscoveryCenter) GetAll(statuses []int32, provider string) (*instance.InstanceList, error) {
 	return mr.client.GetAll(statuses, provider)
 }
 

@@ -9,7 +9,6 @@ import (
 	"spotter/internal/domain/instance"
 	"spotter/internal/testkit/discoverymock"
 	"spotter/internal/testkit/fakes"
-	v2 "spotter/pkg/beehive/service/v2"
 )
 
 // The black-box tier drives the exported surface of package discoverycenter
@@ -17,8 +16,9 @@ import (
 // in-process discoverymock gRPC server, using only fakes for the logger and
 // the notifier. All listeners are bufconn: nothing leaves the process.
 
-// blackboxServiceClient adapts a *grpc.ClientConn to the v2.InstanceServiceClient
-// contract by delegating to conn.Invoke with the same method paths as the
+// blackboxServiceClient adapts a *grpc.ClientConn to the discoverycenter
+// instance service contract
+// by delegating to conn.Invoke with the same method paths as the
 // unexported grpcServiceClient in package discoverycenter. The discoverymock
 // JSON codec handles the wire format. This mirrors the wrapper pattern used
 // by tests/e2e (see tests/e2e/consul_pipeline_test.go), which is the only way
@@ -27,24 +27,24 @@ type blackboxServiceClient struct {
 	conn *grpc.ClientConn
 }
 
-func (c *blackboxServiceClient) SynInstance(ctx context.Context, request *v2.SynInstancesRequest, opts ...grpc.CallOption) (*v2.CommonResponse, error) {
-	response := new(v2.CommonResponse)
+func (c *blackboxServiceClient) SynInstance(ctx context.Context, request *instance.SynInstancesRequest, opts ...grpc.CallOption) (*instance.CommonResponse, error) {
+	response := new(instance.CommonResponse)
 	if err := c.conn.Invoke(ctx, "/service.v2.InstanceService/SynInstance", request, response, opts...); err != nil {
 		return nil, err
 	}
 	return response, nil
 }
 
-func (c *blackboxServiceClient) SynAllInstance(ctx context.Context, request *v2.SynAllInstancesRequest, opts ...grpc.CallOption) (*v2.CommonResponse, error) {
-	response := new(v2.CommonResponse)
+func (c *blackboxServiceClient) SynAllInstance(ctx context.Context, request *instance.SynAllInstancesRequest, opts ...grpc.CallOption) (*instance.CommonResponse, error) {
+	response := new(instance.CommonResponse)
 	if err := c.conn.Invoke(ctx, "/service.v2.InstanceService/SynAllInstance", request, response, opts...); err != nil {
 		return nil, err
 	}
 	return response, nil
 }
 
-func (c *blackboxServiceClient) GetAllInstance(ctx context.Context, request *v2.GetAllInstancesRequest, opts ...grpc.CallOption) (*v2.InstanceList, error) {
-	response := new(v2.InstanceList)
+func (c *blackboxServiceClient) GetAllInstance(ctx context.Context, request *instance.GetAllInstancesRequest, opts ...grpc.CallOption) (*instance.InstanceList, error) {
+	response := new(instance.InstanceList)
 	if err := c.conn.Invoke(ctx, "/service.v2.InstanceService/GetAllInstance", request, response, opts...); err != nil {
 		return nil, err
 	}
@@ -88,7 +88,7 @@ func newBlackboxRegistry(t *testing.T, disablePush bool) (*discoverymock.Server,
 // emits no notification.
 func TestBlackboxPushSuccessSendsExactInstancesAndReturnsNil(t *testing.T) {
 	server, registry, _, notifier := newBlackboxRegistry(t, false)
-	instances := []*v2.Instance{{
+	instances := []*instance.Instance{{
 		InstanceId: "payments-1",
 		AppCode:    "payments",
 		Provider:   "ecs",
@@ -96,7 +96,7 @@ func TestBlackboxPushSuccessSendsExactInstancesAndReturnsNil(t *testing.T) {
 		Ip:         "127.0.0.1",
 		Reversion:  42,
 		Status:     1,
-		Ports:      []*v2.PortInfo{{Name: "http", Protocol: "http", Port: 8080}},
+		Ports:      []*instance.PortInfo{{Name: "http", Protocol: "http", Port: 8080}},
 	}}
 
 	if err := registry.Push(123, instances); err != nil {
@@ -136,7 +136,7 @@ func TestBlackboxPushNonzeroCodeReturnsErrorWithCodeAndMsgAndNotifies(t *testing
 	server, registry, _, notifier := newBlackboxRegistry(t, false)
 	server.SetResponseCode(17, "rejected")
 
-	err := registry.Push(123, []*v2.Instance{{InstanceId: "instance-1"}})
+	err := registry.Push(123, []*instance.Instance{{InstanceId: "instance-1"}})
 	if err == nil {
 		t.Fatal("Push() error = nil, want non-nil for nonzero response code")
 	}
@@ -164,7 +164,7 @@ func TestBlackboxPushAllNonzeroCodeReturnsErrorAndNotifies(t *testing.T) {
 	server, registry, _, notifier := newBlackboxRegistry(t, false)
 	server.SetResponseCode(23, "full rejected")
 
-	err := registry.PushAll(456, []*v2.Instance{{InstanceId: "instance-all"}})
+	err := registry.PushAll(456, []*instance.Instance{{InstanceId: "instance-all"}})
 	if err == nil {
 		t.Fatal("PushAll() error = nil, want non-nil for nonzero response code")
 	}
@@ -240,7 +240,7 @@ func TestBlackboxGetAllAccumulatesProviderFilteredInstancesAcrossStatuses(t *tes
 func TestBlackboxDisablePushNeverReachesRPC(t *testing.T) {
 	server, registry, _, notifier := newBlackboxRegistry(t, true)
 
-	if err := registry.Push(123, []*v2.Instance{{InstanceId: "instance-1"}}); err != nil {
+	if err := registry.Push(123, []*instance.Instance{{InstanceId: "instance-1"}}); err != nil {
 		t.Fatalf("Push() error = %v, want nil when push is disabled", err)
 	}
 

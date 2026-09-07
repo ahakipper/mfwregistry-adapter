@@ -6,6 +6,13 @@
 // plain Go structs (no generated code), so no protobuf toolchain is needed to
 // build the project.
 //
+// The data types below are type aliases over internal/domain/instance (the
+// DDD domain model), so v2.Instance and instance.Instance are the same type
+// at compile time: legacy import sites keep compiling while the sink path
+// migrates to the domain vocabulary (docs/nacos-sink-plan.md section 4.1,
+// decision D1). Aliases are compile-time identity only — they change nothing
+// about marshaling.
+//
 // Wire compatibility is NOT provided: these are plain Go structs, not
 // generated proto messages. grpc.ClientConn.Invoke uses the default proto
 // codec, so calls will fail at runtime ("proto: not a proto message") unless
@@ -20,95 +27,23 @@ import (
 	"context"
 
 	"google.golang.org/grpc"
+
+	"spotter/internal/domain/instance"
 )
 
-// Instance mirrors the beehive-proto service/v2 Instance message.
-// Field names are the ones used by this repository's code.
-type Instance struct {
-	InstanceId  string // protobuf: string instance_id = 1
-	Level       string
-	Ports       []*PortInfo
-	Ip          string
-	EnvCode     string
-	EnvType     string
-	EnvGroup    string
-	Cluster     string
-	Version     string
-	Enabled     bool
-	State       string
-	HealthState string
-	AppCode     string
-	Provider    string
-	Label       map[string]string
-	Hostname    string
-	Cpu         float32
-	Memory      int32
-	Disk        int32
-	Os          string
-	Image       map[string]string
-	Idc         string
-	Reversion   int64
-	Status      int32
-}
-
-// PortInfo mirrors the beehive-proto service/v2 PortInfo message.
-type PortInfo struct {
-	Name        string
-	Protocol    string
-	Port        int32
-	ServicePort int32
-}
-
-// InstanceList mirrors the beehive-proto service/v2 InstanceList message.
-type InstanceList struct {
-	Instance []*Instance
-}
-
-// GetInstance safely returns the contained instances (nil-safe, like generated code).
-func (l *InstanceList) GetInstance() []*Instance {
-	if l == nil {
-		return nil
-	}
-	return l.Instance
-}
-
-// CommonResponse mirrors the beehive-proto service/v2 CommonResponse message.
-type CommonResponse struct {
-	Code int32
-	Msg  string
-}
-
-// GetCode safely returns the response code (nil-safe, like generated code).
-func (r *CommonResponse) GetCode() int32 {
-	if r == nil {
-		return 0
-	}
-	return r.Code
-}
-
-// GetMsg safely returns the response message (nil-safe, like generated code).
-func (r *CommonResponse) GetMsg() string {
-	if r == nil {
-		return ""
-	}
-	return r.Msg
-}
-
-// SynInstancesRequest mirrors the beehive-proto service/v2 SynInstancesRequest message.
-type SynInstancesRequest struct {
-	Instance []*Instance
-}
-
-// SynAllInstancesRequest mirrors the beehive-proto service/v2 SynAllInstancesRequest message.
-type SynAllInstancesRequest struct {
-	Instance []*Instance
-}
-
-// GetAllInstancesRequest mirrors the beehive-proto service/v2 GetAllInstancesRequest message.
-type GetAllInstancesRequest struct {
-	Status   int32
-	Provider string
-}
+// The mirror types ARE the domain types (type aliases over
+// internal/domain/instance, which has every field and accessor this mirror
+// used to define). Legacy import sites keep compiling while the sink path
+// migrates.
+type (
+	Instance               = instance.Instance
+	PortInfo               = instance.PortInfo
+	InstanceList           = instance.InstanceList
+	CommonResponse         = instance.CommonResponse
+	SynInstancesRequest    = instance.SynInstancesRequest
+	SynAllInstancesRequest = instance.SynAllInstancesRequest
+	GetAllInstancesRequest = instance.GetAllInstancesRequest
+)
 
 // InstanceServiceClient mirrors the beehive-proto v2.InstanceServiceClient
 // surface used by this repository.

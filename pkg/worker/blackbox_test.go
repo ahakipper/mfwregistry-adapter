@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"spotter/internal/domain/instance"
 	"spotter/internal/testkit/fakes"
-	v2 "spotter/pkg/beehive/service/v2"
 )
 
 // The black-box tier for package worker exercises the retry-queue semantics
@@ -23,7 +23,7 @@ import (
 // time and the instances exactly as received.
 type blackboxPushCall struct {
 	TriggerTime int64
-	Instances   []*v2.Instance
+	Instances   []*instance.Instance
 }
 
 // blackboxScriptedSink fails the first failCount Push calls and succeeds
@@ -37,11 +37,11 @@ type blackboxScriptedSink struct {
 	pushCalls []blackboxPushCall
 }
 
-func (s *blackboxScriptedSink) Push(triggerTime int64, instances []*v2.Instance) error {
+func (s *blackboxScriptedSink) Push(triggerTime int64, instances []*instance.Instance) error {
 	s.mu.Lock()
 	s.pushCalls = append(s.pushCalls, blackboxPushCall{
 		TriggerTime: triggerTime,
-		Instances:   cloneV2Instances(instances),
+		Instances:   cloneInstances(instances),
 	})
 	fail := s.failCount > 0
 	if fail {
@@ -55,12 +55,12 @@ func (s *blackboxScriptedSink) Push(triggerTime int64, instances []*v2.Instance)
 	return nil
 }
 
-func (s *blackboxScriptedSink) PushAll(triggerTime int64, instances []*v2.Instance) error {
+func (s *blackboxScriptedSink) PushAll(triggerTime int64, instances []*instance.Instance) error {
 	return nil
 }
 
-func (s *blackboxScriptedSink) GetAll(statuses []int32, provider string) (*v2.InstanceList, error) {
-	return &v2.InstanceList{}, nil
+func (s *blackboxScriptedSink) GetAll(statuses []int32, provider string) (*instance.InstanceList, error) {
+	return &instance.InstanceList{}, nil
 }
 
 // pushCallCount returns the number of recorded Push calls.
@@ -78,7 +78,7 @@ func (s *blackboxScriptedSink) pushSnapshot() []blackboxPushCall {
 	for i, call := range s.pushCalls {
 		snapshot[i] = blackboxPushCall{
 			TriggerTime: call.TriggerTime,
-			Instances:   cloneV2Instances(call.Instances),
+			Instances:   cloneInstances(call.Instances),
 		}
 	}
 	return snapshot
@@ -91,11 +91,11 @@ func (s *blackboxScriptedSink) setFailCount(count int) {
 	s.mu.Unlock()
 }
 
-func cloneV2Instances(instances []*v2.Instance) []*v2.Instance {
+func cloneInstances(instances []*instance.Instance) []*instance.Instance {
 	if instances == nil {
 		return nil
 	}
-	cloned := make([]*v2.Instance, len(instances))
+	cloned := make([]*instance.Instance, len(instances))
 	for i, item := range instances {
 		if item == nil {
 			continue
@@ -104,24 +104,6 @@ func cloneV2Instances(instances []*v2.Instance) []*v2.Instance {
 		cloned[i] = &copied
 	}
 	return cloned
-}
-
-// blackboxPusher adapts the scripted sink to the discoverycenter.Pusher
-// contract expected by NewResourceWorker.
-type blackboxPusher struct {
-	sink *blackboxScriptedSink
-}
-
-func (p *blackboxPusher) Push(triggerTime int64, instances []*v2.Instance) error {
-	return p.sink.Push(triggerTime, instances)
-}
-
-func (p *blackboxPusher) PushAll(triggerTime int64, instances []*v2.Instance) error {
-	return p.sink.PushAll(triggerTime, instances)
-}
-
-func (p *blackboxPusher) GetAll(statuses []int32, provider string) (*v2.InstanceList, error) {
-	return p.sink.GetAll(statuses, provider)
 }
 
 // TestBlackboxRetryQueueSemanticsFailedPushQueuedThenRetriedAndCleared: a
@@ -140,7 +122,7 @@ func TestBlackboxRetryQueueSemanticsFailedPushQueuedThenRetriedAndCleared(t *tes
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	w, err := NewResourceWorker(ctx, &blackboxPusher{sink: sink}, &fakes.FakeLogger{}, metrics)
+	w, err := NewResourceWorker(ctx, sink, &fakes.FakeLogger{}, metrics)
 	if err != nil {
 		t.Fatalf("NewResourceWorker() error = %v", err)
 	}
@@ -148,7 +130,7 @@ func TestBlackboxRetryQueueSemanticsFailedPushQueuedThenRetriedAndCleared(t *tes
 	// First push fails: the handler must enqueue the instance for retry.
 	w.Handle(&Event{
 		Trigger: 123,
-		Data:    []*v2.Instance{{InstanceId: "instance-1", Reversion: 42}},
+		Data:    []*instance.Instance{{InstanceId: "instance-1", Reversion: 42}},
 		Operate: OperateTypeSync,
 	})
 
@@ -222,14 +204,14 @@ func TestBlackboxRetryQueueSemanticsKeepsInstanceOnPersistentFailure(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	w, err := NewResourceWorker(ctx, &blackboxPusher{sink: sink}, &fakes.FakeLogger{}, metrics)
+	w, err := NewResourceWorker(ctx, sink, &fakes.FakeLogger{}, metrics)
 	if err != nil {
 		t.Fatalf("NewResourceWorker() error = %v", err)
 	}
 
 	w.Handle(&Event{
 		Trigger: 321,
-		Data:    []*v2.Instance{{InstanceId: "instance-2", Reversion: 7}},
+		Data:    []*instance.Instance{{InstanceId: "instance-2", Reversion: 7}},
 		Operate: OperateTypeSync,
 	})
 
@@ -263,11 +245,11 @@ func TestBlackboxRetryQueueSemanticsKeepsInstanceOnPersistentFailure(t *testing.
 // surviving revision is the one actually re-pushed on retry.
 func TestBlackboxRetryQueueSemanticsReversionWinsReplacesQueuedEvent(t *testing.T) {
 	sink := &blackboxScriptedSink{failCount: 1000}
-	service := NewUnsyncedService(context.Background(), &blackboxPusher{sink: sink}, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+	service := NewUnsyncedService(context.Background(), sink, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
 
-	service.Add(1, []*v2.Instance{{InstanceId: "instance-3", Reversion: 10}})
-	service.Add(2, []*v2.Instance{{InstanceId: "instance-3", Reversion: 20}})
-	service.Add(3, []*v2.Instance{{InstanceId: "instance-3", Reversion: 15}})
+	service.Add(1, []*instance.Instance{{InstanceId: "instance-3", Reversion: 10}})
+	service.Add(2, []*instance.Instance{{InstanceId: "instance-3", Reversion: 20}})
+	service.Add(3, []*instance.Instance{{InstanceId: "instance-3", Reversion: 15}})
 
 	if got := service.Len(); got != 1 {
 		t.Fatalf("queued events = %d, want 1 (same instance ID collapses)", got)

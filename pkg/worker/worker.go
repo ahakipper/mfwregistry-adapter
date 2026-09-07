@@ -5,20 +5,19 @@ import (
 	"errors"
 	"time"
 
+	"spotter/internal/domain/instance"
 	"spotter/internal/ports"
-	v2 "spotter/pkg/beehive/service/v2"
-	"spotter/pkg/discoverycenter"
 )
 
 type DefaultWorker struct {
 	Handlers        map[OperateType]EventResourceHandler
 	ctx             context.Context
 	unsyncedService *UnsyncedService
-	pusher          discoverycenter.Pusher
+	pusher          ports.InstanceSink
 	logger          ports.Logger
 }
 
-func NewResourceWorker(ctx context.Context, pusher discoverycenter.Pusher, logger ports.Logger, metrics ports.MetricsRecorder) (*DefaultWorker, error) {
+func NewResourceWorker(ctx context.Context, pusher ports.InstanceSink, logger ports.Logger, metrics ports.MetricsRecorder) (*DefaultWorker, error) {
 	if pusher == nil {
 		return nil, errors.New("worker: pusher is required")
 	}
@@ -88,7 +87,7 @@ func (w *DefaultWorker) ProcessUnsynced() {
 	w.unsyncedService.Sync()
 }
 
-func (w *DefaultWorker) GetAll(enable []int32, provider string) (*v2.InstanceList, error) {
+func (w *DefaultWorker) GetAll(enable []int32, provider string) (*instance.InstanceList, error) {
 	return w.pusher.GetAll(enable, provider)
 }
 

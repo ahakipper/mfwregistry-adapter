@@ -12,7 +12,6 @@ import (
 	"spotter/internal/domain/instance"
 	"spotter/internal/testkit/discoverymock"
 	"spotter/internal/testkit/fakes"
-	v2 "spotter/pkg/beehive/service/v2"
 )
 
 func TestNewClientRejectsNilService(t *testing.T) {
@@ -29,7 +28,7 @@ func TestClientSyncCapturesCallAndRecordsMetrics(t *testing.T) {
 	server, client := newMockClient(t)
 	metrics := fakes.NewFakeMetricsRecorder()
 	client.metrics = metrics
-	instances := []*v2.Instance{{
+	instances := []*instance.Instance{{
 		InstanceId: "instance-1",
 		Provider:   "ecs",
 		Status:     1,
@@ -66,7 +65,7 @@ func TestClientSyncReturnsErrorForNonzeroResponseCode(t *testing.T) {
 	server, client := newMockClient(t)
 	server.SetResponseCode(17, "rejected")
 
-	response, err := client.Sync([]*v2.Instance{{InstanceId: "instance-1"}})
+	response, err := client.Sync([]*instance.Instance{{InstanceId: "instance-1"}})
 	if err == nil {
 		t.Fatal("Sync() error = nil, want non-nil")
 	}
@@ -80,7 +79,7 @@ func TestClientSyncReturnsErrorForNonzeroResponseCode(t *testing.T) {
 
 func TestClientSyncAllCapturesCall(t *testing.T) {
 	server, client := newMockClient(t)
-	instances := []*v2.Instance{{InstanceId: "instance-all", Provider: "k8s"}}
+	instances := []*instance.Instance{{InstanceId: "instance-all", Provider: "k8s"}}
 
 	response, err := client.SyncAll(instances)
 	if err != nil {
@@ -218,15 +217,15 @@ type deadlineService struct {
 	err      error
 }
 
-func (s *deadlineService) SynInstance(ctx context.Context, _ *v2.SynInstancesRequest, _ ...grpc.CallOption) (*v2.CommonResponse, error) {
+func (s *deadlineService) SynInstance(ctx context.Context, _ *instance.SynInstancesRequest, _ ...grpc.CallOption) (*instance.CommonResponse, error) {
 	s.deadline, _ = ctx.Deadline()
 	return nil, s.err
 }
 
-func (s *deadlineService) SynAllInstance(context.Context, *v2.SynAllInstancesRequest, ...grpc.CallOption) (*v2.CommonResponse, error) {
+func (s *deadlineService) SynAllInstance(context.Context, *instance.SynAllInstancesRequest, ...grpc.CallOption) (*instance.CommonResponse, error) {
 	return nil, errors.New("unexpected SynAllInstance call")
 }
 
-func (s *deadlineService) GetAllInstance(context.Context, *v2.GetAllInstancesRequest, ...grpc.CallOption) (*v2.InstanceList, error) {
+func (s *deadlineService) GetAllInstance(context.Context, *instance.GetAllInstancesRequest, ...grpc.CallOption) (*instance.InstanceList, error) {
 	return nil, errors.New("unexpected GetAllInstance call")
 }

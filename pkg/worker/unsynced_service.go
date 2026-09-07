@@ -5,22 +5,21 @@ import (
 	"sync"
 	"time"
 
+	"spotter/internal/domain/instance"
 	"spotter/internal/ports"
-	v2 "spotter/pkg/beehive/service/v2"
-	"spotter/pkg/discoverycenter"
 	"spotter/tools"
 )
 
 type UnsyncedService struct {
 	ctx     context.Context
-	pusher  discoverycenter.Pusher
+	pusher  ports.InstanceSink
 	logger  ports.Logger
 	metrics ports.MetricsRecorder
 	store   map[string]*Event
 	sync.RWMutex
 }
 
-func NewUnsyncedService(ctx context.Context, pusher discoverycenter.Pusher, logger ports.Logger, metrics ports.MetricsRecorder) *UnsyncedService {
+func NewUnsyncedService(ctx context.Context, pusher ports.InstanceSink, logger ports.Logger, metrics ports.MetricsRecorder) *UnsyncedService {
 	if logger == nil {
 		logger = ports.NopLogger{}
 	}
@@ -36,7 +35,7 @@ func NewUnsyncedService(ctx context.Context, pusher discoverycenter.Pusher, logg
 	}
 }
 
-func (s *UnsyncedService) Add(triggerTime int64, instances []*v2.Instance) {
+func (s *UnsyncedService) Add(triggerTime int64, instances []*instance.Instance) {
 	s.logger.Infof("unsyncService add instance, instance: %v", instances)
 	if instances == nil {
 		return
@@ -60,7 +59,7 @@ func (s *UnsyncedService) Add(triggerTime int64, instances []*v2.Instance) {
 		}
 		s.store[item.InstanceId] = &Event{
 			Trigger: triggerTime,
-			Data:    []*v2.Instance{item},
+			Data:    []*instance.Instance{item},
 			Operate: OperateTypeSync,
 		}
 	}
