@@ -487,13 +487,20 @@ func (e *FakeLeaderElector) startPump() {
 	})
 }
 
+// QueueDepthObservation is one captured SetSyncErrorQueueDepth call: the
+// sink whose queue depth was reported, and the depth itself.
+type QueueDepthObservation struct {
+	Sink  string
+	Depth int
+}
+
 // FakeMetricsRecorder captures application metrics in memory.
 type FakeMetricsRecorder struct {
 	mu sync.Mutex
 
 	syncOnceDurations []time.Duration
 	syncAllDurations  map[string][]time.Duration
-	queueDepths       []int
+	queueDepths       []QueueDepthObservation
 	syncOnceCount     int
 }
 
@@ -517,10 +524,10 @@ func (r *FakeMetricsRecorder) ObserveSyncAllDuration(provider string, d time.Dur
 	r.syncAllDurations[provider] = append(r.syncAllDurations[provider], d)
 }
 
-func (r *FakeMetricsRecorder) SetSyncErrorQueueDepth(depth int) {
+func (r *FakeMetricsRecorder) SetSyncErrorQueueDepth(sink string, depth int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.queueDepths = append(r.queueDepths, depth)
+	r.queueDepths = append(r.queueDepths, QueueDepthObservation{Sink: sink, Depth: depth})
 }
 
 func (r *FakeMetricsRecorder) MarkSyncOnce() {
@@ -543,11 +550,18 @@ func (r *FakeMetricsRecorder) SyncAllDurations(provider string) []time.Duration 
 	return append([]time.Duration(nil), r.syncAllDurations[provider]...)
 }
 
-// QueueDepths returns every recorded queue depth.
-func (r *FakeMetricsRecorder) QueueDepths() []int {
+// QueueDepths returns every recorded queue depth observation, in order.
+func (r *FakeMetricsRecorder) QueueDepths() []QueueDepthObservation {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]int(nil), r.queueDepths...)
+	return append([]QueueDepthObservation(nil), r.queueDepths...)
+}
+
+// QueueDepthObservations returns every recorded queue depth observation, in
+// order. It is an alias of QueueDepths kept for the per-sink retry tests,
+// which read the name as the per-sink statement of plan §5.4.
+func (r *FakeMetricsRecorder) QueueDepthObservations() []QueueDepthObservation {
+	return r.QueueDepths()
 }
 
 // SyncOnceCount returns the number of MarkSyncOnce calls.

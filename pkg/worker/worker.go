@@ -57,7 +57,7 @@ func (w *DefaultWorker) InitEventHandlers() {
 			}
 			w.logger.Errorf("wokderService sync failed, err:%v instance: %v", err, instanceID)
 			if len(e.Data) > 0 {
-				w.unsyncedService.Add(e.Trigger, e.Data)
+				w.unsyncedService.Add(e.Trigger, e.Data, w.queuedSinks(err))
 			}
 			return err
 		}
@@ -66,11 +66,20 @@ func (w *DefaultWorker) InitEventHandlers() {
 	w.AddEventHandler(OperateTypeSyncAll, func(e *Event) error {
 		if err := w.pusher.PushAll(e.Trigger, e.Data); err != nil {
 			w.logger.Errorf("wokderService syncAll failed, instance: %v", e.Data)
-			w.unsyncedService.Add(e.Trigger, e.Data)
+			w.unsyncedService.Add(e.Trigger, e.Data, w.queuedSinks(err))
 			return err
 		}
 		return nil
 	})
+}
+
+// queuedSinks resolves which sinks a failed push queues retries for
+// (plan §5.2): a FanoutError queues only its failed sinks (detected with
+// errors.As, never a type assertion); any other error conservatively queues
+// every known sink. With today's single plain sink both paths queue that
+// one sink, so retry outcomes are unchanged.
+func (w *DefaultWorker) queuedSinks(err error) []string {
+	return failedSinkNames(err, w.unsyncedService.sinkNames())
 }
 
 func (w *DefaultWorker) Handle(d *Event) {
@@ -97,6 +106,6 @@ func (nopMetricsRecorder) ObserveSyncOnceDuration(time.Duration) {}
 
 func (nopMetricsRecorder) ObserveSyncAllDuration(string, time.Duration) {}
 
-func (nopMetricsRecorder) SetSyncErrorQueueDepth(int) {}
+func (nopMetricsRecorder) SetSyncErrorQueueDepth(string, int) {}
 
 func (nopMetricsRecorder) MarkSyncOnce() {}

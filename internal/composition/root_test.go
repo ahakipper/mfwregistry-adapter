@@ -79,7 +79,7 @@ func TestBuildDefaults(t *testing.T) {
 	rt.Logger.Errorf("error %s", "f")
 	rt.Metrics.ObserveSyncOnceDuration(time.Second)
 	rt.Metrics.ObserveSyncAllDuration("k8s", time.Second)
-	rt.Metrics.SetSyncErrorQueueDepth(1)
+	rt.Metrics.SetSyncErrorQueueDepth("atlas", 1)
 	rt.Metrics.MarkSyncOnce()
 	rt.Notifier.Notify("title", "content")
 

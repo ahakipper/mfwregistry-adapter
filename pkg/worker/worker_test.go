@@ -68,11 +68,11 @@ func TestUnsyncedServiceRecordsQueueDepthBeforeRetry(t *testing.T) {
 	sink := &fakes.FakeInstanceSink{}
 	metrics := fakes.NewFakeMetricsRecorder()
 	service := NewUnsyncedService(context.Background(), sink, &fakes.FakeLogger{}, metrics)
-	service.Add(123, []*instance.Instance{{InstanceId: "instance-1", Reversion: 42}})
+	service.Add(123, []*instance.Instance{{InstanceId: "instance-1", Reversion: 42}}, nil)
 
 	service.syncOnce()
 
-	if got, want := metrics.QueueDepths(), []int{1}; !reflect.DeepEqual(got, want) {
+	if got, want := metrics.QueueDepths(), []fakes.QueueDepthObservation{{Sink: plainSinkName, Depth: 1}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("queue depths = %v, want %v", got, want)
 	}
 	if got := service.Len(); got != 0 {

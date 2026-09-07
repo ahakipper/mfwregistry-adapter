@@ -21,7 +21,8 @@ func TestRecorderCallsDoNotPanic(t *testing.T) {
 		r.ObserveSyncAllDuration("ecs", time.Duration(i)*time.Second)
 		r.ObserveSyncAllDuration("other", time.Duration(i)*time.Second)
 		r.ObserveSyncAllDuration("", time.Duration(i)*time.Second)
-		r.SetSyncErrorQueueDepth(i)
+		r.SetSyncErrorQueueDepth("atlas", i)
+		r.SetSyncErrorQueueDepth("nacos", i)
 		r.MarkSyncOnce()
 	}
 }
@@ -106,7 +107,7 @@ func TestOnListenerServesMetrics(t *testing.T) {
 	r := New()
 	r.MarkSyncOnce()
 	r.ObserveSyncOnceDuration(1500 * time.Millisecond)
-	r.SetSyncErrorQueueDepth(3)
+	r.SetSyncErrorQueueDepth("atlas", 3)
 	status, body, err = httpGet(t, addr, "/metrics", 2*time.Second)
 	if err != nil {
 		t.Fatalf("GET /metrics after recording: %v", err)

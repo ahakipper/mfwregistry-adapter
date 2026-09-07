@@ -234,7 +234,7 @@ func TestFakeMetricsRecorderCapturesConcurrentMetrics(t *testing.T) {
 			defer wg.Done()
 			recorder.ObserveSyncOnceDuration(time.Duration(i))
 			recorder.ObserveSyncAllDuration("k8s", time.Duration(i))
-			recorder.SetSyncErrorQueueDepth(i)
+			recorder.SetSyncErrorQueueDepth("atlas", i)
 			recorder.MarkSyncOnce()
 		}(i)
 	}

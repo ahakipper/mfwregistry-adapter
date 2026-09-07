@@ -185,6 +185,6 @@ func (nopMetricsRecorder) ObserveSyncOnceDuration(time.Duration) {}
 
 func (nopMetricsRecorder) ObserveSyncAllDuration(string, time.Duration) {}
 
-func (nopMetricsRecorder) SetSyncErrorQueueDepth(int) {}
+func (nopMetricsRecorder) SetSyncErrorQueueDepth(string, int) {}
 
 func (nopMetricsRecorder) MarkSyncOnce() {}

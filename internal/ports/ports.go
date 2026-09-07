@@ -90,6 +90,11 @@ const (
 type MetricsRecorder interface {
 	ObserveSyncOnceDuration(time.Duration)
 	ObserveSyncAllDuration(provider string, d time.Duration)
-	SetSyncErrorQueueDepth(int)
+	// SetSyncErrorQueueDepth records the current depth of one sink's sync
+	// error queue. The sink label is the accepted breaking metrics change of
+	// plan §5.3: one number cannot say which registry diverges once a
+	// second sink exists, so the unlabeled series is replaced by
+	// per-sink series.
+	SetSyncErrorQueueDepth(sink string, depth int)
 	MarkSyncOnce()
 }

@@ -67,10 +67,17 @@ func (r *Recorder) ObserveSyncAllDuration(provider string, duration time.Duratio
 	}
 }
 
-// SetSyncErrorQueueDepth records the current depth of the sync error queue
-// on the sync_error_gauge collector.
-func (r *Recorder) SetSyncErrorQueueDepth(depth int) {
-	metrics.SyncErrorGauge.WithLabelValues("sync_error_gauge").Set(float64(depth))
+// SetSyncErrorQueueDepth records the current depth of one sink's sync error
+// queue on the sync_error_gauge collector.
+//
+// Breaking metrics change (plan §5.3, accepted): sync_error_gauge gains a
+// "sink" label, so the series become sync_error_gauge{sink="atlas"} and
+// sync_error_gauge{sink="nacos"}; the single unlabeled series and the
+// label-value-as-name convention ("syncgauge": "sync_error_gauge") are
+// retired for this one metric. One number cannot say which registry
+// diverges once a second sink exists; dashboards add one label filter.
+func (r *Recorder) SetSyncErrorQueueDepth(sink string, depth int) {
+	metrics.SyncErrorGauge.WithLabelValues(sink).Set(float64(depth))
 }
 
 // MarkSyncOnce marks that a single-provider sync just happened by setting

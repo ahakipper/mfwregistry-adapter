@@ -145,11 +145,11 @@ func TestBlackboxRetryQueueSemanticsFailedPushQueuedThenRetriedAndCleared(t *tes
 	// margin under parallel test load).
 	queuedDeadline := time.Now().Add(15 * time.Second)
 	depths := metrics.QueueDepths()
-	for time.Now().Before(queuedDeadline) && (len(depths) == 0 || depths[0] <= 0) {
+	for time.Now().Before(queuedDeadline) && (len(depths) == 0 || depths[0].Depth <= 0) {
 		time.Sleep(25 * time.Millisecond)
 		depths = metrics.QueueDepths()
 	}
-	if len(depths) == 0 || depths[0] <= 0 {
+	if len(depths) == 0 || depths[0].Depth <= 0 {
 		t.Fatalf("queue depths after failed push = %v, want a first recorded depth > 0", depths)
 	}
 
@@ -167,7 +167,6 @@ func TestBlackboxRetryQueueSemanticsFailedPushQueuedThenRetriedAndCleared(t *tes
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-
 	calls := sink.pushSnapshot()
 	if got := len(calls); got < 2 {
 		t.Fatalf("push calls after retry window = %d, want >= 2 (original + retry)", got)
@@ -247,9 +246,9 @@ func TestBlackboxRetryQueueSemanticsReversionWinsReplacesQueuedEvent(t *testing.
 	sink := &blackboxScriptedSink{failCount: 1000}
 	service := NewUnsyncedService(context.Background(), sink, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
 
-	service.Add(1, []*instance.Instance{{InstanceId: "instance-3", Reversion: 10}})
-	service.Add(2, []*instance.Instance{{InstanceId: "instance-3", Reversion: 20}})
-	service.Add(3, []*instance.Instance{{InstanceId: "instance-3", Reversion: 15}})
+	service.Add(1, []*instance.Instance{{InstanceId: "instance-3", Reversion: 10}}, nil)
+	service.Add(2, []*instance.Instance{{InstanceId: "instance-3", Reversion: 20}}, nil)
+	service.Add(3, []*instance.Instance{{InstanceId: "instance-3", Reversion: 15}}, nil)
 
 	if got := service.Len(); got != 1 {
 		t.Fatalf("queued events = %d, want 1 (same instance ID collapses)", got)
@@ -286,9 +285,9 @@ func TestBlackboxRetryQueueSemanticsReversionWinsReplacesQueuedEvent(t *testing.
 	}
 }
 
-func lastDepth(depths []int) int {
+func lastDepth(depths []fakes.QueueDepthObservation) int {
 	if len(depths) == 0 {
 		return -1
 	}
-	return depths[len(depths)-1]
+	return depths[len(depths)-1].Depth
 }
