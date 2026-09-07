@@ -158,6 +158,12 @@ type InstanceSinkCall struct {
 	Instances   []*instance.Instance
 }
 
+// InstanceSinkGetAllCall is one captured GetAll invocation.
+type InstanceSinkGetAllCall struct {
+	Statuses []int32
+	Provider string
+}
+
 // FakeInstanceSink is a configurable in-memory InstanceSink.
 type FakeInstanceSink struct {
 	mu sync.Mutex
@@ -169,6 +175,7 @@ type FakeInstanceSink struct {
 
 	pushCalls    []InstanceSinkCall
 	pushAllCalls []InstanceSinkCall
+	getAllCalls  []InstanceSinkGetAllCall
 }
 
 func (s *FakeInstanceSink) Push(triggerTime int64, instances []*instance.Instance) error {
@@ -194,6 +201,10 @@ func (s *FakeInstanceSink) PushAll(triggerTime int64, instances []*instance.Inst
 func (s *FakeInstanceSink) GetAll(statuses []int32, provider string) (*instance.InstanceList, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.getAllCalls = append(s.getAllCalls, InstanceSinkGetAllCall{
+		Statuses: append([]int32(nil), statuses...),
+		Provider: provider,
+	})
 	return cloneInstanceList(s.RemoteList), s.GetAllErr
 }
 
@@ -225,6 +236,20 @@ func (s *FakeInstanceSink) PushAllCalls() []InstanceSinkCall {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return cloneSinkCalls(s.pushAllCalls)
+}
+
+// GetAllCalls returns independent copies of captured GetAll calls.
+func (s *FakeInstanceSink) GetAllCalls() []InstanceSinkGetAllCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]InstanceSinkGetAllCall, len(s.getAllCalls))
+	for i, call := range s.getAllCalls {
+		result[i] = InstanceSinkGetAllCall{
+			Statuses: append([]int32(nil), call.Statuses...),
+			Provider: call.Provider,
+		}
+	}
+	return result
 }
 
 // FakeInstanceSource is a configurable in-memory InstanceSource.

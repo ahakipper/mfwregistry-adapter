@@ -1,11 +1,12 @@
 package worker
 
-// Phase F3 per-sink retry tests (docs/nacos-sink-plan.md §5.4), driven by
-// two fakes.FakeInstanceSink instances behind a hand-rolled two-sink fanout
-// stub. F4 replaces the stub with the real FanoutSink and these tests run
-// unchanged — that is the F3→F4 contract. The contract tests below the
-// scenarios pin the §5.1 error discipline: only fan-outs construct
-// FanoutError, consumers detect it with errors.As, never a type assertion.
+// Per-sink retry tests (docs/nacos-sink-plan.md §5.4) driving the real
+// FanoutSink of F4 — the F3→F4 contract: the scenarios were developed
+// against a hand-rolled two-sink stub and now run unchanged against the
+// real type. The contract tests below the scenarios pin the §5.1 error
+// discipline: only fan-outs construct FanoutError, consumers detect it with
+// errors.As, never a type assertion. The nine §6.4 FanoutSink tests sit
+// between the helpers and the scenarios.
 
 import (
 	"context"
@@ -27,74 +28,20 @@ const (
 	stubSinkNacos = "nacos"
 )
 
-// twoSinkFanoutStub is the hand-rolled two-sink fanout of plan §5.4: two
-// sinks behind the sinkFanout seam, aggregating per-sink errors into
-// FanoutError exactly as F4's FanoutSink will (§6.2: sequential, atlas
-// first, no short-circuit, nil only when every sink succeeds). plainErr,
-// when set, is returned by Push/PushAll verbatim — the legacy non-fanout
-// error path.
-type twoSinkFanoutStub struct {
-	atlas    ports.InstanceSink
-	nacos    ports.InstanceSink
+// legacyErrorFanout wraps a real FanoutSink and returns a fixed plain error
+// from Push/PushAll instead of aggregating: the one error surface the real
+// fanout never produces, which the worker's conservative all-sinks fallback
+// exists for (plan §5.2). Embedding keeps the stub to exactly the overridden
+// behavior — PushTo, Sinks and GetAll stay the real fanout's — so it exists
+// solely for TestWorkerLegacyErrorQueuesAllSinks.
+type legacyErrorFanout struct {
+	*FanoutSink
 	plainErr error
 }
 
-func newTwoSinkFanoutStub(atlas, nacos ports.InstanceSink) *twoSinkFanoutStub {
-	return &twoSinkFanoutStub{atlas: atlas, nacos: nacos}
-}
+func (f *legacyErrorFanout) Push(int64, []*instance.Instance) error { return f.plainErr }
 
-func (f *twoSinkFanoutStub) Push(triggerTime int64, instances []*instance.Instance) error {
-	if f.plainErr != nil {
-		return f.plainErr
-	}
-	var failures FanoutError
-	if err := f.atlas.Push(triggerTime, instances); err != nil {
-		failures = append(failures, SinkFailure{Sink: stubSinkAtlas, Err: err})
-	}
-	if err := f.nacos.Push(triggerTime, instances); err != nil {
-		failures = append(failures, SinkFailure{Sink: stubSinkNacos, Err: err})
-	}
-	if len(failures) > 0 {
-		return failures
-	}
-	return nil
-}
-
-func (f *twoSinkFanoutStub) PushAll(triggerTime int64, instances []*instance.Instance) error {
-	if f.plainErr != nil {
-		return f.plainErr
-	}
-	var failures FanoutError
-	if err := f.atlas.PushAll(triggerTime, instances); err != nil {
-		failures = append(failures, SinkFailure{Sink: stubSinkAtlas, Err: err})
-	}
-	if err := f.nacos.PushAll(triggerTime, instances); err != nil {
-		failures = append(failures, SinkFailure{Sink: stubSinkNacos, Err: err})
-	}
-	if len(failures) > 0 {
-		return failures
-	}
-	return nil
-}
-
-func (f *twoSinkFanoutStub) GetAll(statuses []int32, provider string) (*instance.InstanceList, error) {
-	return f.atlas.GetAll(statuses, provider)
-}
-
-func (f *twoSinkFanoutStub) PushTo(sink string, triggerTime int64, instances []*instance.Instance) error {
-	switch sink {
-	case stubSinkAtlas:
-		return f.atlas.Push(triggerTime, instances)
-	case stubSinkNacos:
-		return f.nacos.Push(triggerTime, instances)
-	default:
-		return fmt.Errorf("unknown sink %q", sink)
-	}
-}
-
-func (f *twoSinkFanoutStub) Sinks() []string {
-	return []string{stubSinkAtlas, stubSinkNacos}
-}
+func (f *legacyErrorFanout) PushAll(int64, []*instance.Instance) error { return f.plainErr }
 
 // slowSink delays its first Push by delay after signaling entry on entered
 // (buffered, signaled once). It bounds how long a retry-cycle push stays in
@@ -166,12 +113,358 @@ func waitForSignal(t *testing.T, ch chan struct{}, what string) {
 	}
 }
 
+// --- F4: FanoutSink contract (plan §6.4) -----------------------------------
+//
+// The nine tests of the plan's F4 table. They exercise the real FanoutSink
+// directly; the §5.4 scenarios below then run through it unchanged (the
+// F3→F4 contract).
+
+// newTestFanout builds the canonical two-sink fanout of the plan's tests:
+// atlas first (the primary), nacos second.
+func newTestFanout(t *testing.T, atlas, nacos ports.InstanceSink) *FanoutSink {
+	t.Helper()
+	fanout, err := NewFanoutSink(nil,
+		NamedSink{Name: stubSinkAtlas, Sink: atlas},
+		NamedSink{Name: stubSinkNacos, Sink: nacos},
+	)
+	if err != nil {
+		t.Fatalf("NewFanoutSink() error = %v, want nil", err)
+	}
+	return fanout
+}
+
+// orderRecordingSink records each call into a shared, mutex-guarded log
+// under its name, so one sequence spans both sinks — the fan-out order
+// assertion needs exactly that.
+type orderRecordingSink struct {
+	name string
+	mu   *sync.Mutex
+	log  *[]string
+}
+
+func (s *orderRecordingSink) Push(triggerTime int64, instances []*instance.Instance) error {
+	s.record("push:" + s.name)
+	return nil
+}
+
+func (s *orderRecordingSink) PushAll(triggerTime int64, instances []*instance.Instance) error {
+	s.record("pushAll:" + s.name)
+	return nil
+}
+
+func (s *orderRecordingSink) GetAll(statuses []int32, provider string) (*instance.InstanceList, error) {
+	s.record("getAll:" + s.name)
+	return nil, nil
+}
+
+func (s *orderRecordingSink) record(event string) {
+	s.mu.Lock()
+	*s.log = append(*s.log, event)
+	s.mu.Unlock()
+}
+
+// TestNewFanoutSinkRejectsEmptyAndDuplicateNames: the constructor errors
+// on a malformed sink set — no sinks, an empty name, a nil sink, a
+// duplicate name. Every later lookup (PushTo, the primary view, the retry
+// fallback) is by name, so the name set must be a well-formed identity of
+// the sink set (plan §6.2).
+func TestNewFanoutSinkRejectsEmptyAndDuplicateNames(t *testing.T) {
+	sink := &fakes.FakeInstanceSink{}
+
+	cases := []struct {
+		name  string
+		sinks []NamedSink
+	}{
+		{"no sinks", nil},
+		{"empty name", []NamedSink{{Name: "", Sink: sink}}},
+		{"nil sink", []NamedSink{{Name: stubSinkAtlas, Sink: nil}}},
+		{"duplicate names", []NamedSink{
+			{Name: stubSinkAtlas, Sink: sink},
+			{Name: stubSinkAtlas, Sink: &fakes.FakeInstanceSink{}},
+		}},
+	}
+	for _, tc := range cases {
+		fanout, err := NewFanoutSink(nil, tc.sinks...)
+		if err == nil {
+			t.Fatalf("NewFanoutSink(%s) error = nil, want non-nil", tc.name)
+		}
+		if fanout != nil {
+			t.Fatalf("NewFanoutSink(%s) fanout = %#v, want nil", tc.name, fanout)
+		}
+	}
+
+	// The well-formed set still constructs.
+	if fanout, err := NewFanoutSink(nil,
+		NamedSink{Name: stubSinkAtlas, Sink: sink},
+		NamedSink{Name: stubSinkNacos, Sink: &fakes.FakeInstanceSink{}},
+	); err != nil || fanout == nil {
+		t.Fatalf("NewFanoutSink(valid) = (%#v, %v), want a non-nil fanout and no error", fanout, err)
+	}
+}
+
+// TestFanoutPushAllSinksInOrder: Push and PushAll reach the sinks in
+// declaration order — atlas (the primary) first, then nacos.
+func TestFanoutPushAllSinksInOrder(t *testing.T) {
+	var mu sync.Mutex
+	var calls []string
+	atlas := &orderRecordingSink{name: stubSinkAtlas, mu: &mu, log: &calls}
+	nacos := &orderRecordingSink{name: stubSinkNacos, mu: &mu, log: &calls}
+	fanout := newTestFanout(t, atlas, nacos)
+
+	_ = fanout.Push(1, nil)
+	_ = fanout.PushAll(1, nil)
+
+	want := []string{
+		"push:" + stubSinkAtlas, "push:" + stubSinkNacos,
+		"pushAll:" + stubSinkAtlas, "pushAll:" + stubSinkNacos,
+	}
+	if got := calls; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sink call order = %v, want %v (declaration order, sequential)", got, want)
+	}
+}
+
+// TestFanoutPushAggregatesPerSinkErrors: atlas ok, nacos failed → a
+// FanoutError with exactly one failure naming nacos; FailedSinks()==["nacos"].
+func TestFanoutPushAggregatesPerSinkErrors(t *testing.T) {
+	atlas := &fakes.FakeInstanceSink{}
+	nacosErr := errors.New("nacos down")
+	nacos := &fakes.FakeInstanceSink{PushErr: nacosErr}
+	fanout := newTestFanout(t, atlas, nacos)
+
+	err := fanout.Push(123, []*instance.Instance{{InstanceId: "instance-1"}})
+
+	var fanoutErr FanoutError
+	if !errors.As(err, &fanoutErr) {
+		t.Fatalf("Push() error = %v, want a FanoutError detected by errors.As", err)
+	}
+	if len(fanoutErr) != 1 {
+		t.Fatalf("FanoutError failures = %d, want exactly one (atlas succeeded)", len(fanoutErr))
+	}
+	if fanoutErr[0].Sink != stubSinkNacos || fanoutErr[0].Err != nacosErr {
+		t.Fatalf("failure = %#v, want {sink: %q, err: the nacos error}", fanoutErr[0], stubSinkNacos)
+	}
+	if got, want := fanoutErr.FailedSinks(), []string{stubSinkNacos}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("FailedSinks() = %v, want %v", got, want)
+	}
+}
+
+// TestFanoutPushAllSuccessReturnsNil: both sinks succeed → nil error, and
+// both sinks received the push.
+func TestFanoutPushAllSuccessReturnsNil(t *testing.T) {
+	atlas := &fakes.FakeInstanceSink{}
+	nacos := &fakes.FakeInstanceSink{}
+	fanout := newTestFanout(t, atlas, nacos)
+	instances := []*instance.Instance{{InstanceId: "instance-1"}}
+
+	if err := fanout.PushAll(123, instances); err != nil {
+		t.Fatalf("PushAll() error = %v, want nil when every sink succeeds", err)
+	}
+	atlasCalls := atlas.PushAllCalls()
+	if len(atlasCalls) != 1 || atlasCalls[0].TriggerTime != 123 || len(atlasCalls[0].Instances) != 1 {
+		t.Fatalf("atlas PushAll calls = %#v, want one call with the event payload", atlasCalls)
+	}
+	nacosCalls := nacos.PushAllCalls()
+	if len(nacosCalls) != 1 || nacosCalls[0].TriggerTime != 123 || len(nacosCalls[0].Instances) != 1 {
+		t.Fatalf("nacos PushAll calls = %#v, want one call with the event payload", nacosCalls)
+	}
+}
+
+// TestFanoutPushAllFanoutsAllDespiteFirstFailure: atlas fails → nacos still
+// receives its push (no short-circuit, plan §6.2).
+func TestFanoutPushAllFanoutsAllDespiteFirstFailure(t *testing.T) {
+	atlas := &fakes.FakeInstanceSink{PushAllErr: errors.New("atlas down")}
+	nacos := &fakes.FakeInstanceSink{}
+	fanout := newTestFanout(t, atlas, nacos)
+	instances := []*instance.Instance{{InstanceId: "instance-1"}}
+
+	err := fanout.PushAll(123, instances)
+
+	var fanoutErr FanoutError
+	if !errors.As(err, &fanoutErr) || len(fanoutErr) != 1 || fanoutErr[0].Sink != stubSinkAtlas {
+		t.Fatalf("PushAll() error = %#v, want a FanoutError with exactly atlas's failure", err)
+	}
+	if got := len(nacos.PushAllCalls()); got != 1 {
+		t.Fatalf("nacos PushAll calls after atlas failure = %d, want 1 (no short-circuit)", got)
+	}
+}
+
+// TestFanoutGetAllReturnsPrimaryView: GetAll returns the first (primary)
+// sink's list verbatim, forwarded with the original arguments; the
+// secondary's GetAll is never called (plan §6.3, v1 semantics).
+func TestFanoutGetAllReturnsPrimaryView(t *testing.T) {
+	atlas := &fakes.FakeInstanceSink{}
+	atlas.SetRemoteList(&instance.InstanceList{Instance: []*instance.Instance{{InstanceId: "atlas-view"}}})
+	nacos := &fakes.FakeInstanceSink{}
+	nacos.SetRemoteList(&instance.InstanceList{Instance: []*instance.Instance{{InstanceId: "nacos-view"}}})
+	fanout := newTestFanout(t, atlas, nacos)
+
+	list, err := fanout.GetAll([]int32{1, 2}, "k8s")
+
+	if err != nil {
+		t.Fatalf("GetAll() error = %v, want nil", err)
+	}
+	if len(list.Instance) != 1 || list.Instance[0].InstanceId != "atlas-view" {
+		t.Fatalf("GetAll() list = %#v, want the primary's view verbatim", list)
+	}
+	atlasCalls := atlas.GetAllCalls()
+	if len(atlasCalls) != 1 || !reflect.DeepEqual(atlasCalls[0].Statuses, []int32{1, 2}) || atlasCalls[0].Provider != "k8s" {
+		t.Fatalf("primary GetAll calls = %#v, want the query forwarded verbatim", atlasCalls)
+	}
+	if got := len(nacos.GetAllCalls()); got != 0 {
+		t.Fatalf("secondary GetAll calls = %d, want 0 (primary view only in v1)", got)
+	}
+}
+
+// TestFanoutGetAllPrimaryErrorPropagates: a primary GetAll error surfaces
+// unchanged — no wrapping, no fallback to the secondary (plan §6.3).
+func TestFanoutGetAllPrimaryErrorPropagates(t *testing.T) {
+	getAllErr := errors.New("atlas query failed")
+	atlas := &fakes.FakeInstanceSink{GetAllErr: getAllErr}
+	nacos := &fakes.FakeInstanceSink{}
+	nacos.SetRemoteList(&instance.InstanceList{Instance: []*instance.Instance{{InstanceId: "nacos-view"}}})
+	fanout := newTestFanout(t, atlas, nacos)
+
+	list, err := fanout.GetAll([]int32{1}, "ecs")
+
+	if err != getAllErr {
+		t.Fatalf("GetAll() error = %v, want the primary's error unchanged", err)
+	}
+	if list != nil {
+		t.Fatalf("GetAll() list = %#v, want nil alongside the error", list)
+	}
+	if got := len(nacos.GetAllCalls()); got != 0 {
+		t.Fatalf("secondary GetAll calls = %d, want 0 (a primary error does not fall back)", got)
+	}
+}
+
+// TestFanoutPushToTargetsSingleSink: PushTo reaches exactly the named sink
+// with the original arguments; an unknown name errors (plan §6.4).
+func TestFanoutPushToTargetsSingleSink(t *testing.T) {
+	atlas := &fakes.FakeInstanceSink{}
+	nacos := &fakes.FakeInstanceSink{}
+	fanout := newTestFanout(t, atlas, nacos)
+	instances := []*instance.Instance{{InstanceId: "instance-1", Reversion: 42}}
+
+	if err := fanout.PushTo(stubSinkNacos, 123, instances); err != nil {
+		t.Fatalf("PushTo(nacos) error = %v, want nil", err)
+	}
+	nacosCalls := nacos.PushCalls()
+	if len(nacosCalls) != 1 || nacosCalls[0].TriggerTime != 123 ||
+		len(nacosCalls[0].Instances) != 1 || nacosCalls[0].Instances[0].InstanceId != "instance-1" {
+		t.Fatalf("nacos Push calls = %#v, want exactly the targeted push", nacosCalls)
+	}
+	if got := len(atlas.PushCalls()); got != 0 {
+		t.Fatalf("atlas Push calls = %d, want 0 (PushTo targets one sink)", got)
+	}
+
+	if err := fanout.PushTo("bogus", 123, instances); err == nil {
+		t.Fatal("PushTo(unknown sink) error = nil, want an error")
+	}
+}
+
+// TestFanoutSingleSinkDegeneratesToPlainBehavior: one sink — the shipped
+// configuration until F5 wires Nacos (§6.5) — behaves exactly like the
+// pre-fanout worker: the same pushes, the same retry queue keys and drain,
+// and an error surface that degenerates to nil-or-one (§6.5). The
+// side-by-side worker comparison is the regression net for §6.5.
+func TestFanoutSingleSinkDegeneratesToPlainBehavior(t *testing.T) {
+	// Error surface: success → nil; failure → a FanoutError holding
+	// exactly the one sink's failure.
+	oneSink, err := NewFanoutSink(nil, NamedSink{Name: stubSinkAtlas, Sink: &fakes.FakeInstanceSink{}})
+	if err != nil {
+		t.Fatalf("NewFanoutSink() error = %v, want nil", err)
+	}
+	if err := oneSink.Push(1, nil); err != nil {
+		t.Fatalf("Push() on success = %v, want nil", err)
+	}
+
+	pushErr := errors.New("push failed")
+	oneSink, err = NewFanoutSink(nil, NamedSink{Name: stubSinkAtlas, Sink: &fakes.FakeInstanceSink{PushErr: pushErr}})
+	if err != nil {
+		t.Fatalf("NewFanoutSink() error = %v, want nil", err)
+	}
+	err = oneSink.Push(1, nil)
+	var fanoutErr FanoutError
+	if !errors.As(err, &fanoutErr) || len(fanoutErr) != 1 || fanoutErr[0].Sink != stubSinkAtlas || fanoutErr[0].Err != pushErr {
+		t.Fatalf("Push() on failure = %#v, want a FanoutError with exactly atlas's failure", err)
+	}
+	if got, want := fanoutErr.FailedSinks(), []string{stubSinkAtlas}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("FailedSinks() = %v, want %v (nil-or-one degeneration of §6.5)", got, want)
+	}
+
+	// Worker behavior, side by side: a worker over the one-sink fanout and
+	// a worker over the plain sink observe a failed push identically —
+	// same push count, same queued (instance, "atlas") key, same retry
+	// drain through the identical second push.
+	plainSink := &fakes.FakeInstanceSink{PushErr: pushErr}
+	fanoutSink := &fakes.FakeInstanceSink{PushErr: pushErr}
+	fanout, err := NewFanoutSink(nil, NamedSink{Name: stubSinkAtlas, Sink: fanoutSink})
+	if err != nil {
+		t.Fatalf("NewFanoutSink() error = %v, want nil", err)
+	}
+
+	newWorker := func(pusher ports.InstanceSink) *DefaultWorker {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		w, err := NewResourceWorker(ctx, pusher, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+		if err != nil {
+			t.Fatalf("NewResourceWorker() error = %v, want nil", err)
+		}
+		return w
+	}
+	plainWorker := newWorker(plainSink)
+	fanoutWorker := newWorker(fanout)
+	event := &Event{
+		Trigger: 123,
+		Data:    []*instance.Instance{{InstanceId: "instance-1", Reversion: 42}},
+		Operate: OperateTypeSync,
+	}
+
+	plainWorker.Handle(event)
+	fanoutWorker.Handle(event)
+
+	for name, w := range map[string]*DefaultWorker{"plain": plainWorker, "fanout": fanoutWorker} {
+		if got := w.unsyncedService.Len(); got != 1 {
+			t.Fatalf("%s worker queued keys = %d, want 1", name, got)
+		}
+		if got, want := w.unsyncedService.Lens(), map[string]int{stubSinkAtlas: 1}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s worker Lens = %v, want %v (the same atlas retry key both ways)", name, got, want)
+		}
+	}
+	if got := len(plainSink.PushCalls()); got != 1 {
+		t.Fatalf("plain sink push calls = %d, want 1", got)
+	}
+	if got := len(fanoutSink.PushCalls()); got != 1 {
+		t.Fatalf("fanout-wrapped sink push calls = %d, want 1", got)
+	}
+
+	// One retry cycle: both workers drain their single atlas key through
+	// an identical second push (PushTo for the fanout, Push for the plain
+	// path — same call on the sink).
+	plainSink.SetErrors(nil, nil, nil)
+	fanoutSink.SetErrors(nil, nil, nil)
+	plainWorker.unsyncedService.syncOnce()
+	fanoutWorker.unsyncedService.syncOnce()
+
+	for name, w := range map[string]*DefaultWorker{"plain": plainWorker, "fanout": fanoutWorker} {
+		if got := w.unsyncedService.Len(); got != 0 {
+			t.Fatalf("%s worker queued keys after retry = %d, want 0 (drained)", name, got)
+		}
+	}
+	if got := len(plainSink.PushCalls()); got != 2 {
+		t.Fatalf("plain sink push calls after retry = %d, want 2 (original + retry)", got)
+	}
+	if got := len(fanoutSink.PushCalls()); got != 2 {
+		t.Fatalf("fanout-wrapped sink push calls after retry = %d, want 2 (original + retry)", got)
+	}
+}
+
 // TestUnsyncedAddRecordsPerSinkKeys: Add one instance with 2 failed sinks
 // creates one entry per (instance, sink) — Len counts every key, Lens counts
 // each sink (plan §5.4).
 func TestUnsyncedAddRecordsPerSinkKeys(t *testing.T) {
 	service := NewUnsyncedService(context.Background(),
-		newTwoSinkFanoutStub(&fakes.FakeInstanceSink{}, &fakes.FakeInstanceSink{}),
+		newTestFanout(t, &fakes.FakeInstanceSink{}, &fakes.FakeInstanceSink{}),
 		&fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
 
 	service.Add(123, []*instance.Instance{{InstanceId: "instance-1", Reversion: 42}},
@@ -191,7 +484,7 @@ func TestUnsyncedAddRecordsPerSinkKeys(t *testing.T) {
 func TestRetryAtlasSuccessNacosFailureRetriesNacosOnly(t *testing.T) {
 	atlas := &fakes.FakeInstanceSink{}
 	nacos := &fakes.FakeInstanceSink{PushErr: errors.New("nacos down")}
-	service := NewUnsyncedService(context.Background(), newTwoSinkFanoutStub(atlas, nacos),
+	service := NewUnsyncedService(context.Background(), newTestFanout(t, atlas, nacos),
 		&fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
 	service.Add(123, []*instance.Instance{{InstanceId: "instance-1", Reversion: 42}},
 		[]string{stubSinkAtlas, stubSinkNacos})
@@ -228,7 +521,7 @@ func TestRetryAtlasSuccessNacosFailureRetriesNacosOnly(t *testing.T) {
 func TestRetryBothSinksFailBothRemain(t *testing.T) {
 	atlas := &fakes.FakeInstanceSink{PushErr: errors.New("atlas down")}
 	nacos := &fakes.FakeInstanceSink{PushErr: errors.New("nacos down")}
-	service := NewUnsyncedService(context.Background(), newTwoSinkFanoutStub(atlas, nacos),
+	service := NewUnsyncedService(context.Background(), newTestFanout(t, atlas, nacos),
 		&fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
 	service.Add(1, []*instance.Instance{{InstanceId: "instance-1", Reversion: 42}},
 		[]string{stubSinkAtlas, stubSinkNacos})
@@ -263,7 +556,7 @@ func TestRetryBothSinksFailBothRemain(t *testing.T) {
 func TestNacosRecoversLaterDrainsItsQueue(t *testing.T) {
 	atlas := &fakes.FakeInstanceSink{}
 	nacos := &fakes.FakeInstanceSink{PushErr: errors.New("nacos down")}
-	service := NewUnsyncedService(context.Background(), newTwoSinkFanoutStub(atlas, nacos),
+	service := NewUnsyncedService(context.Background(), newTestFanout(t, atlas, nacos),
 		&fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
 	service.Add(1, []*instance.Instance{{InstanceId: "instance-1", Reversion: 42}},
 		[]string{stubSinkAtlas, stubSinkNacos})
@@ -291,7 +584,7 @@ func TestNacosRecoversLaterDrainsItsQueue(t *testing.T) {
 func TestKeepHighestReversionPerSinkKey(t *testing.T) {
 	atlas := &fakes.FakeInstanceSink{}
 	nacos := &fakes.FakeInstanceSink{}
-	service := NewUnsyncedService(context.Background(), newTwoSinkFanoutStub(atlas, nacos),
+	service := NewUnsyncedService(context.Background(), newTestFanout(t, atlas, nacos),
 		&fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
 
 	service.Add(1, []*instance.Instance{{InstanceId: "instance-1", Reversion: 10}},
@@ -330,7 +623,7 @@ func TestWorkerQueuesOnlyFailedSinks(t *testing.T) {
 	nacos := &fakes.FakeInstanceSink{PushErr: errors.New("nacos down")}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	w, err := NewResourceWorker(ctx, newTwoSinkFanoutStub(atlas, nacos), &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+	w, err := NewResourceWorker(ctx, newTestFanout(t, atlas, nacos), &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
 	if err != nil {
 		t.Fatalf("NewResourceWorker() error = %v", err)
 	}
@@ -362,8 +655,12 @@ func TestWorkerQueuesOnlyFailedSinks(t *testing.T) {
 func TestWorkerLegacyErrorQueuesAllSinks(t *testing.T) {
 	atlas := &fakes.FakeInstanceSink{PushErr: errors.New("atlas down")}
 	nacos := &fakes.FakeInstanceSink{PushErr: errors.New("nacos down")}
-	stub := newTwoSinkFanoutStub(atlas, nacos)
-	stub.plainErr = errors.New("legacy plain failure")
+	// The real fanout never emits a plain error, so the stub exists for
+	// exactly this scenario (see legacyErrorFanout).
+	stub := &legacyErrorFanout{
+		FanoutSink: newTestFanout(t, atlas, nacos),
+		plainErr:   errors.New("legacy plain failure"),
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	w, err := NewResourceWorker(ctx, stub, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
@@ -390,7 +687,7 @@ func TestSyncOnceRecordsPerSinkQueueDepth(t *testing.T) {
 	atlas := &fakes.FakeInstanceSink{}
 	nacos := &fakes.FakeInstanceSink{PushErr: errors.New("nacos down")}
 	metrics := fakes.NewFakeMetricsRecorder()
-	service := NewUnsyncedService(context.Background(), newTwoSinkFanoutStub(atlas, nacos),
+	service := NewUnsyncedService(context.Background(), newTestFanout(t, atlas, nacos),
 		&fakes.FakeLogger{}, metrics)
 	service.Add(1, []*instance.Instance{{InstanceId: "instance-1", Reversion: 42}},
 		[]string{stubSinkAtlas, stubSinkNacos})
@@ -421,7 +718,7 @@ func TestAddNotBlockedByInflightRetry(t *testing.T) {
 		entered: make(chan struct{}, 1),
 	}
 	nacos := &fakes.FakeInstanceSink{PushErr: errors.New("nacos down")}
-	service := NewUnsyncedService(context.Background(), newTwoSinkFanoutStub(atlas, nacos),
+	service := NewUnsyncedService(context.Background(), newTestFanout(t, atlas, nacos),
 		&fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
 	service.Add(1, []*instance.Instance{{InstanceId: "instance-1", Reversion: 1}},
 		[]string{stubSinkAtlas, stubSinkNacos})
@@ -465,7 +762,7 @@ func TestSyncOnceDeletesOnlySucceededKeysUnderContention(t *testing.T) {
 		entered: make(chan struct{}, 1),
 		release: make(chan struct{}),
 	}
-	service := NewUnsyncedService(context.Background(), newTwoSinkFanoutStub(atlas, nacosFake),
+	service := NewUnsyncedService(context.Background(), newTestFanout(t, atlas, nacosFake),
 		&fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
 	service.Add(1, []*instance.Instance{{InstanceId: "instance-1", Reversion: 1}},
 		[]string{stubSinkAtlas, stubSinkNacos})

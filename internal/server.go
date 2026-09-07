@@ -290,7 +290,20 @@ func (s *Server) startProviders() error {
 		})
 	}
 
-	w, err := worker.NewResourceWorker(wctx, registry, s.logger, s.metrics)
+	// The fan-out of plan §6.5: the worker talks to named sinks instead of
+	// the concrete registry. Today it holds exactly one sink — Atlas, the
+	// primary; F5 adds the Nacos sink here when --nacos-addr is set. With
+	// one sink the error surface degenerates to nil-or-one and every
+	// observable behavior matches the pre-fanout direct push (the §6.6
+	// single-sink degeneration test is the regression net).
+	fanout, err := worker.NewFanoutSink(s.logger, worker.NamedSink{Name: worker.AtlasSinkName, Sink: registry})
+	if err != nil {
+		cleanup()
+		s.clearStartup(generation, nil)
+		return errors.WithMessage(err, "new fanout sink")
+	}
+
+	w, err := worker.NewResourceWorker(wctx, fanout, s.logger, s.metrics)
 	if err != nil {
 		cleanup()
 		s.clearStartup(generation, nil)

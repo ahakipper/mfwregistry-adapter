@@ -19,8 +19,9 @@ import (
 
 // plainSinkName is the queue's sink name for a legacy (non-fanout)
 // pusher: the single-sink deployment of today, where every failed push
-// belongs to the one and only sink.
-const plainSinkName = "atlas"
+// belongs to the one and only sink. It matches the fanout's AtlasSinkName
+// so queue keys and metrics series agree on both paths.
+const plainSinkName = AtlasSinkName
 
 // retryKey identifies one pending push: the instance and the sink that
 // failed to receive it.
