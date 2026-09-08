@@ -169,6 +169,77 @@ func TestDialPropagatesContextErrorWithoutPanic(t *testing.T) {
 	}
 }
 
+// TestDialZeroOptionsForcesJSONCodecAgainstTCPServer is the B2 regression
+// test (plan §8.3): the production zero-option Dial branch must force the
+// JSON codec, so the real client can talk to a server speaking the
+// documented service.v2 wire contract (plain mirror structs, not proto
+// messages). The server is the discoverymock TCP variant — the same shape
+// the soak harness uses as its Atlas stand-in — so the test proves the
+// exact production path end to end: Dial (no options) -> Sync -> SyncAll ->
+// GetAll, with every call observed and every instance field round-tripped.
+func TestDialZeroOptionsForcesJSONCodecAgainstTCPServer(t *testing.T) {
+	server, err := discoverymock.StartTCP("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("discoverymock.StartTCP() error = %v", err)
+	}
+	t.Cleanup(server.Close)
+	addr := server.Addr()
+	if addr == "" {
+		t.Fatal("discoverymock.StartTCP() served no address")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, err := Dial(ctx, addr, &fakes.FakeLogger{}, nil) // zero options: the production path
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	pushed := []*instance.Instance{{
+		InstanceId: "i-b2-1",
+		AppCode:    "b2-app",
+		Ip:         "10.1.2.3",
+		EnvType:    "test",
+		Provider:   instance.ProviderK8s,
+		Status:     instance.InstanceStatusOnline,
+		Reversion:  7,
+		Ports:      []*instance.PortInfo{{Name: "http", Protocol: "http", Port: 8080}},
+	}}
+	if _, err := client.Sync(pushed); err != nil {
+		t.Fatalf("Sync() error = %v (the zero-option dial must use the JSON codec)", err)
+	}
+	if _, err := client.SyncAll(pushed); err != nil {
+		t.Fatalf("SyncAll() error = %v", err)
+	}
+	list, err := client.GetAll([]int32{instance.InstanceStatusOnline}, instance.ProviderK8s)
+	if err != nil {
+		t.Fatalf("GetAll() error = %v", err)
+	}
+	if len(list.Instance) != 0 {
+		t.Fatalf("GetAll() against an empty mock returned %d instances, want 0", len(list.Instance))
+	}
+
+	calls := server.Calls()
+	if len(calls) != 3 {
+		t.Fatalf("server observed %d calls, want 3 (SynInstance + SynAllInstance + GetAllInstance)", len(calls))
+	}
+	for _, call := range calls {
+		if call.Method == "GetAllInstance" {
+			if call.Provider != instance.ProviderK8s || call.Status != instance.InstanceStatusOnline {
+				t.Fatalf("GetAllInstance call did not round-trip the request: provider=%q status=%d", call.Provider, call.Status)
+			}
+			continue
+		}
+		if len(call.Instances) != 1 || call.Instances[0].InstanceId != "i-b2-1" || call.Instances[0].Ip != "10.1.2.3" {
+			t.Fatalf("call %s did not round-trip the pushed instance: %+v", call.Method, call.Instances)
+		}
+	}
+	if calls[0].Method != "SynInstance" || calls[1].Method != "SynAllInstance" || calls[2].Method != "GetAllInstance" {
+		t.Fatalf("unexpected call order: %s, %s, %s", calls[0].Method, calls[1].Method, calls[2].Method)
+	}
+}
+
 func TestClientCloseIsIdempotent(t *testing.T) {
 	server, err := discoverymock.Start()
 	if err != nil {

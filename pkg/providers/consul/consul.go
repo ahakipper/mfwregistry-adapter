@@ -53,7 +53,13 @@ func NewConsulProvider(ctx context.Context, worker worker.Worker, pushInterval i
 		monitor:       monitor,
 		worker:        worker,
 		clientFactory: cf,
-		cache:         providers.NewCache(8),
+		// interval honors --push-interval for the ecs leg exactly like the
+		// k8s provider does (NewK8SProvider assigns the same field): it
+		// bounds the periodic CompareAndFlush + SyncAll cadence. The field
+		// was declared but never assigned here, so the periodic path fell
+		// back to the 21600s default and ignored the flag.
+		interval: pushInterval,
+		cache:    providers.NewCache(8),
 	}
 	// Create pool for sending instance events to the discovery center
 	p, _ := ants.NewPool(providers.PoolBenchSize, withExpiryDuration(time.Second*providers.PoolExpireTime))

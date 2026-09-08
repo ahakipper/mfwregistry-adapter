@@ -124,6 +124,14 @@ func init() {
 	// empty disables the Nacos sink, so the flag-empty binary behavior is
 	// exactly the pre-F5 one. Every flag above is untouched.
 	adapterCmd.Flags().StringP("nacos-addr", "", "", "the Nacos OpenAPI address, e.g. 127.0.0.1:18848; empty disables the Nacos sink")
+	// The three additive local-source flags of docs/nacos-sink-plan.md §8.4
+	// exist for the local full-stack soak, where the env presets point at
+	// unreachable network addresses: they override the preset endpoints for
+	// this invocation only, and empty flags keep the preset values verbatim
+	// (etcd TLS included). Every flag above is untouched.
+	adapterCmd.Flags().StringSliceP("kubeconfig", "", []string{}, "comma-separated kubeconfig paths overriding the preset's KubeConfigPath, e.g. /tmp/soak/kubeconfig; empty keeps the preset")
+	adapterCmd.Flags().StringSliceP("consul-addr", "", []string{}, "comma-separated consul addresses overriding the preset, e.g. 127.0.0.1:18500; empty keeps the preset")
+	adapterCmd.Flags().StringSliceP("etcd-endpoints", "", []string{}, "comma-separated etcd endpoints overriding the preset, e.g. 127.0.0.1:12379; non-empty resolves the etcd TLS file paths to empty (insecure local mode); empty keeps the preset with TLS")
 }
 
 // adapterFlags maps the cobra flags onto the infra config flag struct. The
@@ -135,20 +143,23 @@ func init() {
 // command line is honored instead of being coerced to the default.
 func adapterFlags(cmd *cobra.Command) infraconfig.Flags {
 	flags := infraconfig.Flags{
-		LogFilePath:       flagString(cmd, "log-file-path"),
-		LogSize:           flagInt(cmd, "log-maxsize"),
-		LogLevel:          flagInt(cmd, "log-level"),
-		LogBackups:        flagInt(cmd, "log-backup-number"),
-		LogAge:            flagInt(cmd, "log-age"),
-		LogToStd:          flagBool(cmd, "log-to-std"),
-		LogEncoding:       flagString(cmd, "log-encoding"),
-		PushAllInterval:   flagInt(cmd, "push-interval"),
-		GrpcAddr:          flagString(cmd, "grpc-addr"),
-		DisablePushWorker: flagBool(cmd, "disable-worker"),
-		Providers:         flagStringSlice(cmd, "providers"),
-		PushAppCodes:      flagStringSlice(cmd, "appcodes"),
-		MetricsAddr:       flagString(cmd, "metrics-addr"),
-		NacosAddr:         flagString(cmd, "nacos-addr"),
+		LogFilePath:        flagString(cmd, "log-file-path"),
+		LogSize:            flagInt(cmd, "log-maxsize"),
+		LogLevel:           flagInt(cmd, "log-level"),
+		LogBackups:         flagInt(cmd, "log-backup-number"),
+		LogAge:             flagInt(cmd, "log-age"),
+		LogToStd:           flagBool(cmd, "log-to-std"),
+		LogEncoding:        flagString(cmd, "log-encoding"),
+		PushAllInterval:    flagInt(cmd, "push-interval"),
+		GrpcAddr:           flagString(cmd, "grpc-addr"),
+		DisablePushWorker:  flagBool(cmd, "disable-worker"),
+		Providers:          flagStringSlice(cmd, "providers"),
+		PushAppCodes:       flagStringSlice(cmd, "appcodes"),
+		MetricsAddr:        flagString(cmd, "metrics-addr"),
+		NacosAddr:          flagString(cmd, "nacos-addr"),
+		KubeConfigPathFlag: flagStringSlice(cmd, "kubeconfig"),
+		ConsulAddrFlag:     flagStringSlice(cmd, "consul-addr"),
+		EtcdEndpointsFlag:  flagStringSlice(cmd, "etcd-endpoints"),
 	}
 	if cmd.Flags().Changed("log-maxsize") {
 		flags.LogSizePtr = intPtr(flagInt(cmd, "log-maxsize"))

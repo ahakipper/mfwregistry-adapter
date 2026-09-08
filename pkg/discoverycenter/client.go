@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/encoding"
 
 	"spotter/internal/domain/instance"
 	"spotter/internal/ports"
@@ -58,11 +59,18 @@ func NewClient(service instanceService, logger ports.Logger, metrics ports.Metri
 }
 
 // Dial connects to addr and creates a client that owns the resulting connection.
-// When opts is empty, Dial uses insecure transport and blocks until connected.
-// Supplying any option makes the caller responsible for the complete dial setup.
+// When opts is empty, Dial uses insecure transport, blocks until connected and
+// forces the JSON codec on every call — the documented wire contract of the
+// service.v2 mirror types, which are plain structs, not proto messages
+// (docs/nacos-sink-plan.md §8.3). Supplying any option makes the caller
+// responsible for the complete dial setup.
 func Dial(ctx context.Context, addr string, logger ports.Logger, metrics ports.MetricsRecorder, opts ...grpc.DialOption) (*Client, error) {
 	if len(opts) == 0 {
-		opts = []grpc.DialOption{grpc.WithInsecure(), grpc.WithBlock()}
+		opts = []grpc.DialOption{
+			grpc.WithInsecure(),
+			grpc.WithBlock(),
+			grpc.WithDefaultCallOptions(grpc.ForceCodec(jsonCodec{})),
+		}
 	}
 	conn, err := grpc.DialContext(ctx, addr, opts...)
 	if err != nil {
@@ -188,3 +196,25 @@ func (nopMetricsRecorder) ObserveSyncAllDuration(string, time.Duration) {}
 func (nopMetricsRecorder) SetSyncErrorQueueDepth(string, int) {}
 
 func (nopMetricsRecorder) MarkSyncOnce() {}
+
+// jsonCodec is the JSON gRPC codec the zero-option Dial branch forces
+// (plan §8.3). The request and response types of the instance service are
+// the plain mirror structs (now domain aliases), which the default proto
+// codec rejects — the documented wire-format limitation of the v2 surface.
+// This is the same codec internal/testkit/discoverymock serves (plan: "the
+// same codec discoverymock uses"); it is duplicated here — a dozen lines —
+// because discoverymock is test-only and must not become a production
+// dependency.
+type jsonCodec struct{}
+
+var _ encoding.Codec = jsonCodec{}
+
+func (jsonCodec) Name() string { return "json" }
+
+func (jsonCodec) Marshal(value interface{}) ([]byte, error) {
+	return json.Marshal(value)
+}
+
+func (jsonCodec) Unmarshal(data []byte, value interface{}) error {
+	return json.Unmarshal(data, value)
+}

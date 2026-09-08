@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -35,10 +36,11 @@ type Call struct {
 type Server struct {
 	mu sync.RWMutex
 
-	grpcServer *grpc.Server
-	listener   *bufconn.Listener
-	codec      *jsonCodec
-	closed     bool
+	grpcServer  *grpc.Server
+	listener    *bufconn.Listener
+	tcpListener net.Listener
+	codec       *jsonCodec
+	closed      bool
 
 	responseCode int32
 	responseMsg  string
@@ -59,6 +61,44 @@ func Start() (*Server, error) {
 		_ = server.grpcServer.Serve(server.listener)
 	}()
 	return server, nil
+}
+
+// StartTCP starts the same service implementation on a real TCP listener
+// bound to addr (":0" picks a free port) instead of the in-memory bufconn.
+// It exists for the soak harness's Atlas stand-in (plan §8.3): the spotter
+// binary is exec'd as a child process and must dial a real network address,
+// while the recorded calls and the SetResponseCode/SetInstances controls
+// stay identical. Addr returns the bound address once listening.
+func StartTCP(addr string) (*Server, error) {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("discoverymock: listen %s: %w", addr, err)
+	}
+	codec := &jsonCodec{}
+	server := &Server{
+		codec:       codec,
+		tcpListener: listener,
+	}
+	server.grpcServer = grpc.NewServer(grpc.CustomCodec(legacyCodec{codec: codec}))
+	server.grpcServer.RegisterService(&serviceDesc, server)
+	go func() {
+		_ = server.grpcServer.Serve(listener)
+	}()
+	return server, nil
+}
+
+// Addr returns the address the TCP listener serves on (host:port); it
+// returns "" for the bufconn-based Start server, which has no address.
+func (s *Server) Addr() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.tcpListener == nil {
+		return ""
+	}
+	return s.tcpListener.Addr().String()
 }
 
 // DialContext dials the in-memory server using its JSON codec.
@@ -151,10 +191,16 @@ func (s *Server) Close() {
 	}
 	s.closed = true
 	listener := s.listener
+	tcpListener := s.tcpListener
 	grpcServer := s.grpcServer
 	s.mu.Unlock()
 
-	_ = listener.Close()
+	if listener != nil {
+		_ = listener.Close()
+	}
+	if tcpListener != nil {
+		_ = tcpListener.Close()
+	}
 	grpcServer.Stop()
 }
 

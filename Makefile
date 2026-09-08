@@ -67,6 +67,36 @@ test-smoke:
 test-e2e:
 	go test -race -count=1 -tags=e2e ./tests/e2e/...
 
+# Soak tier (plan docs/nacos-sink-plan.md §8, decision D5): the local
+# full-stack e2e + 1h soak. NOT part of test-all — it needs the colima
+# docker engine (6 vCPU / ~10 GiB floor), pulls ~1.5 GiB of images and
+# takes 1h wall clock plus stack boot.
+#
+#   make test-soak                # the real 1-hour run
+#   SOAK_DURATION=90s make test-soak   # the harness's smoke shakedown
+#                                       (minutes, compressed cadences)
+#
+# The stack (nacos 18848, consul 18500, k3s 6443) comes up via
+# scripts/soak-up.sh with health-wait and kubeconfig extraction; the
+# tagged test below owns everything dynamic (embedded etcd, the Atlas
+# stand-in, the spotter child, churn, assertions, scenarios) and tears it
+# down itself; compose goes down afterwards either way.
+SOAK_DURATION ?= 1h
+SOAK_TIMEOUT ?= 90m
+
+test-soak:
+	./scripts/soak-up.sh
+	@status=0; \
+	go build -o build/spotter . || status=$$?; \
+	if [ $$status -eq 0 ]; then \
+		SOAK_DURATION=$(SOAK_DURATION) SPOTTER_BIN=build/spotter KUBECONFIG=build/soak/kubeconfig \
+			go test -tags=soak -run '^TestSoakLocalStack$$' -timeout $(SOAK_TIMEOUT) -v ./tests/soak/... || status=$$?; \
+	fi; \
+	./scripts/soak-down.sh; \
+	exit $$status
+
+.PHONY: test-soak
+
 # Aggregate: everything, in tier order. Budget ~3 min on a dev machine.
 test-all: test-unit test-blackbox test-smoke test-e2e
 

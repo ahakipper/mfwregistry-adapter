@@ -1,0 +1,96 @@
+# Local full-stack soak environment of docs/nacos-sink-plan.md §8.
+#
+# Only the three containerized components live here: nacos, consul and k3s.
+# The embedded etcd and the Atlas stand-in are NOT in compose — the tagged
+# soak test (tests/soak) owns them in-process (plan §8.2's decision), and
+# the spotter binary runs as a child process of the same test.
+#
+# Host port remap table (plan §8.2/§8.3; 8848 on the host is occupied by a
+# colima SSH tunnel, so nacos HTTP is exposed on 18848):
+#   18848 -> nacos 8848 (console + v1 OpenAPI)
+#   19848 -> nacos 9848 (gRPC)
+#   19849 -> nacos 9849 (gRPC raft)
+#   18500 -> consul 8500 (HTTP API)
+#   6443  -> k3s 6443 (kube-apiserver)
+#
+# The nacos JVM needs the pinned 512m heap: on a 4-CPU colima VM the default
+# heap hung the JVM for >10 minutes (F0-verified; the 6 vCPU / ~10 GiB colima
+# floor is a hard prerequisite, §8.2).
+#
+# Managed by scripts/soak-up.sh and scripts/soak-down.sh; not started by
+# anything in `make test-all` (the soak is its own tier, plan §8.1).
+
+version: "3.8"
+
+services:
+  nacos:
+    image: nacos/nacos-server:v2.1.0
+    container_name: soak-nacos
+    environment:
+      - MODE=standalone
+      - JVM_XMS=512m
+      - JVM_XMX=512m
+      - JVM_XMN=256m
+    ports:
+      - "18848:8848"
+      - "19848:9848"
+      - "19849:9849"
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8848/nacos/v1/console/health/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+
+  consul:
+    image: hashicorp/consul:1.15
+    container_name: soak-consul
+    command: agent -dev -client=0.0.0.0
+    ports:
+      - "18500:8500"
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "consul", "members"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  k3s:
+    image: rancher/k3s:v1.28.8-k3s1
+    container_name: soak-k3s
+    privileged: true
+    # A lean server: traefik/servicelb/the cloud provider and the CNI are
+    # all unneeded for pod-informer churn, and skipping them cuts boot time
+    # and memory on the colima VM. --flannel-backend=none plus
+    # --disable-network-policy disable the CNI (pods get no pod IPs then,
+    # so flannel-backend is left at its default: the converter requires
+    # pod IPs for Online instances).
+    command:
+      - server
+      - --disable=traefik
+      - --disable=servicelb
+      - --disable=metrics-server
+      - --kube-apiserver-arg=--kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP
+    environment:
+      - K3S_KUBECONFIG_OUTPUT=/output/kubeconfig.yaml
+      - K3S_KUBECONFIG_MODE=666
+    volumes:
+      - soak-k3s-output:/output
+      - soak-k3s-data:/var/lib/rancher/k3s
+    ports:
+      - "6443:6443"
+    restart: on-failure
+    healthcheck:
+      # The image ships a standalone /bin/kubectl pointing at the local
+      # apiserver (`k3s kubectl` hits an argument-parsing quirk in this
+      # image version).
+      test: ["CMD", "kubectl", "get", "--raw", "/readyz"]
+      interval: 10s
+      timeout: 8s
+      retries: 30
+      start_period: 30s
+
+volumes:
+  soak-k3s-output:
+  soak-k3s-data:

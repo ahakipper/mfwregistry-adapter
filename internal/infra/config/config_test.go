@@ -583,3 +583,131 @@ func TestLoadNacosAddr(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadLocalSourceFlagsKeepPresetWhenEmpty: the additive local-source
+// flags of plan §8.4 — --kubeconfig, --consul-addr, --etcd-endpoints — must
+// be pure overrides: empty (the default) keeps every preset endpoint
+// verbatim, including the etcd TLS file paths, so the flag-empty resolved
+// config is byte-identical to the pre-F6 shape.
+func TestLoadLocalSourceFlagsKeepPresetWhenEmpty(t *testing.T) {
+	preset, err := PresetFor("test")
+	if err != nil {
+		t.Fatalf("PresetFor(\"test\") failed: %v", err)
+	}
+
+	got, err := Load("test", Flags{Providers: []string{"k8s"}})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !reflect.DeepEqual(got.EtcdEndpoints, preset.EtcdEndpoints) {
+		t.Errorf("EtcdEndpoints = %v, want preset %v", got.EtcdEndpoints, preset.EtcdEndpoints)
+	}
+	if got.CertFile != preset.CertFile || got.KeyFile != preset.KeyFile || got.CAFile != preset.CAFile {
+		t.Errorf("etcd TLS paths = (%q, %q, %q), want preset (%q, %q, %q)",
+			got.CertFile, got.KeyFile, got.CAFile, preset.CertFile, preset.KeyFile, preset.CAFile)
+	}
+	if !reflect.DeepEqual(got.KubeConfigPath, preset.KubeConfigPath) {
+		t.Errorf("KubeConfigPath = %v, want preset %v", got.KubeConfigPath, preset.KubeConfigPath)
+	}
+	if !reflect.DeepEqual(got.ConsulAddress, preset.ConsulAddress) {
+		t.Errorf("ConsulAddress = %v, want preset %v", got.ConsulAddress, preset.ConsulAddress)
+	}
+}
+
+// TestLoadKubeconfigFlagOverridesPreset: a non-empty --kubeconfig list
+// replaces the preset's kubeconfig paths (trimmed, blanks dropped).
+func TestLoadKubeconfigFlagOverridesPreset(t *testing.T) {
+	got, err := Load("test", Flags{
+		Providers:          []string{"k8s"},
+		KubeConfigPathFlag: []string{" /tmp/soak/kubeconfig ", "", "/tmp/soak/kubeconfig-2"},
+	})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []string{"/tmp/soak/kubeconfig", "/tmp/soak/kubeconfig-2"}
+	if !reflect.DeepEqual(got.KubeConfigPath, want) {
+		t.Errorf("KubeConfigPath = %v, want %v", got.KubeConfigPath, want)
+	}
+	// The other endpoints stay preset.
+	preset, _ := PresetFor("test")
+	if !reflect.DeepEqual(got.ConsulAddress, preset.ConsulAddress) {
+		t.Errorf("ConsulAddress = %v, want untouched preset %v", got.ConsulAddress, preset.ConsulAddress)
+	}
+}
+
+// TestLoadConsulAddrFlagOverridesPreset: a non-empty --consul-addr list
+// replaces the preset's consul addresses — the local soak points the ecs
+// provider at 127.0.0.1:18500 instead of the unreachable 10.72.73.x.
+func TestLoadConsulAddrFlagOverridesPreset(t *testing.T) {
+	got, err := Load("test", Flags{
+		Providers:      []string{"k8s", "ecs"},
+		ConsulAddrFlag: []string{"127.0.0.1:18500"},
+	})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []string{"127.0.0.1:18500"}
+	if !reflect.DeepEqual(got.ConsulAddress, want) {
+		t.Errorf("ConsulAddress = %v, want %v", got.ConsulAddress, want)
+	}
+	// The other endpoints stay preset, TLS included.
+	preset, _ := PresetFor("test")
+	if !reflect.DeepEqual(got.EtcdEndpoints, preset.EtcdEndpoints) {
+		t.Errorf("EtcdEndpoints = %v, want untouched preset %v", got.EtcdEndpoints, preset.EtcdEndpoints)
+	}
+	if got.CertFile != preset.CertFile {
+		t.Errorf("CertFile = %q, want untouched preset %q", got.CertFile, preset.CertFile)
+	}
+}
+
+// TestLoadEtcdEndpointsFlagOverridesPresetAndEmptiesTLS: the B4 rule of
+// plan §8.4 — a non-empty --etcd-endpoints override resolves
+// CertFile/KeyFile/CAFile to empty (insecure local mode), because every
+// env preset carries non-empty TLS paths and the embedded/loopback etcd of
+// the local stack is plain HTTP: a TLS dial would fail startup.
+func TestLoadEtcdEndpointsFlagOverridesPresetAndEmptiesTLS(t *testing.T) {
+	got, err := Load("test", Flags{
+		Providers:         []string{"k8s"},
+		EtcdEndpointsFlag: []string{" 127.0.0.1:12379 ", ""},
+	})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []string{"127.0.0.1:12379"}
+	if !reflect.DeepEqual(got.EtcdEndpoints, want) {
+		t.Errorf("EtcdEndpoints = %v, want %v", got.EtcdEndpoints, want)
+	}
+	if got.CertFile != "" || got.KeyFile != "" || got.CAFile != "" {
+		t.Errorf("etcd TLS paths = (%q, %q, %q), want all empty (insecure local mode)",
+			got.CertFile, got.KeyFile, got.CAFile)
+	}
+	// The other endpoints stay preset.
+	preset, _ := PresetFor("test")
+	if !reflect.DeepEqual(got.ConsulAddress, preset.ConsulAddress) {
+		t.Errorf("ConsulAddress = %v, want untouched preset %v", got.ConsulAddress, preset.ConsulAddress)
+	}
+}
+
+// TestLoadEtcdEndpointsFlagAcrossEnvironments: the TLS-emptying rule fires
+// for every preset (each carries non-empty TLS paths), so the local etcd
+// override works under --env test, dev and product alike.
+func TestLoadEtcdEndpointsFlagAcrossEnvironments(t *testing.T) {
+	for _, env := range []string{"test", "dev", "product"} {
+		env := env
+		t.Run(env, func(t *testing.T) {
+			got, err := Load(env, Flags{
+				Providers:         []string{"k8s"},
+				EtcdEndpointsFlag: []string{"127.0.0.1:23790"},
+			})
+			if err != nil {
+				t.Fatalf("Load(%q) error = %v", env, err)
+			}
+			if !reflect.DeepEqual(got.EtcdEndpoints, []string{"127.0.0.1:23790"}) {
+				t.Errorf("EtcdEndpoints = %v, want [127.0.0.1:23790]", got.EtcdEndpoints)
+			}
+			if got.CertFile != "" || got.KeyFile != "" || got.CAFile != "" {
+				t.Errorf("etcd TLS paths = (%q, %q, %q), want all empty", got.CertFile, got.KeyFile, got.CAFile)
+			}
+		})
+	}
+}

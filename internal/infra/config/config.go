@@ -175,6 +175,22 @@ type Flags struct {
 	// A plain string: the empty default IS the legal "disabled" value, so
 	// no tri-state distinction is needed.
 	NacosAddr string
+	// KubeConfigPathFlag is the --kubeconfig flag: a comma list that
+	// overrides the preset's KubeConfigPath for local full-stack runs
+	// (plan §8.4). Empty keeps the preset value verbatim.
+	KubeConfigPathFlag []string
+	// ConsulAddrFlag is the --consul-addr flag: a comma list that
+	// overrides the preset's ConsulAddress (plan §8.4). Empty keeps the
+	// preset value verbatim — the test/dev preset addresses are
+	// unreachable from a developer machine, so the local stack MUST be
+	// able to point the ecs provider at 127.0.0.1:18500.
+	ConsulAddrFlag []string
+	// EtcdEndpointsFlag is the --etcd-endpoints flag: a comma list that
+	// overrides the preset's EtcdEndpoints (plan §8.4). Empty keeps the
+	// preset endpoints, TLS and all; non-empty resolves CertFile/KeyFile/
+	// CAFile to empty (plan §8.4's one extra rule: an embedded etcd is
+	// plain HTTP, and a TLS dial against it would fail startup).
+	EtcdEndpointsFlag []string
 
 	// Tri-state flag values, set by callers that can distinguish an unset
 	// flag from an explicit zero/false value (for example cobra's
@@ -345,6 +361,33 @@ func Load(env string, flags Flags) (Config, error) {
 	// default, no preset involvement), so the flag-empty path is exactly
 	// the pre-F5 configuration.
 	cfg.NacosAddr = strOrDefault(flags.NacosAddr, "")
+
+	// Local-source flags of plan §8.4 (kubeconfig / consul / etcd): each
+	// comma list overrides its preset counterpart when non-empty, and an
+	// empty flag keeps the preset value verbatim — including the etcd TLS
+	// file paths, which is why the TLS-emptying rule below only fires on a
+	// non-empty --etcd-endpoints. These exist for the local full-stack
+	// soak, where the test/dev presets point at unreachable network
+	// addresses; production invocations never set them and resolve exactly
+	// as before.
+	if kubeconfigs := cleanList(flags.KubeConfigPathFlag); len(kubeconfigs) > 0 {
+		cfg.KubeConfigPath = kubeconfigs
+	}
+	if consulAddrs := cleanList(flags.ConsulAddrFlag); len(consulAddrs) > 0 {
+		cfg.ConsulAddress = consulAddrs
+	}
+	if etcdEndpoints := cleanList(flags.EtcdEndpointsFlag); len(etcdEndpoints) > 0 {
+		cfg.EtcdEndpoints = etcdEndpoints
+		// Plan §8.4's extra resolution rule: every env preset carries
+		// NON-empty etcd TLS paths, and NewElectorWithDeps passes them to
+		// the etcd client — against a plain-HTTP embedded etcd a TLS dial
+		// fails and the binary never becomes leader. A non-empty override
+		// therefore resolves the TLS paths to empty (insecure local
+		// mode); an empty flag keeps the preset TLS values verbatim.
+		cfg.CertFile = ""
+		cfg.KeyFile = ""
+		cfg.CAFile = ""
+	}
 
 	return cfg, nil
 }
