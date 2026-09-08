@@ -74,13 +74,13 @@ func loadSoakConfig() (soakConfig, error) {
 		}
 	}
 	if raw := os.Getenv("SPOTTER_BIN"); strings.TrimSpace(raw) != "" {
-		cfg.SpotterBin = strings.TrimSpace(raw)
+		cfg.SpotterBin = resolveRel(strings.TrimSpace(raw))
 	}
 	if raw := os.Getenv("KUBECONFIG"); strings.TrimSpace(raw) != "" {
-		cfg.Kubeconfig = strings.TrimSpace(raw)
+		cfg.Kubeconfig = resolveRel(strings.TrimSpace(raw))
 	}
 	if raw := os.Getenv("SOAK_WORKDIR"); strings.TrimSpace(raw) != "" {
-		cfg.WorkDir = strings.TrimSpace(raw)
+		cfg.WorkDir = resolveRel(strings.TrimSpace(raw))
 	}
 	if cfg.Duration < 30*time.Second {
 		return soakConfig{}, fmt.Errorf("SOAK_DURATION %s is below the 30s harness floor", cfg.Duration)
@@ -154,6 +154,20 @@ func scheduleFor(d time.Duration) windowSchedule {
 		BatchBound:       batch,
 		ConsulOutage:     outage,
 	}
+}
+
+// resolveRel returns path unchanged when absolute, or joined to the repo
+// root otherwise: go test runs with the package directory as the working
+// directory, so relative values from the environment (Makefile passes
+// SPOTTER_BIN=build/spotter) must be anchored at the repository root.
+func resolveRel(path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	if root, err := repoRoot(); err == nil {
+		return filepath.Join(root, path)
+	}
+	return path
 }
 
 // repoRoot walks up from the working directory until go.mod is found.

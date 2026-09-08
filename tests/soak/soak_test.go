@@ -546,11 +546,48 @@ func (h *soakHarness) record(letter, name string, pass bool, note string) {
 // one wait that legitimately measures through nacos being down, and it
 // calls this AFTER its own post-restart gate, so the reset never triggers
 // for it.
+//
+// A third rule, the leaderless window (run 20260909-0000): a nacos whose
+// Raft group failed to re-elect a leader SERVES reads while every write
+// 500s, so rule (2)'s read-side gate cannot see it — a heal bound would
+// run out against a nacos that cannot apply any heal. A read error whose
+// body carries the could-not-find-leader signature therefore re-gates on
+// WRITE capability (the probe write) and resets the clock the same way;
+// scenario (d)'s writable variant additionally probes each poll, catching
+// the state even while reads keep answering.
 func (h *soakHarness) waitForConverged(bound time.Duration, scope ...string) time.Duration {
-	h.waitNacosServing(10 * time.Minute)
+	return h.waitForConvergedCore(bound, scope, false)
+}
+
+// waitForConvergedWritable is waitForConverged with a write-capability
+// gate: the restart owner's heal clock must not run while nacos cannot
+// accept writes (the leaderless window is read-silent — only the probe
+// write sees it). See waitForConverged's third rule.
+func (h *soakHarness) waitForConvergedWritable(bound time.Duration, scope ...string) time.Duration {
+	return h.waitForConvergedCore(bound, scope, true)
+}
+
+// nacosGateBound is the recovery budget every serving/writable gate uses
+// (the JVM-rebuild EOF window of run 20260909-0000 ran ~8.5 minutes, past
+// the old 6-minute restart budget, so the gates all carry 10 minutes).
+const nacosGateBound = 10 * time.Minute
+
+func (h *soakHarness) waitForConvergedCore(bound time.Duration, scope []string, requireWritable bool) time.Duration {
+	h.waitNacosServing(nacosGateBound)
 	start := time.Now()
 	deadline := start.Add(bound)
 	for time.Now().Before(deadline) {
+		if requireWritable && h.nacos.writeProbe() != nil {
+			// The restart owner's gate: while nacos rejects writes the
+			// bound measures nothing — re-gate and reset the clock, but
+			// only on an actual recovery (a permanently leaderless nacos
+			// must not reset the bound forever; the wait then reports
+			// "never" and the scenario's note names the condition).
+			if h.waitNacosWritable(nacosGateBound) {
+				start = time.Now()
+				deadline = start.Add(bound)
+			}
+		}
 		_, divergences, err := h.nacos.checkStateScoped(h.expected, scope)
 		if err == nil && len(divergences) == 0 {
 			healed := time.Since(start)
@@ -560,11 +597,19 @@ func (h *soakHarness) waitForConverged(bound time.Duration, scope ...string) tim
 			return healed
 		}
 		if err != nil {
-			// Retryable read error: if nacos itself stopped serving (a
-			// restart overlap), re-gate and reset the clock — the bound
-			// measures convergence, not the outage.
-			if h.nacos.nsAPIReady() != nil {
-				h.waitNacosServing(10 * time.Minute)
+			if isNacosLeaderless(err) {
+				// Leaderless 500: retryable-not-divergence, the same reset
+				// the read-error path applies — but gated on WRITE
+				// capability (reads can keep serving in this state).
+				if h.waitNacosWritable(nacosGateBound) {
+					start = time.Now()
+					deadline = start.Add(bound)
+				}
+			} else if h.nacos.nsAPIReady() != nil {
+				// Retryable read error: if nacos itself stopped serving (a
+				// restart overlap), re-gate and reset the clock — the bound
+				// measures convergence, not the outage.
+				h.waitNacosServing(nacosGateBound)
 				start = time.Now()
 				deadline = start.Add(bound)
 			}
@@ -583,6 +628,20 @@ func (h *soakHarness) waitNacosServing(bound time.Duration) {
 		}
 		time.Sleep(2 * time.Second)
 	}
+}
+
+// waitNacosWritable blocks until the v1 ns API accepts writes (the probe
+// write answers non-500); it reports whether nacos recovered within the
+// bound, so callers reset a heal clock only on real recoveries.
+func (h *soakHarness) waitNacosWritable(bound time.Duration) bool {
+	deadline := time.Now().Add(bound)
+	for time.Now().Before(deadline) {
+		if h.nacos.writeProbe() == nil {
+			return true
+		}
+		time.Sleep(3 * time.Second)
+	}
+	return false
 }
 
 // atlasPushCount returns the stand-in's observed call count.

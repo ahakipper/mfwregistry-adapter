@@ -4,7 +4,9 @@
 package soak
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -132,7 +134,14 @@ func (o *nacosObserver) clusterView(serviceName string) (map[string][]string, er
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode >= 300 {
-		return nil, fmt.Errorf("nacos list %s answered %d", serviceName, response.StatusCode)
+		// Read and classify the answer: an HTTP 500 whose body carries the
+		// naming service's Raft-unavailable signature is retryable
+		// environment state, not divergence (run 20260909-0000 observed the
+		// list endpoint serving while writes 500'd — the classification
+		// matters for the flavor where the read itself takes the 500).
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 1<<10))
+		return nil, classifyNacosAnswer(fmt.Sprintf("nacos list %s", serviceName),
+			response.StatusCode, string(body))
 	}
 	var body struct {
 		Count int         `json:"count"`
@@ -205,6 +214,120 @@ func (o *nacosObserver) nsAPIReady() error {
 		return fmt.Errorf("nacos ns service list is empty (naming service still rebuilding)")
 	}
 	return nil
+}
+
+// errNacosLeaderless marks a nacos answer whose body shows the naming
+// service's Raft group (naming_persistent_service_v2) cannot serve
+// writes. The state is read-silent: the console readiness endpoint and
+// the v1 service list answer normally while every register/deregister
+// returns HTTP 500 "Could not find leader : naming_persistent_service_v2"
+// (run 20260909-0000: 20,962 such 500s from 00:40 onward while reads
+// kept serving). The waits treat this class as retryable environment
+// state — the outage window must not consume a heal bound, exactly the
+// reset the read-side view errors already get.
+var errNacosLeaderless = errors.New("nacos naming service Raft group unavailable (leaderless)")
+
+// isNacosLeaderless reports whether err (or anything it wraps) carries the
+// leaderless marker.
+func isNacosLeaderless(err error) bool {
+	return errors.Is(err, errNacosLeaderless)
+}
+
+// classifyNacosAnswer renders one non-2xx nacos answer as an error, wrapping
+// errNacosLeaderless when the status is 5xx AND the body carries the
+// Raft-unavailable signature — the marker the retryable handling keys on.
+func classifyNacosAnswer(context string, statusCode int, body string) error {
+	answer := fmt.Errorf("%s answered %d: %s", context, statusCode, truncateNacosBody(body))
+	if statusCode >= http.StatusInternalServerError && nacosLeaderlessBody(body) {
+		return fmt.Errorf("%w: %v", errNacosLeaderless, answer)
+	}
+	return answer
+}
+
+// nacosLeaderlessBody matches the body signature of the naming service's
+// Raft group failing to serve writes: the explicit "Could not find leader"
+// message, the Raft group's own name, or the ConsistencyException class
+// (the same failure's "operation failure" flavor — the outage's first
+// answer in run 20260909-0000, 00:40:10, before the could-not-find-leader
+// form appears).
+func nacosLeaderlessBody(body string) bool {
+	for _, marker := range []string{"Could not find leader", "naming_persistent_service_v2", "ConsistencyException"} {
+		if strings.Contains(body, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// truncateNacosBody bounds an answer body to a readable length.
+func truncateNacosBody(body string) string {
+	const limit = 512
+	if len(body) > limit {
+		return body[:limit] + "..."
+	}
+	return body
+}
+
+// probeService is the write probe's dedicated service: never part of the
+// expected model, so its instance is invisible to every assertion (the
+// standing checks and the scenario waits compare only modeled
+// app-codes). The probe instance's composite id is stable, so repeated
+// probe writes upsert one entry.
+const probeService = "soak-env-probe"
+
+// writeProbe proves nacos accepts WRITES: it registers (upserts) one probe
+// instance through the same v1 endpoint and query convention the product
+// sink uses (params on the query string, "ok" on success). Readiness and
+// the service list answer while the Raft group is leaderless — only an
+// actual write detects that state.
+func (o *nacosObserver) writeProbe() error {
+	return o.doProbeWrite(http.MethodPost)
+}
+
+// probeRemove deletes the probe instance: best-effort cleanup (the probe
+// is invisible to the model-scoped assertions, but the harness does not
+// leave litter in nacos).
+func (o *nacosObserver) probeRemove() error {
+	return o.doProbeWrite(http.MethodDelete)
+}
+
+// doProbeWrite issues one probe register (POST) or deregister (DELETE),
+// mirroring pkg/nacos's wire form for the v1 instance endpoint.
+func (o *nacosObserver) doProbeWrite(method string) error {
+	target := o.addr + "/nacos/v1/ns/instance?" + probeValues().Encode()
+	request, err := http.NewRequest(method, target, nil)
+	if err != nil {
+		return fmt.Errorf("nacos write probe: %w", err)
+	}
+	response, err := o.http.Do(request) //nolint:gosec // fixed loopback URL
+	if err != nil {
+		return fmt.Errorf("nacos write probe: %w", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<10))
+	if err != nil {
+		return fmt.Errorf("nacos write probe: read body: %w", err)
+	}
+	if response.StatusCode == http.StatusOK {
+		return nil
+	}
+	return classifyNacosAnswer("nacos write probe", response.StatusCode, string(body))
+}
+
+// probeValues renders the probe instance's wire form: the same shape the
+// product sink sends (service, ip, port, cluster, group, namespace,
+// persistent).
+func probeValues() url.Values {
+	return url.Values{
+		"serviceName": {probeService},
+		"ip":          {"127.0.0.1"},
+		"port":        {"39999"},
+		"clusterName": {"probe"},
+		"groupName":   {defaultNacosGroup},
+		"namespaceId": {defaultNacosNamespace},
+		"ephemeral":   {"false"},
+		"enabled":     {"true"},
+	}
 }
 
 // checkResult is one standing assertion cycle's outcome.

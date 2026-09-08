@@ -187,7 +187,7 @@ func (h *soakHarness) scenarioNacosRestart() {
 	// serves an empty view for minutes after readiness turns 200), so the
 	// gate also polls the v1 ns service list until it answers 200 — the
 	// heal clock starts only when the ns API is actually serving.
-	readyDeadline := time.Now().Add(6 * time.Minute)
+	readyDeadline := time.Now().Add(10 * time.Minute)
 	for time.Now().Before(readyDeadline) {
 		if err := h.nacos.readiness(); err == nil && h.nacos.nsAPIReady() == nil {
 			break
@@ -202,13 +202,44 @@ func (h *soakHarness) scenarioNacosRestart() {
 		h.record("d", "nacos restart mid-soak", false, fmt.Sprintf("nacos ns API never came back: %v", err))
 		return
 	}
+	// The WRITE gate (run 20260909-0000's lesson): a restarted nacos can
+	// be "healthy" on every read — readiness 200, service list serving —
+	// while its Raft group (naming_persistent_service_v2) never re-elects
+	// a leader, so every register/deregister answers HTTP 500 "Could not
+	// find leader" indefinitely (that run logged 20,962 such 500s from
+	// 00:40 onward, held the retry queue at 130 pending and failed the
+	// final convergence). Readiness cannot see this; only a write can. The
+	// probe instance lives under a dedicated service the model never
+	// tracks, so it is invisible to every assertion. A leaderless nacos is
+	// reported as the environment finding it is — the scenario fails with
+	// the condition NAMED, not with an opaque "healed in never" — and the
+	// run stops waiting on it early instead of burning six minutes of
+	// bound (and the scenarios behind it) on a state no write can heal.
+	writable := h.waitNacosWritable(3 * time.Minute)
+	probeErr := h.nacos.writeProbe()
+	if !writable || probeErr != nil {
+		note := fmt.Sprintf("nacos came up leaderless after the restart (Raft group naming_persistent_service_v2 unavailable; write probe: %v) — no register/deregister can succeed until it re-elects; plan §8.2/§9.2 ARM/colima nacos restart-pathology materialized, not a product failure (atlas pushes continue, retry queue holds and keeps retrying; see the run's root-cause analysis)",
+			probeErr)
+		h.record("d", "nacos restart mid-soak", false, note)
+		return
+	}
+	h.log.event("scenario (d) nacos write probe passed — Raft leadership re-elected, heal clock starts")
+	// Best-effort probe cleanup: the entry is invisible to the assertions,
+	// but a persistent instance is not left behind on a healthy nacos.
+	if err := h.nacos.probeRemove(); err != nil {
+		h.log.event("scenario (d) write-probe cleanup failed (cosmetic): %v", err)
+	}
 	// Convergence within the full-push bound (the SyncAll prune is the
 	// asserted heal path, §8.5 (d)). The bound covers one full re-armed
 	// tick: the interval timer restarts from the child's perspective
 	// during the outage, so the prune can legitimately land one interval
 	// after nacos returns — 2x the full-push interval + the incremental
-	// bound covers that worst case.
-	heal := h.waitForConverged(2*h.schedule.FullPushBound+h.schedule.IncrementalBound, append(stableConsulApps, spikeApp, "soak-flap-app")...)
+	// bound covers that worst case. The writable variant additionally
+	// probes each poll: if nacos loses the leader MID-wait (the
+	// intermittent-recovery shape of run 20260909-0000: writes accepted
+	// 00:33–00:38, leaderless from 00:40), the clock resets instead of
+	// consuming the bound against a nacos that cannot apply any heal.
+	heal := h.waitForConvergedWritable(2*h.schedule.FullPushBound+h.schedule.IncrementalBound, append(stableConsulApps, spikeApp, "soak-flap-app")...)
 	atlasDelta := h.atlasPushCount() - atlasBefore
 	note := fmt.Sprintf("restarted, healed in %s, atlas pushes during+after: +%d",
 		healStr(heal), atlasDelta)
