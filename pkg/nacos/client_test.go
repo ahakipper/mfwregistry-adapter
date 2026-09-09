@@ -4,6 +4,7 @@
 package nacos_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -134,6 +135,90 @@ func TestBlackboxClientDeregisterErrorPropagates(t *testing.T) {
 	err := client.DeregisterInstance(nacos.InstanceParams{ServiceName: "pay-user", IP: "10.0.0.1", Port: 1, ClusterName: "k8s"})
 	if err == nil {
 		t.Fatal("DeregisterInstance() error = nil, want the HTTP 500 error")
+	}
+}
+
+// TestBlackboxClient400AnswerIsPermanentAPIError: a 4xx answer surfaces as
+// *nacos.APIError with Permanent() true — the request itself is rejected, so
+// the retry queue must be able to classify and drop it (the live incident:
+// Nacos 400 "Param 'ip' is required" retried 9624 times). The message keeps
+// the wording of the plain fmt.Errorf it replaced, mentioning the status.
+func TestBlackboxClient400AnswerIsPermanentAPIError(t *testing.T) {
+	client, server := newClientAt(t)
+	server.SetStatus(400)
+
+	err := client.DeregisterInstance(nacos.InstanceParams{ServiceName: "pay-user", IP: "10.0.0.1", Port: 1, ClusterName: "k8s"})
+	if err == nil {
+		t.Fatal("DeregisterInstance() error = nil, want the HTTP 400 error")
+	}
+	var apiErr *nacos.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("DeregisterInstance() error = %T (%v), want *nacos.APIError", err, err)
+	}
+	if !apiErr.Permanent() {
+		t.Fatalf("APIError.Permanent() = false for status %d, want true (4xx)", apiErr.Status)
+	}
+	if !contains(err.Error(), "400") {
+		t.Fatalf("DeregisterInstance() error = %q, want it to mention status 400", err)
+	}
+
+	// The read path answers the same typed error too.
+	if _, err := client.ListInstances("pay-user"); err == nil {
+		t.Fatal("ListInstances() error = nil, want the HTTP 400 error")
+	} else if !errors.As(err, &apiErr) || !apiErr.Permanent() {
+		t.Fatalf("ListInstances() error = %T (%v), want a permanent *nacos.APIError", err, err)
+	}
+}
+
+// TestBlackboxClient500AnswerIsRetriableAPIError: a 5xx answer is an
+// *nacos.APIError but NOT permanent — the server may recover, so the retry
+// queue keeps the entry queued.
+func TestBlackboxClient500AnswerIsRetriableAPIError(t *testing.T) {
+	client, server := newClientAt(t)
+	server.SetStatus(500)
+
+	err := client.RegisterInstance(nacos.InstanceParams{ServiceName: "pay-user", IP: "10.0.0.1", Port: 1, ClusterName: "k8s"})
+	if err == nil {
+		t.Fatal("RegisterInstance() error = nil, want the HTTP 500 error")
+	}
+	var apiErr *nacos.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("RegisterInstance() error = %T (%v), want *nacos.APIError", err, err)
+	}
+	if apiErr.Permanent() {
+		t.Fatalf("APIError.Permanent() = true for status %d, want false (5xx is retriable)", apiErr.Status)
+	}
+}
+
+// TestBlackboxClientPermanentStatusBoundaries: pins the exact boundary of
+// Permanent()'s range — 399 is below it (retriable), 499 stays inside it
+// (permanent), matching 400 <= status < 500.
+func TestBlackboxClientPermanentStatusBoundaries(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    int
+		permanent bool
+	}{
+		{name: "399 is below the permanent range", status: 399, permanent: false},
+		{name: "499 stays inside the permanent range", status: 499, permanent: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client, server := newClientAt(t)
+			server.SetStatus(tc.status)
+
+			err := client.RegisterInstance(nacos.InstanceParams{ServiceName: "pay-user", IP: "10.0.0.1", Port: 1, ClusterName: "k8s"})
+			if err == nil {
+				t.Fatalf("RegisterInstance() error = nil, want the HTTP %d error", tc.status)
+			}
+			var apiErr *nacos.APIError
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("RegisterInstance() error = %T (%v), want *nacos.APIError", err, err)
+			}
+			if got := apiErr.Permanent(); got != tc.permanent {
+				t.Fatalf("APIError.Permanent() for status %d = %v, want %v", tc.status, got, tc.permanent)
+			}
+		})
 	}
 }
 

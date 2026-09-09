@@ -235,6 +235,31 @@ func (p InstanceParams) values() url.Values {
 	return values
 }
 
+// APIError is a non-200 answer from the Nacos v1 OpenAPI: the request that
+// was rejected, the HTTP status and the (truncated) response body. It keeps
+// the status as a field so callers up the chain can classify the failure
+// through Permanent() instead of parsing the message text.
+type APIError struct {
+	Method string
+	Path   string
+	Status int
+	Body   string
+}
+
+// Error renders exactly the message the plain fmt.Errorf site produced, so
+// logs and error-text assertions keep their wording.
+func (e *APIError) Error() string {
+	return fmt.Sprintf("nacos: %s %s answered status %d: %s", e.Method, e.Path, e.Status, e.Body)
+}
+
+// Permanent reports whether the request itself is rejected (a 4xx): Nacos
+// will answer an identical retry the same way forever, so the retry queue
+// drops the entry instead of spinning (the live incident: 9624 futile
+// retries of a DELETE without an ip parameter). 5xx answers stay retriable.
+func (e *APIError) Permanent() bool {
+	return e.Status >= 400 && e.Status < 500
+}
+
 // doForm issues one mutating request (register/deregister). Nacos answers
 // "ok" (plain text) on success; any other status is an error carrying the
 // status code and body.
@@ -260,7 +285,7 @@ func (c *Client) doForm(method, path string, values url.Values) error {
 		return fmt.Errorf("nacos: %s %s: read body: %w", method, path, err)
 	}
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("nacos: %s %s answered status %d: %s", method, path, response.StatusCode, truncateBody(body))
+		return &APIError{Method: method, Path: path, Status: response.StatusCode, Body: truncateBody(body)}
 	}
 	return nil
 }
@@ -291,7 +316,7 @@ func (c *Client) doJSON(method, path string, values url.Values, out interface{})
 		return fmt.Errorf("nacos: %s %s: read body: %w", method, path, err)
 	}
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("nacos: %s %s answered status %d: %s", method, path, response.StatusCode, truncateBody(body))
+		return &APIError{Method: method, Path: path, Status: response.StatusCode, Body: truncateBody(body)}
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("nacos: %s %s: decode response: %w", method, path, err)

@@ -186,6 +186,28 @@ func (k *k8s) pod2Instance(obj k8srobot.QueueObject) (ins *sv.Instance) {
 			log.Logger.Warnf("invalid instance, instanceid: %s, reason: %s", instance.InstanceId, ver.Error())
 			return nil
 		}
+		// A pod that dies before ever receiving an IP (e.g. a Pending pod churned away mid
+		// rolling-update) converts to an offline instance with an empty Ip. Such a shell cannot be
+		// deregistered downstream: the nacos DELETE derives its target from the ip parameter, so an
+		// empty ip is rejected with a permanent 400. And when the cache holds no last-known ip
+		// either, the instance was never pushed to any sink, so there is nothing to deregister —
+		// drop it instead of poisoning the retry queue. Otherwise recover the last-known fields
+		// from the cache (a value copy; the cached pointer is never mutated in place), mirroring
+		// the offline semantics of the CompareAndFlush case-3 branch, and let the diff flow
+		// deregister the instance that was actually registered.
+		if instance.Status == providers.InstanceStatusOffline && instance.Ip == "" {
+			cached := k.cache.Get(instance.InstanceId)
+			if cached == nil || cached.Ip == "" {
+				log.Logger.Infof("drop offline instance %s with empty ip, nothing was registered downstream", instance.InstanceId)
+				return nil
+			}
+			merged := *cached
+			merged.Status = providers.InstanceStatusOffline
+			merged.State = providers.InstanceStateTerminated
+			merged.Enabled = false
+			merged.Reversion = instance.Reversion
+			instance = &merged
+		}
 		cacheInstance := k.cache.Get(instance.InstanceId)
 		if cacheInstance == nil || k.hasInstanceDiff(cacheInstance, instance) {
 			// put all exist instance to cache, purpose for get cache don't make npe

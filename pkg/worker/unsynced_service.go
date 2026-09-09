@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -203,11 +204,31 @@ func (s *UnsyncedService) pushSinkOnce(sink string, batch map[retryKey]pendingPu
 
 // retryKeyed applies one push attempt's outcome: nil error deletes the key
 // unless the entry was re-added mid-cycle; an error keeps it queued for the
-// next cycle.
+// next cycle, except a permanent error, which drops the entry.
 func (s *UnsyncedService) retryKeyed(sink string, key retryKey, pending pendingPush, err error) {
 	if err != nil {
 		s.logger.Errorf("retry trying to push instance failed again, sink: %s, data: %v, err: %s",
 			sink, pending.Instance, err.Error())
+		// A 4xx from the sink client (e.g. the nacos APIError) is permanent:
+		// the request itself is rejected, so an identical retry can never
+		// succeed and would spin forever (the live incident: 9624 futile
+		// retries of an unregisterable DELETE). Drop the entry from the queue
+		// instead of re-queuing it for the next cycle.
+		var p interface{ Permanent() bool }
+		if errors.As(err, &p) && p.Permanent() {
+			s.Lock()
+			// delete only if the queued instance is still the one just pushed:
+			// a mid-cycle re-add (e.g. a newer revision) must survive the drop.
+			if current, ok := s.store[key]; ok && current.Instance == pending.Instance {
+				delete(s.store, key)
+				// the drop is claimed only now that the key was actually
+				// deleted; a declined compare (a newer re-added revision)
+				// logs nothing and leaves the entry queued.
+				s.logger.Errorf("dropping permanently-failed push from the retry queue, sink: %s, data: %v, err: %s",
+					sink, pending.Instance, err.Error())
+			}
+			s.Unlock()
+		}
 		return
 	}
 	s.Lock()

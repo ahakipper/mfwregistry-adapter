@@ -172,6 +172,16 @@ func (s *Sink) Close() error {
 func (s *Sink) pushOne(ins *instance.Instance) error {
 	switch ins.Status {
 	case instance.InstanceStatusOffline:
+		// An offline instance without an ip cannot be deregistered: the v1
+		// DELETE derives its composite id from the ip parameter, and Nacos
+		// answers 400 "Param 'ip' is required" forever (nothing was ever
+		// registered under an empty ip). The PushAll prune sweep owns the
+		// remote cleanup, so skip the deregister instead of poisoning the
+		// retry queue.
+		if ins.Ip == "" {
+			s.logger.Warnf("nacos: skipping deregister of instance %s with empty ip, the PushAll prune owns the remote cleanup", ins.InstanceId)
+			return nil
+		}
 		return s.deregister(ins.AppCode, ins.Ip, firstPort(ins), clusterOf(ins))
 	case instance.InstanceStatusOnline, instance.InstanceStatusUnhealthy:
 		return s.register(ins)

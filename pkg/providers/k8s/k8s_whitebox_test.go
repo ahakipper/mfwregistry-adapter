@@ -11,6 +11,7 @@ import (
 
 	"github.com/panjf2000/ants/v2"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"spotter/config"
 	sv "spotter/pkg/beehive/service/v2"
@@ -540,6 +541,178 @@ func TestPod2InstanceDeleteWithoutCacheReturnsNil(t *testing.T) {
 	obj := k8srobot.QueueObject{RType: k8srobot.Pods, Key: "msp/pod-a", Event: k8srobot.EventDelete}
 	if ins := k.pod2Instance(obj); ins != nil {
 		t.Fatalf("pod2Instance(delete with empty cache) = %#v, want nil", ins)
+	}
+}
+
+// newDeletedIPlessPod builds a valid pod that was deleted before it ever
+// received an IP: DeletionTimestamp set, Status.PodIP empty. formatStatus
+// then converts it to an offline instance whose Ip is "".
+func newDeletedIPlessPod(namespace, name string) *corev1.Pod {
+	pod := newValidPod(namespace, name)
+	now := metav1.Now()
+	pod.DeletionTimestamp = &now
+	pod.Status.PodIP = ""
+	pod.ResourceVersion = "50"
+	return pod
+}
+
+// TestPod2InstanceDeleteIPlessPodWithCachedIPMergesOfflineInstance: the live
+// incident's shape — the informer still holds a pod whose DeletionTimestamp
+// is set but that never received an IP (a Pending pod churned away mid
+// rolling-update). The cache holds the prior online instance with an IP, so
+// the guard must merge the cached fields (Ip, Ports, AppCode) with the
+// offline semantics (Status 3, terminated state, disabled, the pod's newest
+// reversion) and return that instance, caching it.
+func TestPod2InstanceDeleteIPlessPodWithCachedIPMergesOfflineInstance(t *testing.T) {
+	pod := newDeletedIPlessPod("msp", "pod-a")
+	robot := newFakeRobot(map[string][]interface{}{"msp/pod-a": {pod}}, nil, false)
+	w := &fakeWorker{}
+	k := newTestProvider(robot, w)
+
+	// Seed the cache with the prior online instance (an add of the live pod).
+	live := newValidPod("msp", "pod-a")
+	live.ResourceVersion = "42"
+	if instanceFromPod(t, live) == nil {
+		t.Fatal("live pod did not convert")
+	}
+	k.cache.ReplaceOrInsert(instanceFromPod(t, live))
+
+	obj := k8srobot.QueueObject{RType: k8srobot.Pods, Key: "msp/pod-a", Event: k8srobot.EventDelete}
+	ins := k.pod2Instance(obj)
+	if ins == nil {
+		t.Fatal("pod2Instance(delete of IP-less pod with cached IP) = nil, want the merged offline instance")
+	}
+	if ins.InstanceId != "pod-a" {
+		t.Fatalf("merged instance id = %q, want pod-a", ins.InstanceId)
+	}
+	if ins.Ip != "172.17.0.9" {
+		t.Fatalf("merged instance ip = %q, want the cached ip 172.17.0.9 (the deregister target)", ins.Ip)
+	}
+	if ins.Status != providers.InstanceStatusOffline {
+		t.Fatalf("merged instance status = %d, want %d", ins.Status, providers.InstanceStatusOffline)
+	}
+	if ins.State != providers.InstanceStateTerminated {
+		t.Fatalf("merged instance state = %q, want %q", ins.State, providers.InstanceStateTerminated)
+	}
+	if ins.Enabled {
+		t.Fatal("merged instance enabled = true, want false")
+	}
+	if ins.Reversion != 50 {
+		t.Fatalf("merged instance reversion = %d, want 50 (the pod's newest observed resource version)", ins.Reversion)
+	}
+	if ins.AppCode != "pay-user" {
+		t.Fatalf("merged instance appcode = %q, want the cached pay-user", ins.AppCode)
+	}
+
+	// The cache must hold the full record afterwards (the diff flow inserted it).
+	cached := k.cache.Get("pod-a")
+	if cached == nil {
+		t.Fatal("cache.Get(pod-a) = nil after the merged delete, want the full record")
+	}
+	if cached.Ip != "172.17.0.9" || cached.Status != providers.InstanceStatusOffline {
+		t.Fatalf("cached instance = %#v, want the merged offline record with the recovered ip", cached)
+	}
+}
+
+// TestPod2InstanceDeleteIPlessPodMergedIsIdempotent: a second delete event
+// for the same pod, after the first one merged and cached the full offline
+// record, must return nil and not re-push — the cached entry is already
+// offline with the recovered ip, so hasInstanceDiff reports no diff.
+func TestPod2InstanceDeleteIPlessPodMergedIsIdempotent(t *testing.T) {
+	pod := newDeletedIPlessPod("msp", "pod-a")
+	robot := newFakeRobot(map[string][]interface{}{"msp/pod-a": {pod}}, nil, false)
+	w := &fakeWorker{}
+	k := newTestProvider(robot, w)
+
+	// Seed the cache with the prior online instance (an add of the live pod).
+	live := newValidPod("msp", "pod-a")
+	live.ResourceVersion = "42"
+	k.cache.ReplaceOrInsert(instanceFromPod(t, live))
+
+	del := k8srobot.QueueObject{RType: k8srobot.Pods, Key: "msp/pod-a", Event: k8srobot.EventDelete}
+	if first := k.pod2Instance(del); first == nil {
+		t.Fatal("first delete produced no merged instance")
+	}
+	if cached := k.cache.Get("pod-a"); cached == nil || cached.Status != providers.InstanceStatusOffline || cached.Ip != "172.17.0.9" {
+		t.Fatalf("cached instance after the first delete = %#v, want the offline record with the recovered ip", cached)
+	}
+
+	// A repeated delete must not report again: the cached instance is already
+	// offline (offline-equal, hasInstanceDiff == false).
+	if again := k.pod2Instance(del); again != nil {
+		t.Fatalf("pod2Instance(repeated IP-less delete) = %#v, want nil (already offline)", again)
+	}
+
+	// The cache still holds the full merged record after the repeat.
+	if cached := k.cache.Get("pod-a"); cached == nil || cached.Ip != "172.17.0.9" || cached.Status != providers.InstanceStatusOffline {
+		t.Fatalf("cached instance after the repeated delete = %#v, want the merged offline record with the recovered ip", cached)
+	}
+}
+
+// TestPod2InstanceDeleteIPlessPodWithoutCacheReturnsNil: no prior registered
+// instance (empty cache) means nothing was ever pushed to a sink — the
+// IP-less offline shell must be dropped, not reported as a syncable instance.
+func TestPod2InstanceDeleteIPlessPodWithoutCacheReturnsNil(t *testing.T) {
+	pod := newDeletedIPlessPod("msp", "pod-a")
+	robot := newFakeRobot(map[string][]interface{}{"msp/pod-a": {pod}}, nil, false)
+	w := &fakeWorker{}
+	k := newTestProvider(robot, w)
+
+	obj := k8srobot.QueueObject{RType: k8srobot.Pods, Key: "msp/pod-a", Event: k8srobot.EventDelete}
+	if ins := k.pod2Instance(obj); ins != nil {
+		t.Fatalf("pod2Instance(delete of IP-less pod with empty cache) = %#v, want nil", ins)
+	}
+	if k.cache.Get("pod-a") != nil {
+		t.Fatal("cache contains pod-a after dropping the shell instance, want no cache write")
+	}
+}
+
+// TestPod2InstanceDeleteIPlessPodWithIPlessCacheReturnsNil: a cached entry
+// whose own Ip is empty cannot be a deregister target either — the drop
+// applies exactly as with the empty cache.
+func TestPod2InstanceDeleteIPlessPodWithIPlessCacheReturnsNil(t *testing.T) {
+	pod := newDeletedIPlessPod("msp", "pod-a")
+	robot := newFakeRobot(map[string][]interface{}{"msp/pod-a": {pod}}, nil, false)
+	w := &fakeWorker{}
+	k := newTestProvider(robot, w)
+
+	k.cache.ReplaceOrInsert(&sv.Instance{
+		InstanceId: "pod-a",
+		AppCode:    "pay-user",
+		EnvType:    "test",
+		Status:     providers.InstanceStatusUnhealthy,
+		State:      providers.InstanceStatePending,
+		Ip:         "",
+		Reversion:  42,
+	})
+
+	obj := k8srobot.QueueObject{RType: k8srobot.Pods, Key: "msp/pod-a", Event: k8srobot.EventDelete}
+	if ins := k.pod2Instance(obj); ins != nil {
+		t.Fatalf("pod2Instance(delete of IP-less pod with IP-less cache) = %#v, want nil", ins)
+	}
+}
+
+// TestPod2InstanceDeletedPodWithIPOwnIPWins: regression — a deleted pod that
+// has its own IP keeps the unchanged behavior: the instance is reported with
+// the pod's own IP (no cache merge), and pushed offline.
+func TestPod2InstanceDeletedPodWithIPOwnIPWins(t *testing.T) {
+	pod := newValidPod("msp", "pod-a")
+	now := metav1.Now()
+	pod.DeletionTimestamp = &now
+	robot := newFakeRobot(map[string][]interface{}{"msp/pod-a": {pod}}, nil, false)
+	w := &fakeWorker{}
+	k := newTestProvider(robot, w)
+
+	obj := k8srobot.QueueObject{RType: k8srobot.Pods, Key: "msp/pod-a", Event: k8srobot.EventDelete}
+	ins := k.pod2Instance(obj)
+	if ins == nil {
+		t.Fatal("pod2Instance(delete of pod with IP) = nil, want the offline instance")
+	}
+	if ins.Ip != pod.Status.PodIP {
+		t.Fatalf("deleted-with-IP instance ip = %q, want the pod's own ip %q", ins.Ip, pod.Status.PodIP)
+	}
+	if ins.Status != providers.InstanceStatusOffline {
+		t.Fatalf("deleted-with-IP instance status = %d, want %d", ins.Status, providers.InstanceStatusOffline)
 	}
 }
 

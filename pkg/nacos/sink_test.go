@@ -166,6 +166,24 @@ func TestBlackboxSinkPushOfflineInstanceDeregisters(t *testing.T) {
 	}
 }
 
+// TestBlackboxSinkPushOfflineInstanceWithEmptyIpSkipsDeregister: the k8s
+// informer can synthesize an offline "shell" instance for a pod that died
+// before ever receiving an IP. The v1 DELETE derives its target from the ip
+// parameter, so deregistering would send a request Nacos rejects with a
+// permanent 400 (the live incident). The push must succeed without any HTTP
+// traffic — the PushAll prune sweep owns the remote cleanup.
+func TestBlackboxSinkPushOfflineInstanceWithEmptyIpSkipsDeregister(t *testing.T) {
+	sink, server := newSinkAt(t)
+
+	ins := domainInstance("pod-shell", "pay-user", "", 8080, "k8s", 3)
+	if err := sink.Push(1, []*instance.Instance{ins}); err != nil {
+		t.Fatalf("Push(offline empty ip) error = %v, want nil (deregister skipped)", err)
+	}
+	if requests := server.Requests(); len(requests) != 0 {
+		t.Fatalf("requests = %d, want 0 (no deregister for an empty-ip instance); requests = %v", len(requests), requests)
+	}
+}
+
 func TestBlackboxSinkPushUnhealthyInstanceUpsertsDisabled(t *testing.T) {
 	sink, server := newSinkAt(t)
 

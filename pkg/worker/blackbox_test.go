@@ -291,3 +291,158 @@ func lastDepth(depths []fakes.QueueDepthObservation) int {
 	}
 	return depths[len(depths)-1].Depth
 }
+
+// permanentError is a test-local sink error exposing the Permanent() seam of
+// the nacos APIError: a 4xx whose identical retry can never succeed.
+type permanentError struct{}
+
+func (permanentError) Error() string {
+	return "sink answered status 400: param ip is required"
+}
+
+func (permanentError) Permanent() bool {
+	return true
+}
+
+// TestBlackboxRetryQueueSemanticsDropsPermanentError: a push that fails with
+// a permanent error (the nacos 4xx class) must be dropped from the retry
+// queue after the failed attempt instead of spinning forever — the live
+// incident retried an unregisterable DELETE 9624 times.
+func TestBlackboxRetryQueueSemanticsDropsPermanentError(t *testing.T) {
+	sink := &fakes.FakeInstanceSink{PushErr: permanentError{}}
+	service := NewUnsyncedService(context.Background(), sink, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+
+	service.Add(1, []*instance.Instance{{InstanceId: "instance-4", Reversion: 42}}, nil)
+	if got := service.Len(); got != 1 {
+		t.Fatalf("queued events = %d, want 1 before the retry", got)
+	}
+
+	service.syncOnce()
+
+	if got := service.Len(); got != 0 {
+		t.Fatalf("queued events after a permanent failure = %d, want 0 (dropped, not retried)", got)
+	}
+	// One failed push happened; the drop means the next cycle pushes nothing.
+	if got := len(sink.PushCalls()); got != 1 {
+		t.Fatalf("push calls = %d, want 1 (the failed attempt only)", got)
+	}
+}
+
+// TestBlackboxRetryQueueSemanticsKeepsPlainErrorQueued: a plain (non-4xx)
+// error stays queued for the next cycle — only permanent errors are dropped.
+func TestBlackboxRetryQueueSemanticsKeepsPlainErrorQueued(t *testing.T) {
+	sink := &fakes.FakeInstanceSink{PushErr: errors.New("transient failure")}
+	service := NewUnsyncedService(context.Background(), sink, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+
+	service.Add(1, []*instance.Instance{{InstanceId: "instance-5", Reversion: 42}}, nil)
+	service.syncOnce()
+
+	if got := service.Len(); got != 1 {
+		t.Fatalf("queued events after a plain failure = %d, want 1 (kept for retry)", got)
+	}
+	if got := len(sink.PushCalls()); got != 1 {
+		t.Fatalf("push calls = %d, want 1", got)
+	}
+}
+
+// TestBlackboxRetryQueueSemanticsPermanentErrorKeepsMidCycleReAdd: the
+// permanent-error drop uses the same delete-by-compare discipline as the
+// success path: an entry re-added mid-cycle with a newer revision must
+// survive the drop of the instance the cycle just failed to push. The
+// re-add must land between syncOnce's snapshot and the push (the window the
+// production retry loop really races in), so it is scripted inside the
+// sink's Push itself: the fake sink is driven from the worker's own
+// retryKeyed call stack.
+func TestBlackboxRetryQueueSemanticsPermanentErrorKeepsMidCycleReAdd(t *testing.T) {
+	readd := &instance.Instance{InstanceId: "instance-6", Reversion: 20}
+	sink := &midCycleReAddSink{failErr: permanentError{}, reAdd: readd}
+	service := NewUnsyncedService(context.Background(), sink, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+	sink.addOwner = service
+
+	stale := &instance.Instance{InstanceId: "instance-6", Reversion: 10}
+	service.Add(1, []*instance.Instance{stale}, nil)
+
+	service.syncOnce()
+
+	if got := service.Len(); got != 1 {
+		t.Fatalf("queued events after a permanent failure with mid-cycle re-add = %d, want 1 (the re-add survives)", got)
+	}
+	// The surviving entry must be the re-added newer revision: a further
+	// cycle (now succeeding) pushes it and drains the queue.
+	sink.setFailErr(nil)
+	service.syncOnce()
+	if got := service.Len(); got != 0 {
+		t.Fatalf("queued events after the successful re-push = %d, want 0", got)
+	}
+	calls := sink.pushSnapshot()
+	if len(calls) != 2 {
+		t.Fatalf("push calls = %d, want 2 (the failed stale push and the successful re-add push)", len(calls))
+	}
+	repushed := calls[1].Instances[0]
+	if repushed.InstanceId != "instance-6" || repushed.Reversion != 20 {
+		t.Fatalf("re-pushed instance = %#v, want instance-6 with reversion 20 (the re-added revision)", repushed)
+	}
+}
+
+// midCycleReAddSink pushes once and, from inside that Push, re-adds a newer
+// revision to addOwner (the production Push runs outside the store lock, so
+// the re-add races the push exactly like a real event does). The re-add runs
+// only on the first push so later cycles are ordinary.
+type midCycleReAddSink struct {
+	mu        sync.Mutex
+	failErr   error
+	reAdd     *instance.Instance
+	addOwner  *UnsyncedService
+	pushCalls []blackboxPushCall
+}
+
+func (s *midCycleReAddSink) Push(triggerTime int64, instances []*instance.Instance) error {
+	s.mu.Lock()
+	s.pushCalls = append(s.pushCalls, blackboxPushCall{
+		TriggerTime: triggerTime,
+		Instances:   cloneInstances(instances),
+	})
+	err := s.failErr
+	s.mu.Unlock()
+
+	if err != nil {
+		// Simulate the mid-cycle event: the newer revision arrives while the
+		// cycle is pushing the stale snapshot. PushTo called us from
+		// pushSinkOnce, outside the store lock.
+		s.mu.Lock()
+		reAdd := s.reAdd
+		s.mu.Unlock()
+		if reAdd != nil {
+			s.setFailErr(nil)
+			s.addOwner.Add(2, []*instance.Instance{reAdd}, nil)
+		}
+	}
+	return err
+}
+
+func (s *midCycleReAddSink) PushAll(triggerTime int64, instances []*instance.Instance) error {
+	return nil
+}
+
+func (s *midCycleReAddSink) GetAll(statuses []int32, provider string) (*instance.InstanceList, error) {
+	return &instance.InstanceList{}, nil
+}
+
+func (s *midCycleReAddSink) setFailErr(err error) {
+	s.mu.Lock()
+	s.failErr = err
+	s.mu.Unlock()
+}
+
+func (s *midCycleReAddSink) pushSnapshot() []blackboxPushCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snapshot := make([]blackboxPushCall, len(s.pushCalls))
+	for i, call := range s.pushCalls {
+		snapshot[i] = blackboxPushCall{
+			TriggerTime: call.TriggerTime,
+			Instances:   cloneInstances(call.Instances),
+		}
+	}
+	return snapshot
+}
