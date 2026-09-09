@@ -204,6 +204,17 @@ func TestInitInstanceFilters(t *testing.T) {
 		{name: "empty app code", ins: &Instance{EnvType: "test", Reversion: 1}, want: "instance has nil appcode"},
 		{name: "empty environment type", ins: &Instance{AppCode: "app", Reversion: 1}, want: "instance has nil env type"},
 		{name: "online without ip", ins: &Instance{AppCode: "app", EnvType: "test", Status: InstanceStatusOnline, Reversion: 1}, want: "instance has nil ip when it on online status"},
+		// The empty-ip asymmetry is deliberate and this row pins it
+		// (AUDIT-D-8): the filter rejects online+empty-ip but ACCEPTS
+		// offline+empty-ip and unhealthy+empty-ip. "Harmonizing" it — e.g.
+		// rejecting empty ip for every status — must fail this test. The
+		// offline/empty-ip shape is owned downstream by the three-layer
+		// defense: the k8s source guard (merge-or-drop on the last known ip)
+		// and the nacos sink skip guards (deregister AND register skip for
+		// empty ip) each handle what the filter lets through, so rejecting it
+		// here too would only drop real reconciliation work upstream.
+		{name: "offline with empty ip is accepted by design", ins: &Instance{AppCode: "app", EnvType: "test", Status: InstanceStatusOffline, Reversion: 1}},
+		{name: "unhealthy with empty ip is accepted by design", ins: &Instance{AppCode: "app", EnvType: "test", Status: InstanceStatusUnhealthy, Reversion: 1}},
 		{name: "pending", ins: &Instance{AppCode: "app", EnvType: "test", State: InstanceStatePending, Reversion: 1}, want: "instance has nil ip when it on heal check status and pending state"},
 		{name: "zero revision", ins: &Instance{AppCode: "app", EnvType: "test"}, want: "instance has nil reversion"},
 		{name: "unknown status", ins: &Instance{AppCode: "app", EnvType: "test", Reversion: 1, Status: InstanceStatusUnknown}, want: "instance has status unknown value: 0, may be the format process need to be performed"},

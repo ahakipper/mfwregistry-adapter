@@ -1484,6 +1484,342 @@ func TestProcessIntervalFullPushEmitsNoSyncAllWithoutInstances(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
+// Conversion boundary: formatStatus / formatState / formatContainerEnabled
+// (audit batch 2, AUDIT-C-1/C-2/C-3)
+// -----------------------------------------------------------------------------
+
+// containerStatus is a helper for building one ContainerStatus: a container in
+// the given waiting reason with the given last-termination reason, not ready.
+func containerStatus(waiting, lastTermination string, ready bool) corev1.ContainerStatus {
+	cs := corev1.ContainerStatus{Ready: ready}
+	if waiting != "" {
+		cs.State.Waiting = &corev1.ContainerStateWaiting{Reason: waiting}
+	}
+	if lastTermination != "" {
+		cs.LastTerminationState.Terminated = &corev1.ContainerStateTerminated{Reason: lastTermination}
+	}
+	if ready {
+		cs.State.Running = &corev1.ContainerStateRunning{}
+	}
+	return cs
+}
+
+// TestFormatStateRunningContainers: the Running branch of formatState — the
+// crash/error precedence (a CrashLoopBackOff state set inside the container
+// scan must survive the scan, and Error must win over Crash when both are
+// present), the probing fallback for plain not-ready containers, and running
+// only when all containers are ready.
+func TestFormatStateRunningContainers(t *testing.T) {
+	tests := []struct {
+		name     string
+		statuses []corev1.ContainerStatus
+		want     string
+	}{
+		{
+			name:     "all containers ready is running",
+			statuses: []corev1.ContainerStatus{containerStatus("", "", true)},
+			want:     providers.InstanceStateRunning,
+		},
+		{
+			name:     "crash loop with last termination Error is error",
+			statuses: []corev1.ContainerStatus{containerStatus("CrashLoopBackOff", "Error", false)},
+			want:     providers.InstanceStateError,
+			// AUDIT-C-1: CrashLoopBackOff + LastTerminationState Reason
+			// Error must surface as error.
+		},
+		{
+			name:     "crash loop without last termination state is crash",
+			statuses: []corev1.ContainerStatus{containerStatus("CrashLoopBackOff", "", false)},
+			want:     providers.InstanceStateCrash,
+			// AUDIT-C-1: plain CrashLoopBackOff must surface as crash, never
+			// unknown.
+		},
+		{
+			name: "error wins over crash when both appear across containers",
+			statuses: []corev1.ContainerStatus{
+				containerStatus("CrashLoopBackOff", "", false),
+				containerStatus("CrashLoopBackOff", "Error", false),
+			},
+			want: providers.InstanceStateError,
+			// AUDIT-C-1: error precedence over crash is deliberate (the
+			// stronger signal).
+		},
+		{
+			name: "crash over probing when both appear across containers",
+			statuses: []corev1.ContainerStatus{
+				containerStatus("ContainerCreating", "", false),
+				containerStatus("CrashLoopBackOff", "", false),
+			},
+			want: providers.InstanceStateCrash,
+		},
+		{
+			name:     "not ready with ContainerCreating is probing",
+			statuses: []corev1.ContainerStatus{containerStatus("ContainerCreating", "", false)},
+			want:     providers.InstanceStateProbing,
+		},
+		{
+			name:     "not ready with no waiting reason is probing",
+			statuses: []corev1.ContainerStatus{containerStatus("", "", false)},
+			want:     providers.InstanceStateProbing,
+		},
+		{
+			name:     "running pod with empty ContainerStatuses is probing (kubelet not caught up)",
+			statuses: nil,
+			want:     providers.InstanceStateProbing,
+			// AUDIT-C-3: n>0 containers expected but none reported.
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := newValidPod("msp", "pod-state")
+			pod.Status.ContainerStatuses = tc.statuses
+			if got := formatState(pod); got != tc.want {
+				t.Fatalf("formatState() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFormatStateTerminalPhases pins the non-Running branches of formatState.
+func TestFormatStateTerminalPhases(t *testing.T) {
+	tests := []struct {
+		name   string
+		phase  corev1.PodPhase
+		reason string
+		want   string
+	}{
+		{name: "pending", phase: corev1.PodPending, want: providers.InstanceStatePending},
+		{name: "unknown", phase: corev1.PodUnknown, want: providers.InstanceStateUnknown},
+		{name: "failed evicted", phase: corev1.PodFailed, reason: "Evicted", want: providers.InstanceStateEvicted},
+		{name: "failed other reason", phase: corev1.PodFailed, reason: "OOMKilled", want: providers.InstanceStateFailed},
+		{name: "failed no reason", phase: corev1.PodFailed, want: providers.InstanceStateFailed},
+		{name: "succeeded", phase: corev1.PodSucceeded, want: providers.InstanceStateTerminated},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := newValidPod("msp", "pod-phase")
+			pod.Status.Phase = tc.phase
+			pod.Status.Reason = tc.reason
+			pod.Status.ContainerStatuses = nil
+			if got := formatState(pod); got != tc.want {
+				t.Fatalf("formatState() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFormatStatusPinTerminalSemantics pins the Succeeded/Failed(non-Evicted)
+// OFFLINE decision (AUDIT-C-2): completed/failed pods no longer serve traffic,
+// so the sink receives a deregistration for the live object on purpose. A
+// mutation flipping them online (or dropping the branch) must fail here.
+func TestFormatStatusPinTerminalSemantics(t *testing.T) {
+	tests := []struct {
+		name   string
+		phase  corev1.PodPhase
+		reason string
+		want   int32
+	}{
+		{
+			name:  "succeeded converts offline (completed pods no longer serve)",
+			phase: corev1.PodSucceeded,
+			want:  providers.InstanceStatusOffline,
+		},
+		{
+			name:   "failed non-evicted converts offline",
+			phase:  corev1.PodFailed,
+			reason: "OOMKilled",
+			want:   providers.InstanceStatusOffline,
+		},
+		{
+			name:  "failed without reason converts offline",
+			phase: corev1.PodFailed,
+			want:  providers.InstanceStatusOffline,
+		},
+		{
+			name:   "failed evicted converts unhealthy (recreated by the controller)",
+			phase:  corev1.PodFailed,
+			reason: "Evicted",
+			want:   providers.InstanceStatusUnhealthy,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := newValidPod("msp", "pod-terminal")
+			pod.Status.Phase = tc.phase
+			pod.Status.Reason = tc.reason
+			pod.Status.ContainerStatuses = nil
+			if got := formatStatus(nil, pod); got != tc.want {
+				t.Fatalf("formatStatus() = %d, want %d", got, tc.want)
+			}
+			// The state side of the same shape: formatState must agree with
+			// the terminal state for the pin (offline/terminated pair).
+			if tc.phase == corev1.PodSucceeded {
+				if got := formatState(pod); got != providers.InstanceStateTerminated {
+					t.Fatalf("formatState(succeeded) = %q, want %q", got, providers.InstanceStateTerminated)
+				}
+			}
+			if tc.phase == corev1.PodFailed && tc.reason != "Evicted" {
+				if got := formatState(pod); got != providers.InstanceStateFailed {
+					t.Fatalf("formatState(failed) = %q, want %q", got, providers.InstanceStateFailed)
+				}
+			}
+		})
+	}
+}
+
+// TestFormatStatusRunningPhases pins the Running branch including the
+// AUDIT-C-3 fix: a Running pod with zero ContainerStatuses is NOT ready (the
+// vacuous "all containers ready" of the empty loop), so status is unhealthy
+// and enabled false — whether or not the PodIP was already allocated (the
+// early-start shape is exactly C-4's precondition; a real instance awaiting
+// readiness, as opposed to the empty-IP offline shell the sink guard skips).
+func TestFormatStatusRunningPhases(t *testing.T) {
+	tests := []struct {
+		name        string
+		statuses    []corev1.ContainerStatus
+		ip          string
+		want        int32
+		wantEnabled bool
+		wantState   string
+		pending     bool
+	}{
+		{
+			name:        "all ready converts online and enabled",
+			statuses:    []corev1.ContainerStatus{containerStatus("", "", true)},
+			ip:          "172.17.0.9",
+			want:        providers.InstanceStatusOnline,
+			wantEnabled: true,
+			wantState:   providers.InstanceStateRunning,
+		},
+		{
+			name:        "not ready container converts unhealthy and disabled",
+			statuses:    []corev1.ContainerStatus{containerStatus("ContainerCreating", "", false)},
+			ip:          "172.17.0.9",
+			want:        providers.InstanceStatusUnhealthy,
+			wantEnabled: false,
+			wantState:   providers.InstanceStateProbing,
+		},
+		{
+			name:        "running with nil statuses converts unhealthy, not vacuously online",
+			statuses:    nil,
+			ip:          "172.17.0.9",
+			want:        providers.InstanceStatusUnhealthy,
+			wantEnabled: false,
+			wantState:   providers.InstanceStateProbing,
+			// AUDIT-C-3: empty ContainerStatuses must not count as ready=true.
+		},
+		{
+			name:        "running with empty statuses slice is the same vacuous-online escape",
+			statuses:    []corev1.ContainerStatus{},
+			ip:          "172.17.0.9",
+			want:        providers.InstanceStatusUnhealthy,
+			wantEnabled: false,
+			wantState:   providers.InstanceStateProbing,
+		},
+		{
+			name:        "running with nil statuses and pod ip set (early start) still unhealthy",
+			statuses:    nil,
+			ip:          "10.0.0.5",
+			want:        providers.InstanceStatusUnhealthy,
+			wantEnabled: false,
+			wantState:   providers.InstanceStateProbing,
+			// AUDIT-C-4 precondition: status 2 + ip set is a real instance
+			// awaiting readiness, not an empty-IP shell.
+		},
+		{
+			name:        "running with nil statuses and no ip (C-4 empty-ip shape)",
+			statuses:    nil,
+			ip:          "",
+			want:        providers.InstanceStatusUnhealthy,
+			wantEnabled: false,
+			wantState:   providers.InstanceStateProbing,
+		},
+		{
+			name:        "pending converts unhealthy",
+			statuses:    nil,
+			ip:          "",
+			want:        providers.InstanceStatusUnhealthy,
+			wantEnabled: false,
+			wantState:   providers.InstanceStatePending,
+			pending:     true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := newValidPod("msp", "pod-status")
+			pod.Status.ContainerStatuses = tc.statuses
+			pod.Status.PodIP = tc.ip
+			if tc.pending {
+				pod.Status.Phase = corev1.PodPending
+			}
+			if got := formatStatus(nil, pod); got != tc.want {
+				t.Fatalf("formatStatus() = %d, want %d", got, tc.want)
+			}
+			if got := formatContainerEnabled(pod); got != tc.wantEnabled {
+				t.Fatalf("formatContainerEnabled() = %v, want %v", got, tc.wantEnabled)
+			}
+			if got := formatState(pod); got != tc.wantState {
+				t.Fatalf("formatState() = %q, want %q", got, tc.wantState)
+			}
+		})
+	}
+}
+
+// TestFormatInstanceRunningEmptyStatusesFlowsThrough: the converted instance
+// (through formatInstance, the production entry) for a Running pod with no
+// container statuses carries unhealthy/probing/disabled — the
+// vacuous-online-on-the-wire shape (AUDIT-C-3 end to end at the boundary).
+func TestFormatInstanceRunningEmptyStatusesFlowsThrough(t *testing.T) {
+	pod := newValidPod("msp", "pod-early")
+	pod.Status.ContainerStatuses = nil
+	pod.Status.PodIP = "10.0.0.5"
+
+	ins := formatInstance(nil, pod)
+	if ins == nil {
+		t.Fatal("formatInstance(early running pod) = nil, want an instance")
+	}
+	if ins.Status != providers.InstanceStatusUnhealthy {
+		t.Fatalf("instance status = %d, want %d (unhealthy, not vacuously online)", ins.Status, providers.InstanceStatusUnhealthy)
+	}
+	if ins.State != providers.InstanceStateProbing {
+		t.Fatalf("instance state = %q, want %q", ins.State, providers.InstanceStateProbing)
+	}
+	if ins.Enabled {
+		t.Fatal("instance enabled = true, want false (no container has started)")
+	}
+	if ins.Ip != "10.0.0.5" {
+		t.Fatalf("instance ip = %q, want the pod ip (a real instance awaiting readiness)", ins.Ip)
+	}
+}
+
+// TestGetAllRunningEmptyStatusesKeepsInstance: the C-4 precondition — a
+// Running+empty-statuses pod with a PodIP converts to status 2 (unhealthy)
+// with the ip present, which the default filter ACCEPTS (it only rejects
+// online+empty-ip and pending-state). That is fine: it is a real instance
+// awaiting readiness, and the register path (status 2, ip set) is a normal
+// unhealthy upsert. Only the empty-IP variant is the sink guard's concern.
+func TestGetAllRunningEmptyStatusesKeepsInstance(t *testing.T) {
+	early := newValidPod("msp", "pod-early")
+	early.Status.ContainerStatuses = nil
+	early.Status.PodIP = "10.0.0.5"
+
+	robot := newFakeRobot(nil, []interface{}{early}, false)
+	k := newTestProvider(robot, &fakeWorker{})
+
+	all := k.GetAll()
+	if len(all) != 1 {
+		t.Fatalf("GetAll() = %d instances, want 1 (unhealthy early pod is a real instance)", len(all))
+	}
+	if all[0].Status != providers.InstanceStatusUnhealthy || all[0].Ip != "10.0.0.5" {
+		t.Fatalf("GetAll()[0] = status %d ip %q, want status 2 with the pod ip", all[0].Status, all[0].Ip)
+	}
+}
+
+// -----------------------------------------------------------------------------
 // Guard against repository artifacts (docs/testing.md section 7).
 // -----------------------------------------------------------------------------
 

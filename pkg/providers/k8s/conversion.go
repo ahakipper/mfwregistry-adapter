@@ -225,23 +225,35 @@ func formatStatus(obj *k8srobot.QueueObject, pod *v1.Pod) (status int32) {
 		status = providers.InstanceStatusOffline
 	} else {
 		if pod.Status.Phase == v1.PodRunning {
-			var ready = true
-			for _, c := range pod.Status.ContainerStatuses {
-				if c.Ready == false || c.State.Running == nil {
-					ready = false
-				}
-			}
-			if ready == true {
+			// containersReady treats a Running pod with no reported
+			// ContainerStatuses as NOT ready: the pod declares containers but
+			// the kubelet has not reported any status yet, so the instance
+			// must not be marked online before any container started.
+			if containersReady(pod) {
 				status = providers.InstanceStatusOnline
 			} else {
 				status = providers.InstanceStatusUnhealthy
 			}
 		} else if pod.Status.Phase == v1.PodFailed {
 			if pod.Status.Reason == "Evicted" {
+				// Eviction is a resource pressure signal and the controller
+				// recreates the pod, so it stays unhealthy and keeps its
+				// registration marked not-ready instead of deregistered.
 				status = providers.InstanceStatusUnhealthy
+			} else {
+				// A Failed pod that was not evicted is dead for good: push it
+				// offline so the sinks deregister it, in contrast with the
+				// Evicted special case above.
+				status = providers.InstanceStatusOffline
 			}
 		} else if pod.Status.Phase == v1.PodPending {
 			status = providers.InstanceStatusUnhealthy
+		} else if pod.Status.Phase == v1.PodSucceeded {
+			// A Succeeded pod completed its job and exited: completed pods no
+			// longer serve traffic even though the pod object is still live in
+			// the informer, so it is pushed offline (deregistered) on purpose
+			// rather than kept online.
+			status = providers.InstanceStatusOffline
 		}
 	}
 
@@ -262,14 +274,27 @@ func formatEnvType(pod *v1.Pod, envType string) string {
 	return envType
 }
 
+// containersReady reports whether every container of the pod is ready. A
+// Running pod whose ContainerStatuses is empty is NOT ready: the pod declares
+// containers (its Spec) but the kubelet has not reported any status yet — the
+// early-start shape. An empty report must not vacuously count as "all
+// containers ready", which would mark the instance online/enabled before any
+// container started.
+func containersReady(pod *v1.Pod) bool {
+	if len(pod.Status.ContainerStatuses) == 0 {
+		return false
+	}
+	for _, c := range pod.Status.ContainerStatuses {
+		if c.Ready == false || c.State.Running == nil {
+			return false
+		}
+	}
+	return true
+}
+
 func formatContainerEnabled(pod *v1.Pod) (enabled bool) {
 	if pod != nil && pod.Status.Phase == v1.PodRunning {
-		var ready = true
-		for _, c := range pod.Status.ContainerStatuses {
-			if c.Ready == false || c.State.Running == nil {
-				ready = false
-			}
-		}
+		var ready = containersReady(pod)
 		if pod.DeletionTimestamp != nil {
 			ready = false
 		}
@@ -332,27 +357,39 @@ func formatState(pod *v1.Pod) (state string) {
 				state = providers.InstanceStateTerminated
 			}
 		} else {
-			already := true
+			// A Running pod whose ContainerStatuses is empty expects n>0
+			// containers but none are reported yet (the kubelet has not caught
+			// up with the just-started pod): not ready, no crash/error signal,
+			// so probing.
+			already := len(pod.Status.ContainerStatuses) > 0
+			crashed := false
+			errored := false
 			for _, cs := range pod.Status.ContainerStatuses {
 				if !cs.Ready {
 					already = false
 					if cs.State.Waiting != nil && cs.LastTerminationState.Terminated != nil &&
 						cs.State.Waiting.Reason == "CrashLoopBackOff" &&
 						cs.LastTerminationState.Terminated.Reason == "Error" {
-						state = providers.InstanceStateError
+						errored = true
 					} else if cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {
-						state = providers.InstanceStateCrash
+						crashed = true
 					}
 				}
 			}
 			if already {
 				state = providers.InstanceStateRunning
+			} else if errored {
+				// Error wins over crash when both appear: a container whose
+				// last termination reported Reason "Error" is the stronger
+				// signal than a plain CrashLoopBackOff backoff.
+				state = providers.InstanceStateError
+			} else if crashed {
+				state = providers.InstanceStateCrash
 			} else {
-				if state == "" {
-					state = providers.InstanceStateProbing
-				} else {
-					state = providers.InstanceStateUnknown
-				}
+				// Not ready but no crash/error signal: the container is still
+				// starting or being probed (e.g. Waiting reason
+				// ContainerCreating).
+				state = providers.InstanceStateProbing
 			}
 		}
 	}

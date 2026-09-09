@@ -218,6 +218,17 @@ func (s *Sink) pushOne(ins *instance.Instance) error {
 		}
 		return s.deregister(ins.AppCode, ins.Ip, firstPort(ins), clusterOf(ins))
 	case instance.InstanceStatusOnline, instance.InstanceStatusUnhealthy:
+		// An online/unhealthy instance without an ip cannot be registered: the
+		// v1 POST derives its composite id from the ip parameter, and Nacos
+		// answers 400 "Param 'ip' is required" forever (nothing was ever
+		// registered under an empty ip, so there is nothing to keep in sync).
+		// Skip the register instead of poisoning the retry queue with a
+		// permanently unfixable request — the source-side guards own keeping
+		// empty-ip shells out of the stream.
+		if ins.Ip == "" {
+			s.logger.Warnf("nacos: skipping register of instance %s with empty ip, nothing was registered under an empty ip", ins.InstanceId)
+			return nil
+		}
 		return s.register(ins)
 	default:
 		// Status 0 (unknown): upstream filters reject it (rules.go:99-101);
