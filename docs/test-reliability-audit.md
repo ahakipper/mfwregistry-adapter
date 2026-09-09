@@ -1,6 +1,6 @@
 # Test Reliability Audit — Findings
 
-**Status:** AUDIT COMPLETE — 41 findings (A:9, B:8, C:16, D:12; 5 P0, 14 P1, 22 P2/P3); fix phase starting per the backlog below
+**Status:** COMPLETE — audit (41 findings: A:9, B:8, C:16, D:12; 5 P0, 14 P1, 22 P2/P3) + all 5 fix batches landed: 62bc43b (batch 1: F8 catalog prune + mock fidelity + FanoutError.Unwrap + SyncAll queueing), 8b865f5 (batch 2: k8s conversion boundaries C-1/C-2/C-3 + register-side empty-IP guard + D-8 pin), be215c7 (batch 3: wiring/queue/full-push seams D-1/D-2/C-10/B-4/A-3/A-4 + the consul blip and sourceErr race fixes caught in review), 327a051 (batch 4: soak/e2e observation power D-5/D-4/D-11 + E2E-1/E2E-2), 2a70726 (batch 5: hygiene C-13/A-6/C-11/D-6/B-7 + review-P2 pins). Deferred-by-design items are listed at the end of the backlog.
 **Date:** 2026-09-10
 **Method binding:** every finding is confirmed by full code reading; verification claims were executed (test runs / live probes / scratch experiments in /tmp). Severity: P0 = real production risk + test blind spot, P1 = test cannot catch a plausible regression, P2 = weak/misleading/pinning gap.
 
