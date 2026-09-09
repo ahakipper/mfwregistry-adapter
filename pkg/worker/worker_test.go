@@ -103,3 +103,69 @@ func TestWorkerPushAllAndGetAllDelegate(t *testing.T) {
 		t.Fatalf("GetAll() list = %#v, want remote list", list)
 	}
 }
+
+// TestWorkerSyncAllFailureQueuesBatchForRetry: the SyncAll FAILURE path —
+// the full push batch that fails must be queued in the unsynced retry
+// store, or a failed full-push batch would silently wait the next full-push
+// interval (hours) instead of the 5s retry cadence. SyncAll is also the
+// only healer of the Nacos prune (the F8 reconcile), so losing its retry
+// queues drift healing too. This pins the queueing line of the SyncAll
+// handler (worker.go: unsyncedService.Add) against removal — mutation M8's
+// escape.
+func TestWorkerSyncAllFailureQueuesBatchForRetry(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sink := &fakes.FakeInstanceSink{PushAllErr: errors.New("nacos: prune list pay-user/k8s: answered status 500")}
+	worker, err := NewResourceWorker(ctx, sink, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+	if err != nil {
+		t.Fatalf("NewResourceWorker() error = %v", err)
+	}
+
+	batch := []*instance.Instance{
+		{InstanceId: "instance-a", Reversion: 1},
+		{InstanceId: "instance-b", Reversion: 2},
+		{InstanceId: "instance-c", Reversion: 3},
+	}
+	worker.Handle(&Event{Trigger: 456, Data: batch, Operate: OperateTypeSyncAll})
+
+	// The batch reached the sink as one full push and failed.
+	calls := sink.PushAllCalls()
+	if len(calls) != 1 || calls[0].TriggerTime != 456 || len(calls[0].Instances) != len(batch) {
+		t.Fatalf("PushAll calls = %#v, want the one delegated full-push event", calls)
+	}
+	// The whole batch is queued under the plain sink name (the single-sink
+	// wiring: a non-fanout error queues every known sink).
+	if got := worker.unsyncedService.Len(); got != len(batch) {
+		t.Fatalf("queued events after failed SyncAll = %d, want %d (the whole batch)", got, len(batch))
+	}
+	if got, want := worker.unsyncedService.Lens(), map[string]int{plainSinkName: len(batch)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Lens after failed SyncAll = %v, want %v", got, want)
+	}
+
+	// The retry actually re-pushes the batch: one retry cycle drains the
+	// queue through Push (the plain-sink retry path) once the sink recovers.
+	sink.SetErrors(nil, nil, nil)
+	worker.unsyncedService.syncOnce()
+
+	if got := worker.unsyncedService.Len(); got != 0 {
+		t.Fatalf("queued events after the retry = %d, want 0 (the recovered batch drained)", got)
+	}
+	retries := sink.PushCalls()
+	if len(retries) != len(batch) {
+		t.Fatalf("retry Push calls = %d, want %d (one per queued instance)", len(retries), len(batch))
+	}
+	retried := map[string]bool{}
+	for _, call := range retries {
+		if call.TriggerTime != 456 {
+			t.Fatalf("retry trigger time = %d, want the queued event trigger 456", call.TriggerTime)
+		}
+		for _, item := range call.Instances {
+			retried[item.InstanceId] = true
+		}
+	}
+	for _, item := range batch {
+		if !retried[item.InstanceId] {
+			t.Fatalf("instance %q was never re-pushed; retried = %v", item.InstanceId, retried)
+		}
+	}
+}

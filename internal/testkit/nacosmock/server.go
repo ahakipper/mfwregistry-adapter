@@ -108,7 +108,9 @@ func fromHost(group, service string, host Host) *Instance {
 // Server is a thread-safe, minimal Nacos v1 OpenAPI server for tests.
 //
 // Endpoints: POST/DELETE /nacos/v1/ns/instance (register/deregister),
-// GET /nacos/v1/ns/instance/list (per-service query),
+// GET /nacos/v1/ns/instance/list (per-service view query, hides disabled
+// instances like the real one), GET /nacos/v1/ns/catalog/instances (the
+// admin catalog view incl. disabled instances, paginated),
 // GET /nacos/v1/ns/service/list (paginated service names) and
 // GET /nacos/v1/console/health/readiness. All parameters are form values
 // URL-encoded on the query string, exactly like the real v1 API.
@@ -240,6 +242,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, request *http.Request) {
 		s.serveInstance(w, request)
 	case request.URL.Path == "/nacos/v1/ns/instance/list":
 		s.serveInstanceList(w, request)
+	case request.URL.Path == "/nacos/v1/ns/catalog/instances":
+		s.serveCatalogInstances(w, request)
 	case request.URL.Path == "/nacos/v1/ns/service/list":
 		s.serveServiceList(w, request)
 	case request.URL.Path == "/nacos/v1/console/health/readiness":
@@ -282,7 +286,10 @@ func (s *Server) serveInstance(w http.ResponseWriter, request *http.Request) {
 }
 
 // serveInstanceList handles GET /nacos/v1/ns/instance/list: every stored
-// instance of (serviceName, groupName), across clusters.
+// instance of (serviceName, groupName), across clusters. Instances with
+// Enabled==false are SKIPPED, mirroring the real Nacos 2.1.0 view filter
+// (nacos source: `if (!ip.isEnabled()) continue;`) — the fidelity gap whose
+// absence let the F8 prune blind spot hide from every mock-driven test.
 func (s *Server) serveInstanceList(w http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -305,6 +312,9 @@ func (s *Server) serveInstanceList(w http.ResponseWriter, request *http.Request)
 		if instance.ServiceName != service || instance.GroupName != group {
 			continue
 		}
+		if !instance.Enabled {
+			continue // real nacos hides disabled instances from this view
+		}
 		hosts = append(hosts, instance.host())
 	}
 	s.mu.RUnlock()
@@ -313,6 +323,73 @@ func (s *Server) serveInstanceList(w http.ResponseWriter, request *http.Request)
 		return hosts[i].InstanceID < hosts[j].InstanceID
 	})
 	writeJSON(w, http.StatusOK, map[string]interface{}{"count": len(hosts), "hosts": hosts})
+}
+
+// serveCatalogInstances handles GET /nacos/v1/ns/catalog/instances: the
+// ADMIN catalog view of (serviceName, clusterName, groupName) — the listing
+// the F8 prune reads. Unlike instance/list, the catalog serves disabled
+// (Enabled==false) instances too, so drift the view filter hides stays
+// reachable. pageNo/pageSize slice a composite-id-sorted host list, count
+// carries the total, list the page.
+//
+// A missing serviceName or clusterName answers 400: the real Nacos answers
+// 500 in this case (RaftStorage persistence rejects the missing selector),
+// but a mock 500 would collide with the failure-injection semantics and
+// with the not-found tolerance the prune builds on top of *APIError, so the
+// mock mirrors the same rejection with a client-class status.
+func (s *Server) serveCatalogInstances(w http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	values := request.URL.Query()
+	service := values.Get("serviceName")
+	cluster := values.Get("clusterName")
+	if service == "" || cluster == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "serviceName and clusterName are required"})
+		return
+	}
+	pageNo, err := strconv.Atoi(values.Get("pageNo"))
+	if err != nil || pageNo < 1 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "pageNo is required"})
+		return
+	}
+	pageSize, err := strconv.Atoi(values.Get("pageSize"))
+	if err != nil || pageSize < 1 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "pageSize is required"})
+		return
+	}
+	group := values.Get("groupName")
+	if group == "" {
+		group = defaultGroupName
+	}
+
+	s.mu.RLock()
+	hosts := make([]Host, 0, len(s.instances))
+	for _, instance := range s.instances {
+		if instance.ServiceName != service || instance.GroupName != group || instance.ClusterName != cluster {
+			continue
+		}
+		hosts = append(hosts, instance.host())
+	}
+	s.mu.RUnlock()
+
+	sort.Slice(hosts, func(i, j int) bool {
+		return hosts[i].InstanceID < hosts[j].InstanceID
+	})
+
+	start := (pageNo - 1) * pageSize
+	end := start + pageSize
+	if start > len(hosts) {
+		start = len(hosts)
+	}
+	if end > len(hosts) {
+		end = len(hosts)
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"count": len(hosts),
+		"list":  hosts[start:end],
+	})
 }
 
 // serveServiceList handles GET /nacos/v1/ns/service/list with real pagination
@@ -490,6 +567,14 @@ func cloneStringMap(values map[string]string) map[string]string {
 type instanceListResponse struct {
 	Count int    `json:"count"`
 	Hosts []Host `json:"hosts"`
+}
+
+// catalogInstancesResponse is the /nacos/v1/ns/catalog/instances response
+// shape: the page field is `list`, not `hosts` (verified against Nacos
+// 2.1.0 — the shape the production client's CatalogPage decodes).
+type catalogInstancesResponse struct {
+	Count int    `json:"count"`
+	List  []Host `json:"list"`
 }
 
 // serviceListResponse is the /nacos/v1/ns/service/list response shape.

@@ -1,8 +1,10 @@
 package nacos
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"spotter/internal/domain/instance"
 	"spotter/internal/ports"
@@ -83,6 +85,13 @@ func (s *Sink) PushAll(triggerTime int64, instances []*instance.Instance) error 
 // that the pushed set no longer contains. Offline (Status 3) pushed
 // instances are treated as absent, so their remote counterparts are pruned
 // even if the per-instance deregister failed to run.
+//
+// The listing is the CATALOG view (ListCatalogInstances), not the instance
+// list: the instance list hides enabled=false entries — the exact state
+// spotter's own unhealthy pushes write (register forces enabled=false, plan
+// §7.3) — so a list-based prune would never remove an instance that once
+// went unhealthy (the F8 drift). The catalog sees enabled=false instances
+// too, so the prune reconciles them.
 func (s *Sink) prune(instances []*instance.Instance) error {
 	type clusterKey struct {
 		service string
@@ -105,8 +114,19 @@ func (s *Sink) prune(instances []*instance.Instance) error {
 
 	var firstErr error
 	for key, wanted := range desired {
-		hosts, err := s.client.ListInstances(key.service)
+		hosts, err := s.client.ListCatalogInstances(key.service, key.cluster)
 		if err != nil {
+			// A real Nacos answers HTTP 500 with a "cluster ... is not
+			// found" / "service ... is not found" body when the (service,
+			// cluster) pair has no catalog entry at all — the steady state
+			// of a fully pruned service. Treat it as an empty list instead
+			// of an error, or every interval would log a spurious failure
+			// once the prune has done its job. The 500 stays retriable in
+			// every other case (APIError classification is unchanged).
+			if isCatalogNotFound(err) {
+				s.logger.Infof("nacos: prune catalog list %s/%s: no catalog entry (treated as empty)", key.service, key.cluster)
+				continue
+			}
 			if firstErr == nil {
 				firstErr = fmt.Errorf("nacos: prune list %s/%s: %w", key.service, key.cluster, err)
 			}
@@ -125,6 +145,18 @@ func (s *Sink) prune(instances []*instance.Instance) error {
 		}
 	}
 	return firstErr
+}
+
+// isCatalogNotFound reports whether err is the real-server 500 answer whose
+// body marks the addressed (service, cluster) as absent from the catalog
+// ("... is not found"). It matches on the *APIError type and the body text,
+// never on the wrapped message alone.
+func isCatalogNotFound(err error) bool {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != 500 {
+		return false
+	}
+	return strings.Contains(apiErr.Body, "is not found")
 }
 
 // GetAll reconstructs domain instances from Nacos: list all services of the
@@ -175,8 +207,10 @@ func (s *Sink) pushOne(ins *instance.Instance) error {
 		// An offline instance without an ip cannot be deregistered: the v1
 		// DELETE derives its composite id from the ip parameter, and Nacos
 		// answers 400 "Param 'ip' is required" forever (nothing was ever
-		// registered under an empty ip). The PushAll prune sweep owns the
-		// remote cleanup, so skip the deregister instead of poisoning the
+		// registered under an empty ip). The PushAll prune owns the remote
+		// cleanup for real now: its catalog listing (ListCatalogInstances)
+		// sees enabled=false instances too, so even drift the instance list
+		// hides is reconciled — skip the deregister instead of poisoning the
 		// retry queue.
 		if ins.Ip == "" {
 			s.logger.Warnf("nacos: skipping deregister of instance %s with empty ip, the PushAll prune owns the remote cleanup", ins.InstanceId)

@@ -20,8 +20,15 @@ type SinkFailure struct {
 	Err  error
 }
 
-// FanoutError aggregates the per-sink failures of one fan-out call. A plain
+// FanoutError aggregates the per-sink failures of one fan-out push. A plain
 // (non-Fanout) error means "all sinks failed / no fan-out happened".
+//
+// Unwrap (below) makes errors.As traverse into the per-sink failures, so a
+// classification property attached to a sink's error — the nacos APIError's
+// Permanent() is the load-bearing one — survives the aggregation: whoever
+// inspects the fan-out error (the retry queue's permanent-drop check, any
+// adapter-side %w wrapper) sees the leaf errors exactly as if the sinks had
+// been pushed individually.
 type FanoutError []SinkFailure
 
 // Error joins the failures' messages, each prefixed with its sink's name.
@@ -31,6 +38,17 @@ func (e FanoutError) Error() string {
 		parts = append(parts, failure.Sink+": "+failure.Err.Error())
 	}
 	return strings.Join(parts, "; ")
+}
+
+// Unwrap returns the per-sink errors in failure order, the multi-error
+// contract of errors.As/errors.Is: Permanent classification and any other
+// error-level test on a sink failure still holds through the aggregate.
+func (e FanoutError) Unwrap() []error {
+	errs := make([]error, 0, len(e))
+	for _, failure := range e {
+		errs = append(errs, failure.Err)
+	}
+	return errs
 }
 
 // FailedSinks returns the names of the failed sinks in failure order.

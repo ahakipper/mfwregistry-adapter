@@ -109,6 +109,11 @@ func TestDeregisterMissingParamsRejected(t *testing.T) {
 	}
 }
 
+// TestListInstancesReturnsServiceInstances: the list endpoint answers for
+// the whole service (group-scoped) with the F0-observed v2.1.0 hosts shape —
+// and HIDES the disabled ecs host, the real Nacos view filter (nacos
+// source: `if (!ip.isEnabled()) continue;`). The catalog endpoint below
+// serves it, pinning the two views' asymmetry.
 func TestListInstancesReturnsServiceInstances(t *testing.T) {
 	server := Start()
 	defer server.Close()
@@ -124,37 +129,40 @@ func TestListInstancesReturnsServiceInstances(t *testing.T) {
 		Ephemeral: false, Enabled: false, Metadata: `{"instanceId":"srv-b","envType":"test"}`,
 	})
 
-	// The list endpoint answers for the whole service (group-scoped), and the
-	// hosts shape matches the F0-observed v2.1.0 response.
+	// The view: only the enabled host is served.
 	resp := listInstances(t, server, "pay-user", "DEFAULT_GROUP")
-	if resp.Count != 2 {
-		t.Fatalf("count = %d, want 2", resp.Count)
+	if resp.Count != 1 {
+		t.Fatalf("count = %d, want 1 (the disabled host is hidden)", resp.Count)
 	}
-	if len(resp.Hosts) != 2 {
-		t.Fatalf("len(hosts) = %d, want 2", len(resp.Hosts))
+	if len(resp.Hosts) != 1 {
+		t.Fatalf("len(hosts) = %d, want 1", len(resp.Hosts))
 	}
-	for _, host := range resp.Hosts {
-		if host.InstanceID == "" {
-			t.Fatalf("host %v has an empty instanceId, want the composite id", host)
-		}
-		if host.Ephemeral {
-			t.Fatalf("host %s ephemeral = true, want false (persistent)", host.InstanceID)
-		}
-		switch host.IP {
-		case "10.0.0.1":
-			if host.Port != 8080 || host.ClusterName != "k8s" || !host.Enabled || !host.Healthy {
-				t.Fatalf("k8s host = %+v, want 10.0.0.1:8080/k8s/enabled/healthy", host)
-			}
-			if host.Metadata["instanceId"] != "pod-a" || host.Metadata["envType"] != "test" {
-				t.Fatalf("k8s host metadata = %v, want the registered map", host.Metadata)
-			}
-		case "10.0.0.3":
-			if host.Port != 8081 || host.ClusterName != "ecs" || host.Enabled {
-				t.Fatalf("ecs host = %+v, want 10.0.0.3:8081/ecs/disabled", host)
-			}
-		default:
-			t.Fatalf("unexpected host ip %q", host.IP)
-		}
+	host := resp.Hosts[0]
+	if host.InstanceID == "" {
+		t.Fatalf("host %v has an empty instanceId, want the composite id", host)
+	}
+	if host.Ephemeral {
+		t.Fatalf("host %s ephemeral = true, want false (persistent)", host.InstanceID)
+	}
+	if host.IP != "10.0.0.1" || host.Port != 8080 || host.ClusterName != "k8s" || !host.Enabled || !host.Healthy {
+		t.Fatalf("k8s host = %+v, want 10.0.0.1:8080/k8s/enabled/healthy", host)
+	}
+	if host.Metadata["instanceId"] != "pod-a" || host.Metadata["envType"] != "test" {
+		t.Fatalf("k8s host metadata = %v, want the registered map", host.Metadata)
+	}
+
+	// The catalog: the disabled ecs host IS served there.
+	catalog := catalogInstances(t, server, "pay-user", "k8s", "DEFAULT_GROUP", 1, 100)
+	if len(catalog.List) != 1 || catalog.List[0].IP != "10.0.0.1" {
+		t.Fatalf("catalog k8s = %+v, want exactly the enabled k8s host", catalog.List)
+	}
+	catalog = catalogInstances(t, server, "pay-user", "ecs", "DEFAULT_GROUP", 1, 100)
+	if len(catalog.List) != 1 {
+		t.Fatalf("catalog ecs = %+v, want 1 (the disabled host the view hides)", catalog.List)
+	}
+	ecsHost := catalog.List[0]
+	if ecsHost.IP != "10.0.0.3" || ecsHost.Port != 8081 || ecsHost.ClusterName != "ecs" || ecsHost.Enabled {
+		t.Fatalf("catalog ecs host = %+v, want 10.0.0.3:8081/ecs/disabled", ecsHost)
 	}
 
 	// A service with no instances answers with an empty hosts array, not 404.
@@ -171,6 +179,83 @@ func TestListInstancesRequiresServiceParam(t *testing.T) {
 	status, _ := doForm(t, server, http.MethodGet, "/nacos/v1/ns/instance/list", nil)
 	if status != http.StatusBadRequest {
 		t.Fatalf("GET instance/list without serviceName status = %d, want %d", status, http.StatusBadRequest)
+	}
+}
+
+// TestCatalogInstancesServesDisabledAndPaginates: the catalog endpoint is
+// the F8 escape hatch — it serves enabled=false instances the view filters
+// out, scopes to exactly (serviceName, clusterName, groupName), paginates
+// with count=total and list=page, and requires BOTH selectors. The real
+// Nacos answers 500 on the missing selectors; the mock mirrors the
+// rejection with a 400 (see serveCatalogInstances's comment) because a mock
+// 500 would collide with the failure-injection semantics and with the
+// prune's not-found tolerance, which are keyed on *APIError status 500.
+func TestCatalogInstancesServesDisabledAndPaginates(t *testing.T) {
+	server := Start()
+	defer server.Close()
+
+	// Five instances of one (service, cluster): two disabled, three enabled
+	// — page size 2 must need 3 pages (2+2+1) with count=5 on every page.
+	hosts := []Host{
+		{IP: "10.0.0.1", Port: 8001, Enabled: true, Metadata: map[string]string{"instanceId": "pod-1"}},
+		{IP: "10.0.0.2", Port: 8002, Enabled: true, Metadata: map[string]string{"instanceId": "pod-2"}},
+		{IP: "10.0.0.3", Port: 8003, Enabled: true, Metadata: map[string]string{"instanceId": "pod-3"}},
+		{IP: "10.0.0.4", Port: 8004, Enabled: false, Metadata: map[string]string{"instanceId": "srv-4"}},
+		{IP: "10.0.0.5", Port: 8005, Enabled: false, Metadata: map[string]string{"instanceId": "srv-5"}},
+	}
+	server.SetInstances(hosts, "DEFAULT_GROUP", "pay-user", "k8s")
+	// Another cluster of the same service: the catalog is cluster-scoped.
+	server.SetInstances([]Host{
+		{IP: "10.0.0.9", Port: 8009, Enabled: true, Metadata: map[string]string{"instanceId": "srv-ecs"}},
+	}, "DEFAULT_GROUP", "pay-user", "ecs")
+
+	page1 := catalogInstances(t, server, "pay-user", "k8s", "DEFAULT_GROUP", 1, 2)
+	if page1.Count != 5 {
+		t.Fatalf("page1 count = %d, want 5 (the total across pages)", page1.Count)
+	}
+	if len(page1.List) != 2 || page1.List[0].IP != "10.0.0.1" || page1.List[1].IP != "10.0.0.2" {
+		t.Fatalf("page1 list = %+v, want the first two hosts sorted by composite id", page1.List)
+	}
+	page2 := catalogInstances(t, server, "pay-user", "k8s", "DEFAULT_GROUP", 2, 2)
+	if page2.Count != 5 || len(page2.List) != 2 || page2.List[0].IP != "10.0.0.3" {
+		t.Fatalf("page2 = %+v, want count 5 and the third host leading the page", page2)
+	}
+	page3 := catalogInstances(t, server, "pay-user", "k8s", "DEFAULT_GROUP", 3, 2)
+	if page3.Count != 5 || len(page3.List) != 1 {
+		t.Fatalf("page3 = %+v, want the short final page of one host", page3)
+	}
+	// The disabled hosts ride the last pages; the set across pages is the
+	// full five (composite-id order: 10.0.0.1..10.0.0.5).
+	seen := append(append(append([]Host(nil), page1.List...), page2.List...), page3.List...)
+	if len(seen) != 5 {
+		t.Fatalf("hosts across pages = %d, want 5", len(seen))
+	}
+	disabled := 0
+	for _, host := range seen {
+		if !host.Enabled {
+			disabled++
+		}
+	}
+	if disabled != 2 {
+		t.Fatalf("disabled hosts across pages = %d, want 2 (the view would hide both)", disabled)
+	}
+
+	// Cluster scoping: the ecs host never appears in the k8s catalog and
+	// vice versa.
+	ecs := catalogInstances(t, server, "pay-user", "ecs", "DEFAULT_GROUP", 1, 100)
+	if len(ecs.List) != 1 || ecs.List[0].IP != "10.0.0.9" {
+		t.Fatalf("catalog ecs = %+v, want exactly the ecs host", ecs.List)
+	}
+
+	// Both selectors are required: a missing serviceName or clusterName is
+	// rejected, not silently defaulted.
+	status, body := doForm(t, server, http.MethodGet, "/nacos/v1/ns/catalog/instances", map[string]string{"clusterName": "k8s"})
+	if status != http.StatusBadRequest {
+		t.Fatalf("GET catalog/instances without serviceName status = %d, want %d; body: %s", status, http.StatusBadRequest, body)
+	}
+	status, body = doForm(t, server, http.MethodGet, "/nacos/v1/ns/catalog/instances", map[string]string{"serviceName": "pay-user"})
+	if status != http.StatusBadRequest {
+		t.Fatalf("GET catalog/instances without clusterName status = %d, want %d; body: %s", status, http.StatusBadRequest, body)
 	}
 }
 
@@ -368,13 +453,19 @@ func TestSetInstancesSeedsState(t *testing.T) {
 	}
 }
 
+// TestInstanceIDComposite: SetInstances seeds Hosts whose Enabled is the
+// zero value false, so the composite-id derivation is asserted through the
+// CATALOG endpoint (the view would filter the host out — the F8 asymmetry).
 func TestInstanceIDComposite(t *testing.T) {
 	server := Start()
 	defer server.Close()
 
 	server.SetInstances([]Host{{IP: "10.0.0.1", Port: 8080, Metadata: map[string]string{}}}, "DEFAULT_GROUP", "pay-user", "k8s")
-	resp := listInstances(t, server, "pay-user", "DEFAULT_GROUP")
-	if got := resp.Hosts[0].InstanceID; got != "10.0.0.1#8080#k8s#DEFAULT_GROUP@@pay-user" {
+	catalog := catalogInstances(t, server, "pay-user", "k8s", "DEFAULT_GROUP", 1, 100)
+	if len(catalog.List) != 1 {
+		t.Fatalf("catalog = %+v, want one host (the zero-value-Enabled seed)", catalog.List)
+	}
+	if got := catalog.List[0].InstanceID; got != "10.0.0.1#8080#k8s#DEFAULT_GROUP@@pay-user" {
 		t.Fatalf("instanceId = %q, want the F0 composite format", got)
 	}
 }
@@ -505,6 +596,25 @@ func listInstances(t *testing.T, server *Server, serviceName, groupName string) 
 	var resp instanceListResponse
 	if err := json.Unmarshal([]byte(body), &resp); err != nil {
 		t.Fatalf("GET instance/list(%s) body is not the hosts JSON shape: %v; body: %s", serviceName, err, body)
+	}
+	return resp
+}
+
+func catalogInstances(t *testing.T, server *Server, serviceName, clusterName, groupName string, pageNo, pageSize int) catalogInstancesResponse {
+	t.Helper()
+	status, body := doForm(t, server, http.MethodGet, "/nacos/v1/ns/catalog/instances", map[string]string{
+		"serviceName": serviceName,
+		"clusterName": clusterName,
+		"groupName":   groupName,
+		"pageNo":      strconv.Itoa(pageNo),
+		"pageSize":    strconv.Itoa(pageSize),
+	})
+	if status != http.StatusOK {
+		t.Fatalf("GET catalog/instances(%s, %s) status = %d, want %d; body: %s", serviceName, clusterName, status, http.StatusOK, body)
+	}
+	var resp catalogInstancesResponse
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatalf("GET catalog/instances(%s, %s) body is not the list JSON shape: %v; body: %s", serviceName, clusterName, err, body)
 	}
 	return resp
 }

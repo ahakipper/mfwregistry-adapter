@@ -41,6 +41,10 @@ const (
 	// maxServiceListPages bounds the service-list pagination loop (a
 	// safety valve against a server answering a full page forever).
 	maxServiceListPages = 10000
+	// catalogPageSize is the page size the catalog listing requests: large
+	// enough that one page covers a normal service, small enough to keep
+	// single responses bounded (the plan's default loop size).
+	catalogPageSize = 100
 )
 
 // Paths of the four v1 endpoints.
@@ -49,6 +53,7 @@ const (
 	pathInstanceLis = "/nacos/v1/ns/instance/list"
 	pathServiceList = "/nacos/v1/ns/service/list"
 	pathReadiness   = "/nacos/v1/console/health/readiness"
+	pathCatalogList = "/nacos/v1/ns/catalog/instances"
 )
 
 // InstanceParams is the wire form of one instance for register and
@@ -86,6 +91,14 @@ type Host struct {
 type Hosts struct {
 	Count int    `json:"count"`
 	Hosts []Host `json:"hosts"`
+}
+
+// CatalogPage is one page of the catalog instances response. The page field
+// is `list`, NOT `hosts` — the catalog endpoint's shape, verified against
+// Nacos 2.1.0 (the audit's F8 fix design).
+type CatalogPage struct {
+	Count int    `json:"count"`
+	List  []Host `json:"list"`
 }
 
 // ServicePage is one page of the service list response.
@@ -161,6 +174,10 @@ func (c *Client) DeregisterInstance(params InstanceParams) error {
 
 // ListInstances returns every instance of one service in DefaultGroup.
 // A service without instances yields an empty slice.
+//
+// Fidelity limit (the F8 root cause): the endpoint HIDES instances with
+// enabled=false — the exact state spotter's own unhealthy pushes write — so
+// this view is unsuitable for the prune. Use ListCatalogInstances for that.
 func (c *Client) ListInstances(serviceName string) ([]Host, error) {
 	values := url.Values{}
 	values.Set("serviceName", serviceName)
@@ -175,6 +192,38 @@ func (c *Client) ListInstances(serviceName string) ([]Host, error) {
 		hosts.Hosts = []Host{}
 	}
 	return hosts.Hosts, nil
+}
+
+// ListCatalogInstances returns every instance of one service and cluster in
+// DefaultGroup through the ADMIN catalog view (GET /nacos/v1/ns/catalog/
+// instances). Unlike ListInstances, the catalog lists instances with
+// enabled=false too, so the PushAll prune can see — and delete — the
+// disabled remote drift the instance list hides (the F8 fix). Pagination
+// follows the ListServices discipline: iterate while a page comes back full,
+// capped at maxServiceListPages.
+func (c *Client) ListCatalogInstances(serviceName, clusterName string) ([]Host, error) {
+	hosts := make([]Host, 0)
+	for page := 1; page <= maxServiceListPages; page++ {
+		values := url.Values{}
+		values.Set("serviceName", serviceName)
+		values.Set("clusterName", clusterName)
+		values.Set("groupName", DefaultGroup)
+		values.Set("namespaceId", DefaultNamespaceID)
+		values.Set("pageSize", strconv.Itoa(catalogPageSize))
+		values.Set("pageNo", strconv.Itoa(page))
+		values.Set("hasIpCount", "false")
+
+		var body CatalogPage
+		if err := c.doJSON(http.MethodGet, pathCatalogList, values, &body); err != nil {
+			return nil, err
+		}
+		hosts = append(hosts, body.List...)
+		if len(body.List) < catalogPageSize {
+			return hosts, nil
+		}
+	}
+	return nil, fmt.Errorf("nacos: catalog instances pagination exceeded %d pages for %s/%s",
+		maxServiceListPages, serviceName, clusterName)
 }
 
 // ListServices returns every service name of DefaultGroup, paginating the

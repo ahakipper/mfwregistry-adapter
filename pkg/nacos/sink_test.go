@@ -1,6 +1,9 @@
 package nacos_test
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"testing"
 	"time"
@@ -398,6 +401,148 @@ func TestBlackboxSinkPushAllErrorPropagates(t *testing.T) {
 	}
 }
 
+// TestBlackboxSinkPushAllPrunesDisabledRemoteInstance (the F8 regression):
+// a remote instance with enabled=false — the state spotter's own unhealthy
+// pushes write, and the exact state instance/list hides from the prune — is
+// DELETEd when it is not in the pushed set. Red before the F8 fix (the old
+// ListInstances-based prune could never see it) and green only with BOTH
+// the mock's catalog endpoint and the prune switch in place.
+func TestBlackboxSinkPushAllPrunesDisabledRemoteInstance(t *testing.T) {
+	sink, server := newSinkAt(t)
+
+	// Remote state: the pushed instance plus a disabled ghost in the same
+	// (service, cluster); instance/list serves only the pushed one.
+	server.SetInstances([]nacosmock.Host{
+		{IP: "10.0.0.1", Port: 8080, Enabled: true, Metadata: map[string]string{"instanceId": "pod-a"}},
+		{IP: "10.0.0.7", Port: 8080, Enabled: false, Metadata: map[string]string{"instanceId": "srv-ghost"}},
+	}, "DEFAULT_GROUP", "pay-user", "k8s")
+
+	pushed := []*instance.Instance{
+		domainInstance("pod-a", "pay-user", "10.0.0.1", 8080, "k8s", 1),
+	}
+	if err := sink.PushAll(7, pushed); err != nil {
+		t.Fatalf("PushAll() error = %v", err)
+	}
+
+	// The disabled ghost is gone: the prune's catalog listing saw it and the
+	// DELETE (by composite id) removed it — while the pushed instance stays.
+	instances := server.Instances("pay-user", "k8s")
+	if len(instances) != 1 || instances[0].IP != "10.0.0.1" {
+		t.Fatalf("k8s instances after prune = %v, want only the pushed 10.0.0.1 (the disabled ghost pruned)", instances)
+	}
+	if deregisterRequest(server, "10.0.0.7", 8080) == nil {
+		t.Fatalf("no DELETE of the disabled ghost; requests = %v", server.Requests())
+	}
+}
+
+// TestBlackboxSinkPushAllUnhealthyThenVanishedIsPruned (the F8 lifecycle
+// regression): an instance spotter itself marked unhealthy (status 2 →
+// registered with enabled=false) that then disappears from the pushed set
+// must be pruned. With the old instance-list-based prune it could never be:
+// the very push that marked it unhealthy hid it from the prune forever —
+// the drift the audit measured as unremovable in real Nacos.
+func TestBlackboxSinkPushAllUnhealthyThenVanishedIsPruned(t *testing.T) {
+	sink, server := newSinkAt(t)
+
+	// Push 1: pod-a online, srv-b unhealthy → srv-b lands with enabled=false.
+	first := []*instance.Instance{
+		domainInstance("pod-a", "pay-user", "10.0.0.1", 8080, "k8s", 1),
+		domainInstance("srv-b", "pay-user", "10.0.0.2", 8080, "k8s", 2),
+	}
+	if err := sink.PushAll(1, first); err != nil {
+		t.Fatalf("PushAll(unhealthy lifecycle push 1) error = %v", err)
+	}
+	if got := len(server.Instances("pay-user", "k8s")); got != 2 {
+		t.Fatalf("k8s instances after push 1 = %d, want 2 (online + unhealthy); state = %v", got, server.Instances("pay-user", "k8s"))
+	}
+
+	// Push 2: the same service without srv-b — it vanished upstream. The
+	// prune must delete the now-orphaned enabled=false registration.
+	second := []*instance.Instance{
+		domainInstance("pod-a", "pay-user", "10.0.0.1", 8080, "k8s", 1),
+	}
+	if err := sink.PushAll(2, second); err != nil {
+		t.Fatalf("PushAll(unhealthy lifecycle push 2) error = %v", err)
+	}
+
+	instances := server.Instances("pay-user", "k8s")
+	if len(instances) != 1 || instances[0].IP != "10.0.0.1" {
+		t.Fatalf("k8s instances after prune = %v, want only 10.0.0.1 (the vanished unhealthy srv-b pruned)", instances)
+	}
+	if deregisterRequest(server, "10.0.0.2", 8080) == nil {
+		t.Fatalf("no DELETE of the vanished unhealthy instance; requests = %v", server.Requests())
+	}
+}
+
+// TestBlackboxSinkPushAllPruneToleratesCatalogNotFound: a fully pruned
+// service is the prune's own steady state, and a real Nacos answers the
+// catalog query with 500 "service is not found" then. PushAll must treat
+// that answer as an empty list (success), not surface an error every
+// interval. The mock cannot produce a selective 500-with-body answer (its
+// failure injection hits every endpoint), so the tolerance is driven
+// through a sink bound to a stub HTTP server answering exactly the
+// real-server body on the catalog path.
+func TestBlackboxSinkPushAllPruneToleratesCatalogNotFound(t *testing.T) {
+	const notFoundBody = `{"status":500,"message":"service pay-user is not found!","data":null,"code":500,"serverIp":"127.0.0.1"}`
+	var catalogCalls int
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/nacos/v1/ns/catalog/instances" {
+			catalogCalls++
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, notFoundBody)
+			return
+		}
+		// The register path answers success so Push completes.
+		writeStubOK(w)
+	}))
+	defer stub.Close()
+	sink, err := nacos.NewSink(stub.URL, &fakes.FakeLogger{})
+	if err != nil {
+		t.Fatalf("NewSink(stub) error = %v", err)
+	}
+
+	pushed := []*instance.Instance{domainInstance("pod-a", "pay-user", "10.0.0.1", 8080, "k8s", 1)}
+	if err := sink.PushAll(7, pushed); err != nil {
+		t.Fatalf("PushAll(prune catalog not-found 500) error = %v, want nil (treated as an empty list)", err)
+	}
+	if catalogCalls != 1 {
+		t.Fatalf("catalog calls = %d, want 1", catalogCalls)
+	}
+}
+
+// TestBlackboxSinkPushAllPruneSurfacesOtherCatalog500s: the not-found
+// tolerance is narrow — a 500 WITHOUT the "is not found" body marker is an
+// ordinary server failure and must surface from PushAll (it stays retriable
+// in the APIError classification, so the retry queue owns it as usual).
+func TestBlackboxSinkPushAllPruneSurfacesOtherCatalog500s(t *testing.T) {
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/nacos/v1/ns/catalog/instances" {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, "injected status 500")
+			return
+		}
+		writeStubOK(w)
+	}))
+	defer stub.Close()
+	sink, err := nacos.NewSink(stub.URL, &fakes.FakeLogger{})
+	if err != nil {
+		t.Fatalf("NewSink(stub) error = %v", err)
+	}
+
+	pushed := []*instance.Instance{domainInstance("pod-a", "pay-user", "10.0.0.1", 8080, "k8s", 1)}
+	if err := sink.PushAll(7, pushed); err == nil {
+		t.Fatal("PushAll(unrelated catalog 500) error = nil, want the surfaced error")
+	}
+}
+
+// writeStubOK answers a register/deregister request with the Nacos success
+// text.
+func writeStubOK(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, "ok")
+}
+
 func TestBlackboxSinkMapsProviderToClusterCoexist(t *testing.T) {
 	sink, server := newSinkAt(t)
 
@@ -552,13 +697,19 @@ func TestBlackboxSinkGetAllFiltersStatuses(t *testing.T) {
 		t.Fatalf("GetAll([1]) = %v, want the single online instance pod-a", list.Instance)
 	}
 
-	// Statuses [unhealthy]: the disabled ecs instance is selected.
+	// Statuses [unhealthy]: NOTHING comes back. The unhealthy push wrote the
+	// ecs instance with enabled=false (the §7.3 policy), and the instance
+	// list view hides disabled hosts — GetAll is built on that view, so an
+	// instance spotter itself marked unhealthy is invisible to spotter's own
+	// read side too. This documents AUDIT-B-1's GetAll blind spot: the
+	// filter would select the instance, but the listing never serves it.
+	// (The PushAll prune uses the catalog view precisely to escape this.)
 	list, err = sink.GetAll([]int32{2}, "")
 	if err != nil {
 		t.Fatalf("GetAll([2], \"\") error = %v", err)
 	}
-	if len(list.Instance) != 1 || list.Instance[0].InstanceId != "srv-a" {
-		t.Fatalf("GetAll([2]) = %v, want the single unhealthy instance srv-a", list.Instance)
+	if len(list.Instance) != 0 {
+		t.Fatalf("GetAll([2]) = %v, want 0 (the disabled instance is hidden from instance/list)", list.Instance)
 	}
 }
 

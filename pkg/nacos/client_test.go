@@ -5,6 +5,8 @@ package nacos_test
 
 import (
 	"errors"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -222,6 +224,13 @@ func TestBlackboxClientPermanentStatusBoundaries(t *testing.T) {
 	}
 }
 
+// TestBlackboxClientListInstancesParsesHosts: the instance list returns the
+// VISIBLE (enabled) hosts of the service — the disabled ecs host is HIDDEN
+// from instance/list, matching the real Nacos 2.1.0 view filter (nacos
+// source: `if (!ip.isEnabled()) continue;`) that the mock now mirrors. The
+// disabled host stays in the fixture on purpose: the parallel
+// ListCatalogInstances assertion proves it still exists and is served by
+// the catalog view — the F8 asymmetry the prune relies on.
 func TestBlackboxClientListInstancesParsesHosts(t *testing.T) {
 	client, _ := newClientAt(t)
 
@@ -240,28 +249,34 @@ func TestBlackboxClientListInstancesParsesHosts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListInstances(pay-user) error = %v", err)
 	}
-	if len(hosts) != 2 {
-		t.Fatalf("ListInstances(pay-user) = %d hosts, want 2", len(hosts))
+	if len(hosts) != 1 {
+		t.Fatalf("ListInstances(pay-user) = %d hosts, want 1 (the disabled ecs host is hidden)", len(hosts))
 	}
-	for _, host := range hosts {
-		if host.InstanceID == "" || host.ClusterName == "" || host.Metadata == nil {
-			t.Fatalf("host = %+v, want the composite id, cluster and metadata parsed", host)
-		}
-		switch host.IP {
-		case "10.0.0.1":
-			if host.Port != 8080 || host.ClusterName != "k8s" || !host.Enabled {
-				t.Fatalf("k8s host = %+v, want 10.0.0.1:8080/k8s/enabled", host)
-			}
-			if host.Metadata["instanceId"] != "pod-a" || host.Metadata["envType"] != "test" {
-				t.Fatalf("k8s host metadata = %v, want the register metadata", host.Metadata)
-			}
-		case "10.0.0.2":
-			if host.Port != 8081 || host.ClusterName != "ecs" || host.Enabled {
-				t.Fatalf("ecs host = %+v, want 10.0.0.2:8081/ecs/disabled", host)
-			}
-		default:
-			t.Fatalf("unexpected host %+v", host)
-		}
+	host := hosts[0]
+	if host.InstanceID == "" || host.ClusterName == "" || host.Metadata == nil {
+		t.Fatalf("host = %+v, want the composite id, cluster and metadata parsed", host)
+	}
+	if host.IP != "10.0.0.1" || host.Port != 8080 || host.ClusterName != "k8s" || !host.Enabled {
+		t.Fatalf("k8s host = %+v, want 10.0.0.1:8080/k8s/enabled", host)
+	}
+	if host.Metadata["instanceId"] != "pod-a" || host.Metadata["envType"] != "test" {
+		t.Fatalf("k8s host metadata = %v, want the register metadata", host.Metadata)
+	}
+
+	// The catalog view serves BOTH hosts: the enabled k8s one and the
+	// disabled ecs one the instance list filtered out.
+	catalog, err := client.ListCatalogInstances("pay-user", "ecs")
+	if err != nil {
+		t.Fatalf("ListCatalogInstances(pay-user, ecs) error = %v", err)
+	}
+	if len(catalog) != 1 {
+		t.Fatalf("ListCatalogInstances(pay-user, ecs) = %d hosts, want 1 (the hidden disabled host)", len(catalog))
+	}
+	if catalog[0].IP != "10.0.0.2" || catalog[0].Port != 8081 || catalog[0].ClusterName != "ecs" || catalog[0].Enabled {
+		t.Fatalf("catalog ecs host = %+v, want 10.0.0.2:8081/ecs/disabled", catalog[0])
+	}
+	if catalog[0].Metadata["instanceId"] != "srv-b" {
+		t.Fatalf("catalog ecs host metadata = %v, want the register metadata", catalog[0].Metadata)
 	}
 
 	// A service with no instances returns an empty slice, not an error.
@@ -281,6 +296,135 @@ func TestBlackboxClientListInstancesErrorPropagates(t *testing.T) {
 	if _, err := client.ListInstances("pay-user"); err == nil {
 		t.Fatal("ListInstances() error = nil, want the HTTP 500 error")
 	}
+}
+
+// TestBlackboxClientListCatalogInstancesPaginatesAll: the catalog listing
+// paginates with the ListServices discipline — iterate while a page comes
+// back full, stop on the first short page — and sends the full selector set
+// (serviceName, clusterName, groupName, namespaceId, pageSize, pageNo,
+// hasIpCount) on every page request. The multi-page walk itself (more hosts
+// than one page) is pinned by the mock self-test
+// (nacosmock.TestCatalogInstancesServesDisabledAndPaginates drives pageSize
+// 2 across 3 pages); here the request log pins the client's fixed page
+// size of 100 and the exact wire form of the page request.
+func TestBlackboxClientListCatalogInstancesPaginatesAll(t *testing.T) {
+	client, server := newClientAt(t)
+
+	// Three instances of one (service, cluster): the enabled/disabled mix
+	// pins the catalog's defining property (disabled hosts are served).
+	hosts := []nacos.InstanceParams{
+		{ServiceName: "pay-user", IP: "10.0.0.1", Port: 8001, ClusterName: "k8s", Enabled: true},
+		{ServiceName: "pay-user", IP: "10.0.0.2", Port: 8002, ClusterName: "k8s", Enabled: false},
+		{ServiceName: "pay-user", IP: "10.0.0.3", Port: 8003, ClusterName: "k8s", Enabled: true},
+	}
+	for _, params := range hosts {
+		if err := client.RegisterInstance(params); err != nil {
+			t.Fatalf("RegisterInstance(%s) error = %v", params.IP, err)
+		}
+	}
+	// Another cluster of the same service: never in the k8s catalog.
+	if err := client.RegisterInstance(nacos.InstanceParams{
+		ServiceName: "pay-user", IP: "10.0.0.9", Port: 8009, ClusterName: "ecs", Enabled: true,
+	}); err != nil {
+		t.Fatalf("RegisterInstance(ecs) error = %v", err)
+	}
+
+	catalog, err := client.ListCatalogInstances("pay-user", "k8s")
+	if err != nil {
+		t.Fatalf("ListCatalogInstances(pay-user, k8s) error = %v", err)
+	}
+	if len(catalog) != 3 {
+		t.Fatalf("ListCatalogInstances(pay-user, k8s) = %d hosts, want 3 (incl. the disabled one); got %v", len(catalog), catalog)
+	}
+	disabled := 0
+	for _, host := range catalog {
+		if host.ClusterName != "k8s" {
+			t.Fatalf("catalog host = %+v, want k8s cluster only (the catalog is cluster-scoped)", host)
+		}
+		if !host.Enabled {
+			disabled++
+		}
+	}
+	if disabled != 1 {
+		t.Fatalf("catalog disabled hosts = %d, want 1 (10.0.0.2)", disabled)
+	}
+
+	// The wire form of every page request: the full selector set with
+	// pageSize 100 and hasIpCount false, pageNo starting at 1.
+	requests := server.Requests()
+	pageRequests := 0
+	for _, request := range requests {
+		if request.Path != "/nacos/v1/ns/catalog/instances" {
+			continue
+		}
+		pageRequests++
+		for key, value := range map[string]string{
+			"serviceName": "pay-user",
+			"clusterName": "k8s",
+			"groupName":   "DEFAULT_GROUP",
+			"namespaceId": "public",
+			"pageSize":    "100",
+			"pageNo":      "1",
+			"hasIpCount":  "false",
+		} {
+			if request.Query.Get(key) != value {
+				t.Fatalf("catalog request query[%s] = %q, want %q (all: %v)", key, request.Query.Get(key), value, request.Query)
+			}
+		}
+	}
+	if pageRequests != 1 {
+		t.Fatalf("catalog page requests = %d, want 1 (the 3-host answer ends the loop on one short page)", pageRequests)
+	}
+
+	// A (service, cluster) with no catalog entry answers empty, not error:
+	// the steady state of a fully pruned service.
+	empty, err := client.ListCatalogInstances("ghost", "k8s")
+	if err != nil {
+		t.Fatalf("ListCatalogInstances(ghost, k8s) error = %v, want nil (empty catalog)", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("ListCatalogInstances(ghost, k8s) = %d hosts, want 0", len(empty))
+	}
+}
+
+// TestBlackboxClientListCatalogInstancesMissingParamsRejected: the mock (and
+// the real server behind it) rejects a catalog request without its two
+// selectors — the client surfaces the rejection as a typed *nacos.APIError
+// instead of silently returning data for a wrong scope.
+func TestBlackboxClientListCatalogInstancesMissingParamsRejected(t *testing.T) {
+	server := nacosmock.Start()
+	defer server.Close()
+
+	// The client cannot be asked to omit a param (it always sends both), so
+	// drive the wire directly: the raw endpoint must reject each missing
+	// selector, proving the 400 the client would surface if it ever did.
+	for name, query := range map[string]string{
+		"missing serviceName": "clusterName=k8s&groupName=DEFAULT_GROUP&pageNo=1&pageSize=100",
+		"missing clusterName": "serviceName=pay-user&groupName=DEFAULT_GROUP&pageNo=1&pageSize=100",
+	} {
+		status, body, err := get(server.URL() + "/nacos/v1/ns/catalog/instances?" + query)
+		if err != nil {
+			t.Fatalf("%s: raw GET error = %v", name, err)
+		}
+		if status != 400 {
+			t.Fatalf("%s: status = %d, want 400; body: %s", name, status, body)
+		}
+	}
+}
+
+// get issues one raw GET against the nacosmock and returns the status and
+// body — the client-shaped assertion helper for wire-level rejection tests.
+func get(target string) (int, string, error) {
+	response, err := http.Get(target)
+	if err != nil {
+		return 0, "", err
+	}
+	defer func() { _ = response.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return 0, "", err
+	}
+	return response.StatusCode, string(body), nil
 }
 
 func TestBlackboxClientListServicesPaginatesAll(t *testing.T) {

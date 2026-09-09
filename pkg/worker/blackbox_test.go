@@ -3,6 +3,8 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -342,6 +344,130 @@ func TestBlackboxRetryQueueSemanticsKeepsPlainErrorQueued(t *testing.T) {
 	}
 	if got := len(sink.PushCalls()); got != 1 {
 		t.Fatalf("push calls = %d, want 1", got)
+	}
+}
+
+// permanentTestError is a leaf error implementing Permanent(), the shape the
+// nacos APIError carries: it is what the retry queue's drop check must see
+// through every layer of aggregation and wrapping.
+type permanentTestError struct{}
+
+func (permanentTestError) Error() string {
+	return "nacos: DELETE /nacos/v1/ns/instance answered status 400: Param 'ip' is required"
+}
+
+func (permanentTestError) Permanent() bool {
+	return true
+}
+
+// TestBlackboxRetryQueueSemanticsDropsPermanentErrorThroughFanout: the
+// production error shape — a nacos-positioned sink failing with the
+// %w-wrapped Permanent error inside a REAL FanoutSink, further %w-wrapped by
+// an adapter — must still classify as permanent. FanoutError.Unwrap is the
+// contract that makes errors.As traverse the per-sink failures; deleting it
+// silently reintroduces the F7 spin the moment error classification moves
+// to any aggregate-inspecting site (audit AUDIT-A-2/D-7).
+func TestBlackboxRetryQueueSemanticsDropsPermanentErrorThroughFanout(t *testing.T) {
+	// The exact production nesting: the sink returns the fmt.Errorf the
+	// nacos adapter's deregister builds (%w around the APIError-shaped
+	// leaf).
+	nacosErr := fmt.Errorf("nacos: deregister 10.0.0.1#8080/k8s: %w", permanentTestError{})
+	atlas := &fakes.FakeInstanceSink{}
+	nacos := &fakes.FakeInstanceSink{PushErr: nacosErr}
+	fanout, err := NewFanoutSink(nil,
+		NamedSink{Name: stubSinkAtlas, Sink: atlas},
+		NamedSink{Name: stubSinkNacos, Sink: nacos},
+	)
+	if err != nil {
+		t.Fatalf("NewFanoutSink() error = %v", err)
+	}
+
+	fanoutErr := fanout.Push(123, []*instance.Instance{{InstanceId: "instance-7", Reversion: 42}})
+	if fanoutErr == nil {
+		t.Fatal("fanout Push() error = nil, want the aggregated failure")
+	}
+
+	// errors.As must find the leaf Permanent error directly through the
+	// FanoutError...
+	var direct interface{ Permanent() bool }
+	if !errors.As(fanoutErr, &direct) || !direct.Permanent() {
+		t.Fatalf("errors.As(FanoutError) did not find the permanent leaf, want it (FanoutError.Unwrap contract); err = %v", fanoutErr)
+	}
+	// ...and through a further %w-wrapped error — the shape any Handle-time
+	// or adapter-side classifier actually inspects.
+	wrapped := fmt.Errorf("push: %w", fanoutErr)
+	var throughWrapper interface{ Permanent() bool }
+	if !errors.As(wrapped, &throughWrapper) || !throughWrapper.Permanent() {
+		t.Fatalf("errors.As(wrapped FanoutError) did not find the permanent leaf, want it; err = %v", wrapped)
+	}
+	// The FanoutError itself stays detectable through the same wrapper (the
+	// §5.1 per-sink breakdown discipline is unaffected by the new Unwrap).
+	var detected FanoutError
+	if !errors.As(wrapped, &detected) || !reflect.DeepEqual(detected.FailedSinks(), []string{stubSinkNacos}) {
+		t.Fatalf("errors.As(wrapped, &FanoutError) = %v, want the nacos-only breakdown", detected)
+	}
+
+	// The worker-level pin: UnsyncedService over the real FanoutSink, the
+	// nacos member failing permanently. After one syncOnce cycle the nacos
+	// key is dropped (permanent) while the atlas key — whose sink succeeds —
+	// is deleted by its own success: the queue ends empty, and the failed
+	// sink saw exactly its two pushes (the direct fanout attempt above plus
+	// the one retry attempt), never a third.
+	service := NewUnsyncedService(context.Background(), fanout, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+	service.Add(123, []*instance.Instance{{InstanceId: "instance-7", Reversion: 42}}, nil)
+
+	service.syncOnce()
+
+	if got := service.Len(); got != 0 {
+		t.Fatalf("queued events after the permanent fanout failure = %d, want 0 (nacos dropped, atlas drained)", got)
+	}
+	// The failed sink was attempted by the retry (the direct fanout push
+	// above plus exactly one retry) and dropped; the healthy sink was
+	// attempted by the same two fan-out rounds and never again.
+	if got := len(nacos.PushCalls()); got != 2 {
+		t.Fatalf("nacos push calls = %d, want 2 (fanout attempt + the single failed retry, then dropped)", got)
+	}
+	if got := len(atlas.PushCalls()); got != 2 {
+		t.Fatalf("atlas push calls = %d, want 2 (fan-out attempt + its successful retry, then never again)", got)
+	}
+}
+
+// TestBlackboxRetryQueueSemanticsDropsPermanentErrorThroughFanoutQueue: the
+// fanout permanent-drop observed through the worker's Handle seam: the
+// event's fan-out fails on the nacos member (atlas succeeds), the queue
+// holds ONLY the nacos key, and the next cycle drops it — one failed
+// attempt, no spin.
+func TestBlackboxRetryQueueSemanticsDropsPermanentErrorThroughFanoutQueue(t *testing.T) {
+	nacosErr := fmt.Errorf("nacos: deregister 10.0.0.1#8080/k8s: %w", permanentTestError{})
+	atlas := &fakes.FakeInstanceSink{}
+	nacos := &fakes.FakeInstanceSink{PushErr: nacosErr}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w, err := NewResourceWorker(ctx, newTestFanout(t, atlas, nacos), &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+	if err != nil {
+		t.Fatalf("NewResourceWorker() error = %v", err)
+	}
+
+	w.Handle(&Event{
+		Trigger: 123,
+		Data:    []*instance.Instance{{InstanceId: "instance-8", Reversion: 42}},
+		Operate: OperateTypeSync,
+	})
+
+	// Only the failed sink is queued (the FanoutError breakdown), and after
+	// one retry cycle the permanent nacos key is dropped rather than kept.
+	if got, want := w.unsyncedService.Lens(), map[string]int{stubSinkNacos: 1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Lens after failed fan-out = %v, want %v", got, want)
+	}
+	w.unsyncedService.syncOnce()
+	if got := w.unsyncedService.Len(); got != 0 {
+		t.Fatalf("queued events after the permanent retry = %d, want 0 (dropped, not spun)", got)
+	}
+	if got := len(nacos.PushCalls()); got != 2 {
+		t.Fatalf("nacos push calls = %d, want 2 (fan-out attempt + the single failed retry, then dropped)", got)
+	}
+	if got := len(atlas.PushCalls()); got != 1 {
+		t.Fatalf("atlas push calls = %d, want 1 (its fan-out push only)", got)
 	}
 }
 
