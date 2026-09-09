@@ -23,11 +23,15 @@ import (
 	"spotter/pkg/worker"
 )
 
-// TestE2EConsulFanoutPipeline drives the F5 multi-sink pipeline end to end:
+// TestE2EConsulFanoutPipelineRealTick drives the F5 multi-sink pipeline end
+// to end on the REAL interval tick (AUDIT-D-2/E2E-3):
 //
-//	consulmock -> NewConsulProvider -> DefaultWorker -> FanoutSink
-//	                                                 |-> Atlas (DiscoveryCenter -> discoverymock)
-//	                                                 |-> Nacos (pkg/nacos -> nacosmock)
+//	consulmock -> NewConsulProvider (1s push interval) -> ProcessIntervalFullPush tick
+//	                                          |-> CompareAndFlush + emitSyncAll (SyncAll event)
+//	                                          v
+//	          DefaultWorker -> FanoutSink
+//	                           |-> Atlas (DiscoveryCenter -> discoverymock)
+//	                           |-> Nacos (pkg/nacos -> nacosmock, PushAll prune)
 //
 // The consul mock serves one "microservice" endpoint; the provider's watch
 // loop pushes the converted instance through the real DefaultWorker, whose
@@ -36,9 +40,13 @@ import (
 // instance with the plan §7.3 field mapping. The instance list is then read
 // back through the sink's own GetAll, asserting the metadata round-trip.
 //
+// The prune reconcile is driven by the production 1s full-push tick — the
+// chain ProcessIntervalFullPush -> emitSyncAll -> worker.Handle(SyncAll) ->
+// FanoutSink.PushAll -> the Nacos prune — not by a hand-fed event.
+//
 // It is bounded, fully offline and race-safe — the e2e-shaped proof of the
 // §6.5 wiring (the same graph internal/server.go builds under --nacos-addr).
-func TestE2EConsulFanoutPipeline(t *testing.T) {
+func TestE2EConsulFanoutPipelineRealTick(t *testing.T) {
 	// The consul provider logs through the legacy pkg/log global; point the
 	// log directory at a per-test temporary directory (the same guard the
 	// other e2e suites use).
@@ -112,15 +120,14 @@ func TestE2EConsulFanoutPipeline(t *testing.T) {
 	}
 
 	// --- Provider: the real consul provider, pointed at the consul mock.
-	// Note: NewConsulProvider accepts pushInterval but never assigns it to
-	// the provider's interval field (a pre-existing quirk outside F5's
-	// scope; the field stays 0 and ProcessIntervalFullPush falls back to the
-	// 21600s default), so the interval tick cannot drive the prune inside a
-	// bounded test. The §7.4 SyncAll event is therefore emitted here exactly
-	// as the provider's tick does (same event shape over the worker seam),
-	// which exercises the same downstream path: worker.Handle(SyncAll) ->
-	// FanoutSink.PushAll -> the Nacos prune sweep.
-	provider, err := consul.NewConsulProvider(ctx, w, 0, []string{consulServer.Address()})
+	// The 1s push interval drives the REAL production tick chain end to end
+	// (AUDIT-D-2/E2E-3): ProcessIntervalFullPush's ticker fires CompareAndFlush
+	// and emitSyncAll, the SyncAll event flows through worker.Handle ->
+	// FanoutSink.PushAll -> the Nacos prune sweep, all on its own cadence —
+	// nothing is hand-fed through w.Handle. NewConsulProvider assigns the
+	// interval argument to the provider's interval field (consul.go, since
+	// b3578b6), so the tick runs at 1s inside the bounded test.
+	provider, err := consul.NewConsulProvider(ctx, w, 1, []string{consulServer.Address()})
 	if err != nil {
 		t.Fatalf("consul.NewConsulProvider() error = %v", err)
 	}
@@ -142,17 +149,16 @@ func TestE2EConsulFanoutPipeline(t *testing.T) {
 	awaitNacosInstance(t, nacosServer)
 
 	// Out-of-band drift on the Nacos side: a stale instance the sink never
-	// pushed. The full-push tick's SyncAll event (§7.4) runs the PushAll
-	// prune and deletes it, proving the reconcile path end to end.
+	// pushed. The production 1s tick's SyncAll event (§7.4) runs the PushAll
+	// prune and deletes it — the real-tick reconcile path, no manual Handle.
 	nacosServer.SetInstances([]nacosmock.Host{
 		{IP: "127.0.0.9", Port: 9999, Enabled: true, Ephemeral: false,
 			Metadata: map[string]string{"instanceId": "payments-ghost"}},
 	}, "DEFAULT_GROUP", "payments", "ecs")
 
-	// The §7.4 SyncAll trigger, emitted over the worker seam exactly as the
-	// provider's tick emits it (same event shape, same Handle path).
-	fullList := provider.GetAll()
-	w.Handle(&worker.Event{Trigger: time.Now().Unix(), Data: fullList, Operate: worker.OperateTypeSyncAll})
+	// The real tick drives the prune: ProcessIntervalFullPush fires within
+	// 1s and its emitSyncAll -> worker.Handle(SyncAll) -> PushAll -> prune
+	// chain must converge within the full-push bound.
 	awaitNacosPrune(t, nacosServer)
 
 	// The sink's own GetAll reconstructs the instance from Nacos state

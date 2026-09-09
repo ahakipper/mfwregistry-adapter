@@ -165,9 +165,11 @@ func (s *orderRecordingSink) record(event string) {
 
 // TestNewFanoutSinkRejectsEmptyAndDuplicateNames: the constructor errors
 // on a malformed sink set — no sinks, an empty name, a nil sink, a
-// duplicate name. Every later lookup (PushTo, the primary view, the retry
-// fallback) is by name, so the name set must be a well-formed identity of
-// the sink set (plan §6.2).
+// duplicate name, and the metrics-reserved name "__total__". Every later
+// lookup (PushTo, the primary view, the retry fallback, the depth metrics
+// labels) is by name, so the name set must be a well-formed identity of
+// the sink set (plan §6.2); "__total__" is the retry queue's depth-total
+// label, so a sink claiming it would collide with that series.
 func TestNewFanoutSinkRejectsEmptyAndDuplicateNames(t *testing.T) {
 	sink := &fakes.FakeInstanceSink{}
 
@@ -178,6 +180,7 @@ func TestNewFanoutSinkRejectsEmptyAndDuplicateNames(t *testing.T) {
 		{"no sinks", nil},
 		{"empty name", []NamedSink{{Name: "", Sink: sink}}},
 		{"nil sink", []NamedSink{{Name: stubSinkAtlas, Sink: nil}}},
+		{"reserved total-metrics name", []NamedSink{{Name: totalSinkName, Sink: sink}}},
 		{"duplicate names", []NamedSink{
 			{Name: stubSinkAtlas, Sink: sink},
 			{Name: stubSinkAtlas, Sink: &fakes.FakeInstanceSink{}},
@@ -191,6 +194,9 @@ func TestNewFanoutSinkRejectsEmptyAndDuplicateNames(t *testing.T) {
 		if fanout != nil {
 			t.Fatalf("NewFanoutSink(%s) fanout = %#v, want nil", tc.name, fanout)
 		}
+	}
+	if _, err := NewFanoutSink(nil, NamedSink{Name: totalSinkName, Sink: sink}); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("NewFanoutSink(__total__) error = %v, want the reserved-name error", err)
 	}
 
 	// The well-formed set still constructs.
@@ -682,7 +688,8 @@ func TestWorkerLegacyErrorQueuesAllSinks(t *testing.T) {
 // TestSyncOnceRecordsPerSinkQueueDepth: the recorder observes the queue
 // depth with both sink labels, in registration order, on every cycle —
 // atlas drains to 0 while nacos stays queued (the per-sink observability of
-// plan §5.3).
+// plan §5.3) — plus the AUDIT-A-3 __total__ observation after each cycle's
+// per-sink series (the whole queue, ghost-sink keys included).
 func TestSyncOnceRecordsPerSinkQueueDepth(t *testing.T) {
 	atlas := &fakes.FakeInstanceSink{}
 	nacos := &fakes.FakeInstanceSink{PushErr: errors.New("nacos down")}
@@ -698,11 +705,13 @@ func TestSyncOnceRecordsPerSinkQueueDepth(t *testing.T) {
 	want := []fakes.QueueDepthObservation{
 		{Sink: stubSinkAtlas, Depth: 1},
 		{Sink: stubSinkNacos, Depth: 1},
+		{Sink: totalSinkName, Depth: 2},
 		{Sink: stubSinkAtlas, Depth: 0},
 		{Sink: stubSinkNacos, Depth: 1},
+		{Sink: totalSinkName, Depth: 1},
 	}
 	if got := metrics.QueueDepthObservations(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("queue depth observations = %v, want %v (per sink, in registration order)", got, want)
+		t.Fatalf("queue depth observations = %v, want %v (per sink in registration order, then the total)", got, want)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"go.etcd.io/etcd/client/v3"
 	"spotter/internal/ports"
+	"spotter/internal/testkit/etcdmock"
 	"spotter/pkg/distribute/election"
 )
 
@@ -164,6 +165,62 @@ func TestNewElectorWithCandidateNilLoggerIsSafe(t *testing.T) {
 	}
 	elector.Stop()
 	elector.Stop()
+}
+
+// TestNewElectorWithDepsNilLoggerIsSafe (AUDIT-A-4): the deps constructor
+// must default a nil logger exactly like NewElectorWithCandidate does, so
+// Stop() — which closes the owned etcd client and logs through
+// logStop/loggerInfo — never depends on the pkg/log global being
+// initialized. The unit-tier nil-logger test for the sibling constructor
+// (TestNewElectorWithCandidateNilLoggerIsSafe) cannot reach this path, and
+// the unreachable-endpoint test fails at the etcd dial before Stop, so this
+// drives the constructor against a live etcdmock: the dial succeeds, the
+// worker owns a real client, and Stop must close it and return without
+// panicking.
+func TestNewElectorWithDepsNilLoggerIsSafe(t *testing.T) {
+	server, err := etcdmock.Start()
+	if err != nil {
+		t.Fatalf("etcdmock.Start() error = %v, want nil", err)
+	}
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	elector, err := NewElectorWithDeps(
+		ctx,
+		make(chan bool, 1),
+		server.ClientEndpoints(),
+		"", "", "",
+		"/spotter-test/nil-logger",
+		nil, // nil logger: the constructor must default it, not pass it through
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewElectorWithDeps() error = %v, want nil (nil logger is a supported input)", err)
+	}
+	w, ok := elector.(*ElectWorker)
+	if !ok {
+		t.Fatalf("NewElectorWithDeps() returned %T, want *ElectWorker", elector)
+	}
+	// The PRIMARY fix, pinned directly: the deps constructor defaults the
+	// nil logger instead of passing it through (the log helpers' nil guards
+	// would carry a nil logger alone — this assertion fails when only the
+	// constructor defaulting regresses, which the behavioral Stop below
+	// cannot distinguish).
+	if w.logger == nil {
+		t.Fatal("NewElectorWithDeps(nil logger) left w.logger nil, want the ports.NopLogger default")
+	}
+	// Stop closes the owned etcd client and logs through the (defaulted)
+	// logger; a nil fallback into the pkg/log global would panic here. A
+	// second Stop proves the idempotence still holds.
+	elector.Stop()
+	elector.Stop()
+
+	// The owned client really was closed (the constructor hands Stop a real
+	// client only after a successful dial, which the live server proves).
+	if w.etcdclient != nil && w.etcdclient.Ctx().Err() == nil {
+		t.Fatal("Stop() did not close the owned etcd client")
+	}
 }
 
 // TestNewElectorWithDepsUnreachableEtcdFailsFast verifies the constructor

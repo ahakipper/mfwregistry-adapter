@@ -270,6 +270,13 @@ func (k *k8s) obj2InstanceId(obj k8srobot.QueueObject) string {
 
 // flush all instances
 func (k *k8s) flushInstances() {
+	// The guard on an empty list is intentionally KEPT here (unlike
+	// emitSyncAll, AUDIT-B-4): flushInstances also owns the local cache
+	// refill, and flushing the cache to empty on a transiently-empty source
+	// would drop every cached instance only to re-add them one event at a
+	// time. The vanished-service reconcile is emitSyncAll's job on the
+	// interval tick; flushInstances is the startup path where an empty
+	// source means "not synced yet" far more often than "everything died".
 	if all := k.GetAll(); all != nil && len(all) > 0 {
 		// flush the original cache and fill it
 		before := time.Now()
@@ -400,6 +407,10 @@ func (k *k8s) buildAndSendEvent(instance *sv.Instance) {
 }
 
 func (k *k8s) GetAll() (result []*sv.Instance) {
+	// Always a non-nil list: an empty source is the reconcile signal of
+	// AUDIT-B-4, and emitSyncAll's event must carry an empty slice, not a
+	// nil one, so the worker/sink seam observes a well-formed batch.
+	result = []*sv.Instance{}
 	items := k.robot.List(k8srobot.Pods)
 	for _, item := range items {
 		pod := item.(*v1.Pod)
@@ -451,13 +462,15 @@ func (k *k8s) ProcessIntervalFullPush() {
 }
 
 // emitSyncAll pushes the provider's full instance list as one SyncAll event
-// through the existing worker.Handle seam. An empty list emits nothing,
-// mirroring the flushInstances guard (a full reconcile of nothing is a no-op).
+// through the existing worker.Handle seam. The event is emitted even when
+// the list is EMPTY (AUDIT-B-4): an empty full instance list is exactly the
+// "every instance of this provider vanished" reconcile signal — the empty
+// SyncAll event reaches every sink's PushAll, and the Nacos sink's
+// remembered-pairs sweep prunes the pairs this provider used to own.
+// Suppressing the event on an empty list would leave a decommissioned
+// app's remote registrations as permanent drift.
 func (k *k8s) emitSyncAll() {
 	all := k.GetAll()
-	if len(all) == 0 {
-		return
-	}
 	k.worker.Handle(&worker.Event{
 		Trigger: time.Now().Unix(),
 		Data:    all,

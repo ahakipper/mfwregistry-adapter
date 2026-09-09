@@ -172,8 +172,47 @@ func (s *UnsyncedService) syncOnce() {
 	}
 	s.RUnlock()
 
+	s.dropGhostSinkKeys(batch)
+
 	for _, sink := range s.sinkNames() {
 		s.pushSinkOnce(sink, batch)
+	}
+}
+
+// dropGhostSinkKeys removes the batch's keys whose sink is no longer in the
+// CURRENT sink set (AUDIT-A-3). A queued key for a sink that no longer
+// exists can never be pushed — PushTo answers "unknown sink" forever — so
+// leaving it queued leaks the entry for the process lifetime while the
+// depth metrics (which report registered names only) never show it. The
+// drop happens under the store lock with a warning naming the sink and the
+// instance ids, and uses the delete-by-compare discipline so a mid-cycle
+// re-add of a newer revision still survives (a re-add targeting the same
+// ghost sink is dropped by the next cycle's snapshot — the condition cannot
+// heal, since the sink set is construction-immutable).
+func (s *UnsyncedService) dropGhostSinkKeys(batch map[retryKey]pendingPush) {
+	known := make(map[string]struct{}, len(s.sinkNames()))
+	for _, name := range s.sinkNames() {
+		known[name] = struct{}{}
+	}
+	var ghosts []retryKey
+	for key := range batch {
+		if _, ok := known[key.Sink]; !ok {
+			ghosts = append(ghosts, key)
+		}
+	}
+	if len(ghosts) == 0 {
+		return
+	}
+	s.Lock()
+	for _, key := range ghosts {
+		if current, ok := s.store[key]; ok && current.Instance == batch[key].Instance {
+			delete(s.store, key)
+		}
+	}
+	s.Unlock()
+	for _, key := range ghosts {
+		s.logger.Warnf("dropping queued push for unknown sink %q (the sink is not registered; the entry can never be pushed), instance: %s",
+			key.Sink, batch[key].Instance.InstanceId)
 	}
 }
 
@@ -240,14 +279,26 @@ func (s *UnsyncedService) retryKeyed(sink string, key retryKey, pending pendingP
 	s.Unlock()
 }
 
-// recordDepths reports the per-sink queue-depth metrics; it is called with
-// the lock held so the depths and the snapshot agree. The series are the
-// per-sink ones of plan §5.3.
+// totalSinkName is the metrics label for the TOTAL queue depth across all
+// sinks — including keys whose sink no longer exists (ghost keys are
+// invisible in the per-sink series, which report registered names only).
+// It reuses the sync_error_gauge series with a label no sink can claim (the
+// fanout constructor rejects this exact name), so no new Prometheus series
+// definition is needed (the recorder's SetSyncErrorQueueDepth contract is
+// unchanged).
+const totalSinkName = "__total__"
+
+// recordDepths reports the per-sink queue-depth metrics plus one
+// total-across-sinks observation; it is called with the lock held so the
+// depths and the snapshot agree. The series are the per-sink ones of
+// plan §5.3; the __total__ observation is the AUDIT-A-3 addition that keeps
+// ghost-sink keys (unpushable, unreported per-sink) visible to dashboards.
 func (s *UnsyncedService) recordDepths(store map[retryKey]*pendingPush) {
 	lens := lensOf(store)
 	for _, sink := range s.sinkNames() {
 		s.metrics.SetSyncErrorQueueDepth(sink, lens[sink])
 	}
+	s.metrics.SetSyncErrorQueueDepth(totalSinkName, len(store))
 }
 
 // sinkNames returns the sink names in fanout registration order (or the

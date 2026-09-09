@@ -840,3 +840,84 @@ func TestBlackboxSinkReadinessGate(t *testing.T) {
 		t.Fatal("CheckReadiness(unreachable) error = nil, want an error")
 	}
 }
+
+// TestBlackboxSinkPushAllEmptyListPrunesRememberedPairs (AUDIT-B-4): the
+// "service fully vanished" reconcile. PushAll with an EMPTY instance list
+// is not a no-op: the sink remembers every (service, cluster) pair it has
+// pushed, and an empty desired set for a remembered pair means every remote
+// registration of that pair is an orphan and must be pruned. Without the
+// remembered-pairs sweep an empty push produced no desired keys at all, so
+// a decommissioned app's remote registrations (including the enabled=false
+// drift the instance list hides) were permanent. Restart survivability is
+// one register: a pair re-enters the memory on its next non-empty push.
+func TestBlackboxSinkPushAllEmptyListPrunesRememberedPairs(t *testing.T) {
+	sink, server := newSinkAt(t)
+
+	// Two instances of one (service, cluster) — the pair the sink will own.
+	first := []*instance.Instance{
+		domainInstance("pod-a", "pay-user", "10.0.0.1", 8080, "k8s", 1),
+		domainInstance("pod-b", "pay-user", "10.0.0.2", 8080, "k8s", 1),
+	}
+	if err := sink.PushAll(1, first); err != nil {
+		t.Fatalf("PushAll(push 1) error = %v", err)
+	}
+	if got := len(server.Instances("pay-user", "k8s")); got != 2 {
+		t.Fatalf("k8s instances after push 1 = %d, want 2; state = %v", got, server.Instances("pay-user", "k8s"))
+	}
+	// An unrelated cluster must never be touched by the k8s pair's sweep.
+	server.SetInstances([]nacosmock.Host{
+		{IP: "10.0.0.9", Port: 8081, Enabled: true, Metadata: map[string]string{"instanceId": "srv-other"}},
+	}, "DEFAULT_GROUP", "pay-user", "ecs")
+
+	// Push 2: the empty list — every instance of the service vanished
+	// upstream. Both remembered-pair registrations must be pruned.
+	if err := sink.PushAll(2, nil); err != nil {
+		t.Fatalf("PushAll(empty) error = %v", err)
+	}
+
+	if got := server.Instances("pay-user", "k8s"); len(got) != 0 {
+		t.Fatalf("k8s instances after empty push = %v, want 0 (both pruned)", got)
+	}
+	if deregisterRequest(server, "10.0.0.1", 8080) == nil {
+		t.Fatalf("no DELETE of 10.0.0.1; requests = %v", server.Requests())
+	}
+	if deregisterRequest(server, "10.0.0.2", 8080) == nil {
+		t.Fatalf("no DELETE of 10.0.0.2; requests = %v", server.Requests())
+	}
+	// Per-provider ownership still holds: the ecs registration is untouched.
+	if got := len(server.Instances("pay-user", "ecs")); got != 1 {
+		t.Fatalf("ecs instances after the k8s empty push = %d, want 1 (other cluster untouched)", got)
+	}
+
+	// A second empty push is the steady state of the fully pruned pair: no
+	// error (a clean pair lists nothing; the not-found tolerance applies to
+	// the real server's 500), and the ecs cluster is still untouched.
+	if err := sink.PushAll(3, nil); err != nil {
+		t.Fatalf("PushAll(second empty) error = %v, want nil (steady state)", err)
+	}
+	if got := len(server.Instances("pay-user", "ecs")); got != 1 {
+		t.Fatalf("ecs instances after the second empty push = %d, want 1", got)
+	}
+}
+
+// TestBlackboxSinkPushAllEmptyListNoRememberedPairsIsNoop: an empty push on
+// a sink that owns nothing must stay a no-op — the remembered-pairs sweep
+// may not fabricate work for services the sink never registered.
+func TestBlackboxSinkPushAllEmptyListNoRememberedPairsIsNoop(t *testing.T) {
+	sink, server := newSinkAt(t)
+	// Remote state exists (someone else's registrations), the sink never
+	// pushed a pair.
+	server.SetInstances([]nacosmock.Host{
+		{IP: "10.0.0.7", Port: 8080, Enabled: true, Metadata: map[string]string{"instanceId": "srv-foreign"}},
+	}, "DEFAULT_GROUP", "pay-user", "k8s")
+
+	if err := sink.PushAll(1, nil); err != nil {
+		t.Fatalf("PushAll(empty, no remembered pairs) error = %v, want nil", err)
+	}
+	if got := len(server.Instances("pay-user", "k8s")); got != 1 {
+		t.Fatalf("k8s instances after the no-op empty push = %d, want 1 (nothing pruned)", got)
+	}
+	if deregisterRequest(server, "10.0.0.7", 8080) != nil {
+		t.Fatal("an empty push with no remembered pairs deregistered a foreign instance")
+	}
+}

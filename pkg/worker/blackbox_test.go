@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -571,4 +572,89 @@ func (s *midCycleReAddSink) pushSnapshot() []blackboxPushCall {
 		}
 	}
 	return snapshot
+}
+
+// TestBlackboxRetryQueueDropsGhostSinkKeys (AUDIT-A-3): a queued key whose
+// sink is not in the CURRENT sink set can never be pushed — the fanout's
+// PushTo answers "unknown sink" forever — so leaving it queued leaks the
+// entry for the process lifetime while the per-sink depth metrics (which
+// report registered names only) never show it. After one syncOnce cycle
+// the ghost key must be dropped (with a warning naming the sink), no push
+// may be attempted for it against the real sinks, and the queue must end
+// empty.
+func TestBlackboxRetryQueueDropsGhostSinkKeys(t *testing.T) {
+	atlas := &fakes.FakeInstanceSink{}
+	nacos := &fakes.FakeInstanceSink{}
+	logger := &fakes.FakeLogger{}
+	service := NewUnsyncedService(context.Background(), newTestFanout(t, atlas, nacos),
+		logger, fakes.NewFakeMetricsRecorder())
+
+	// A key queued for a sink that does not exist: the Add fallback path for
+	// a non-fanout error queues known sinks, but a sink-set change (or a
+	// queue carried over a wiring change) can leave a key whose Sink field
+	// matches no registered name.
+	service.Add(1, []*instance.Instance{{InstanceId: "ghost-1", Reversion: 42}}, []string{"ghost"})
+	if got := service.Len(); got != 1 {
+		t.Fatalf("queued events before the cycle = %d, want 1", got)
+	}
+
+	service.syncOnce()
+
+	if got := service.Len(); got != 0 {
+		t.Fatalf("queued events after one cycle = %d, want 0 (the ghost key dropped)", got)
+	}
+	// No push was attempted for the ghost key: neither real sink saw it.
+	if got := len(atlas.PushCalls()); got != 0 {
+		t.Fatalf("atlas push calls = %d, want 0 (the ghost key never reaches a real sink)", got)
+	}
+	if got := len(nacos.PushCalls()); got != 0 {
+		t.Fatalf("nacos push calls = %d, want 0 (the ghost key never reaches a real sink)", got)
+	}
+	// The drop is logged with the sink name and the instance id, so the
+	// operator sees the loss instead of the key vanishing silently.
+	warned := false
+	for _, entry := range logger.Entries() {
+		if entry.Level == fakes.LevelWarn &&
+			strings.Contains(entry.Message, "ghost") &&
+			strings.Contains(entry.Message, "ghost-1") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("no warn-level log naming the ghost sink and instance; entries = %v", logger.Entries())
+	}
+}
+
+// TestBlackboxRetryQueueGhostDropKeepsMidCycleReAdd: the ghost-key drop
+// uses the same delete-by-compare discipline as the success and
+// permanent-drop paths: an entry re-added mid-cycle with a newer revision
+// (for a REAL sink) must survive the drop of the ghost snapshot entry.
+func TestBlackboxRetryQueueGhostDropKeepsMidCycleReAdd(t *testing.T) {
+	atlas := &fakes.FakeInstanceSink{}
+	nacos := &fakes.FakeInstanceSink{}
+	service := NewUnsyncedService(context.Background(), newTestFanout(t, atlas, nacos),
+		&fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+
+	stale := &instance.Instance{InstanceId: "instance-9", Reversion: 10}
+	newer := &instance.Instance{InstanceId: "instance-9", Reversion: 20}
+	// Queue the stale revision for the ghost sink; the snapshot pins it.
+	service.Add(1, []*instance.Instance{stale}, []string{"ghost"})
+	// Mid-cycle (between the snapshot and the drop, as syncOnce really
+	// races): a newer revision arrives for a REAL sink.
+	service.Add(2, []*instance.Instance{newer}, []string{stubSinkAtlas})
+
+	service.syncOnce()
+
+	// The ghost snapshot entry was dropped; the re-added atlas key survived
+	// (and was pushed by the same cycle: PushTo atlas succeeded).
+	if got := service.Len(); got != 0 {
+		t.Fatalf("queued events after the cycle = %d, want 0 (ghost dropped, re-add pushed)", got)
+	}
+	if got := len(atlas.PushCalls()); got != 1 {
+		t.Fatalf("atlas push calls = %d, want 1 (the re-added revision was pushed)", got)
+	}
+	if calls := atlas.PushCalls(); len(calls) == 1 &&
+		(calls[0].Instances[0].InstanceId != "instance-9" || calls[0].Instances[0].Reversion != 20) {
+		t.Fatalf("pushed instance = %#v, want instance-9 reversion 20 (the re-added revision)", calls[0].Instances[0])
+	}
 }

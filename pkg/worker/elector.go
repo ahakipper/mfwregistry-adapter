@@ -104,10 +104,19 @@ func (infoOnlyLogger) Errorf(string, ...interface{}) {}
 // file paths, the campaign key, a logger and a notifier, instead of reading
 // the config/log/notice package globals. It mirrors NewElector.
 //
+// A nil logger defaults to a nop logger so Stop never depends on the pkg/log
+// global being initialized — the same contract NewElectorWithCandidate
+// documents (AUDIT-A-4: the nil logger previously flowed straight into
+// ElectWorker, whose logStop fell back to the nil pkg/log global and
+// nil-deref'd on Stop).
+//
 // The notifier receives campaign-failure pages (EMERGENCY level, unchanged
 // from the legacy notice.Notice behavior); nil means the candidate falls
 // back to its nop notifier and pages nothing.
 func NewElectorWithDeps(ctx context.Context, leaderChCh chan bool, endpoints []string, certFile, keyFile, caFile, campaignKey string, logger logger, notifier ports.Notifier) (Elector, error) {
+	if logger == nil {
+		logger = ports.NopLogger{}
+	}
 	etcdclient, err := etcd.NewClientWithEndpoints(endpoints, certFile, keyFile, caFile)
 	if err != nil {
 		return nil, err
@@ -285,33 +294,45 @@ func (w *ElectWorker) closeOwnedClient() {
 }
 
 // logStopCloseError emits a client-close failure through the injected
-// logger, falling back to the pkg/log global when none was provided.
+// logger. Belt and braces (AUDIT-A-4): both constructors default a nil
+// logger, so this fallback should never see a nil w.logger — but the
+// pkg/log global is a *zap.SugaredLogger pointer that is only initialized
+// by cmd/adapter.go, so check it before dereferencing instead of panicking
+// on a direct Stop() call from any context that never initialized it.
 func (w *ElectWorker) logStopCloseError(err error) {
 	if w.logger != nil {
 		w.logger.Info("distribute worker stop close etcd client error: ", err.Error())
 		return
 	}
-	log.Logger.Info("distribute worker stop close etcd client error: ", err.Error())
+	if log.Logger != nil {
+		log.Logger.Info("distribute worker stop close etcd client error: ", err.Error())
+	}
 }
 
 // loggerInfo emits an informational line through the injected logger,
-// falling back to the pkg/log global when none was provided.
+// falling back to the pkg/log global when none was provided (nil-safe for
+// the same reason as logStopCloseError).
 func (w *ElectWorker) loggerInfo(args ...interface{}) {
 	if w.logger != nil {
 		w.logger.Info(args...)
 		return
 	}
-	log.Logger.Info(args...)
+	if log.Logger != nil {
+		log.Logger.Info(args...)
+	}
 }
 
 // logStop emits the legacy stop log through the injected logger, falling
-// back to the pkg/log global when no logger was provided.
+// back to the pkg/log global when no logger was provided (nil-safe for the
+// same reason as logStopCloseError).
 func (w *ElectWorker) logStop() {
 	if w.logger != nil {
 		w.logger.Info("distribute worker stop")
 		return
 	}
-	log.Logger.Info("distribute worker stop")
+	if log.Logger != nil {
+		log.Logger.Info("distribute worker stop")
+	}
 }
 
 // syncStoppedState is a one-shot watcher: it parks until the owner cancels

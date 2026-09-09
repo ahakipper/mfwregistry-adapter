@@ -72,7 +72,13 @@ func TestUnsyncedServiceRecordsQueueDepthBeforeRetry(t *testing.T) {
 
 	service.syncOnce()
 
-	if got, want := metrics.QueueDepths(), []fakes.QueueDepthObservation{{Sink: plainSinkName, Depth: 1}}; !reflect.DeepEqual(got, want) {
+	// The per-sink series plus the AUDIT-A-3 total observation: the __total__
+	// label reports the whole queue (including ghost-sink keys the per-sink
+	// series cannot see).
+	if got, want := metrics.QueueDepths(), []fakes.QueueDepthObservation{
+		{Sink: plainSinkName, Depth: 1},
+		{Sink: totalSinkName, Depth: 1},
+	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("queue depths = %v, want %v", got, want)
 	}
 	if got := service.Len(); got != 0 {

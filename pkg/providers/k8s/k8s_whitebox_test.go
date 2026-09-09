@@ -1453,10 +1453,15 @@ func TestProcessIntervalFullPushEmitsSyncAllAfterCompareAndFlush(t *testing.T) {
 	}
 }
 
-// TestProcessIntervalFullPushEmitsNoSyncAllWithoutInstances: a tick whose
-// provider source is empty emits no SyncAll event (there is no full list to
-// reconcile with), mirroring the flushInstances guard.
-func TestProcessIntervalFullPushEmitsNoSyncAllWithoutInstances(t *testing.T) {
+// TestProcessIntervalFullPushEmitsEmptySyncAllWithoutInstances: a tick whose
+// provider source is empty still emits exactly one SyncAll event carrying an
+// EMPTY data list (AUDIT-B-4): the empty full list is the "every instance of
+// this provider vanished" reconcile signal — every sink's PushAll receives
+// it and the Nacos sink's remembered-pairs sweep prunes the pairs this
+// provider used to own. No incremental (Sync) events may be emitted. The
+// pre-B-4 behavior (suppressing the event entirely) left a decommissioned
+// app's remote registrations as permanent drift.
+func TestProcessIntervalFullPushEmitsEmptySyncAllWithoutInstances(t *testing.T) {
 	robot := newFakeRobot(nil, nil, false)
 	w := &fakeWorker{getAllResponse: &sv.InstanceList{}}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1470,16 +1475,42 @@ func TestProcessIntervalFullPushEmitsNoSyncAllWithoutInstances(t *testing.T) {
 		close(done)
 	}()
 
-	// Wait past one tick, then cancel: nothing may have been emitted.
-	time.Sleep(1500 * time.Millisecond)
+	// Wait past one tick for the empty SyncAll event.
+	deadline := time.Now().Add(3 * time.Second)
+	var events []*worker.Event
+	for time.Now().Before(deadline) {
+		events = w.handleSnapshot()
+		if len(findSyncAllEvents(events)) == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	syncAlls := findSyncAllEvents(events)
+	if len(syncAlls) != 1 {
+		t.Fatalf("SyncAll events = %d, want exactly 1 per tick (an empty list still reconciles); events = %#v", len(syncAlls), events)
+	}
+	event := syncAlls[0]
+	if event.Data == nil {
+		t.Fatalf("SyncAll data = nil, want an empty non-nil list (the empty reconcile signal)")
+	}
+	if len(event.Data) != 0 {
+		t.Fatalf("SyncAll data = %#v, want an empty list", event.Data)
+	}
+	if event.Trigger <= 0 {
+		t.Fatalf("SyncAll trigger = %d, want the tick timestamp", event.Trigger)
+	}
+
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("ProcessIntervalFullPush did not return after context cancel")
 	}
-	if events := w.handleSnapshot(); len(events) != 0 {
-		t.Fatalf("events = %d, want 0 (empty provider list: no SyncAll, no incremental pushes)", len(events))
+	// The tick's CompareAndFlush also stayed quiet: an empty provider list
+	// produces no incremental pushes.
+	events = w.handleSnapshot()
+	if n := len(events) - len(findSyncAllEvents(events)); n != 0 {
+		t.Fatalf("non-SyncAll events = %d, want 0 (empty provider list: no incremental pushes); events = %#v", n, events)
 	}
 }
 

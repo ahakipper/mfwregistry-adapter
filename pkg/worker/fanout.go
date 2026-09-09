@@ -127,7 +127,10 @@ var (
 // empty names, duplicate names and nil sinks (plan §6.2): every later
 // lookup — PushTo, the primary view, the plain-error fallback, the metrics
 // labels — is by name, so the name set must be a well-formed identity of
-// the sink set. The sinks are copied; the caller's slice is not retained.
+// the sink set. The name "__total__" is reserved for the retry queue's
+// depth-total metrics label (unsynced_service.go), so a sink claiming it
+// would collide with that series and is rejected too. The sinks are
+// copied; the caller's slice is not retained.
 func NewFanoutSink(logger ports.Logger, sinks ...NamedSink) (*FanoutSink, error) {
 	if len(sinks) == 0 {
 		return nil, errors.New("worker: fanout requires at least one sink")
@@ -137,6 +140,9 @@ func NewFanoutSink(logger ports.Logger, sinks ...NamedSink) (*FanoutSink, error)
 	for i, named := range sinks {
 		if named.Name == "" {
 			return nil, fmt.Errorf("worker: fanout sink %d has an empty name", i)
+		}
+		if named.Name == totalSinkName {
+			return nil, fmt.Errorf("worker: fanout sink name %q is reserved for the queue-depth total metrics label", named.Name)
 		}
 		if named.Sink == nil {
 			return nil, fmt.Errorf("worker: fanout sink %q is nil", named.Name)

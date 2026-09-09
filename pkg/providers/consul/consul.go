@@ -31,6 +31,16 @@ type consul struct {
 	cache         providers.CacheIterface    // consul endpoint cache
 	pool          *ants.Pool                 // goroutine pool
 	initDone      bool
+
+	// sourceErr records the error of the last GetAll when the consul source
+	// could not be read (nil after a successful read, empty or not): the
+	// error/empty distinction GetAll's nil result cannot carry itself. Every
+	// access — the writes inside GetAll and the reads in emitSyncAll and the
+	// tests' sourceError helper — happens under the provider lock: a mutex
+	// orders only accesses that BOTH take it, so the tick path (emitSyncAll)
+	// must lock just like the handler paths (syncInstance, CompareAndFlush)
+	// already do. See GetAll's comment for the caller contract.
+	sourceErr error
 }
 
 // NewConsulProvider creates consul provider
@@ -144,6 +154,18 @@ func (c *consul) toInstance(endpoints []*api.ServiceEntry) (inss []*sv.Instance)
 	return inss
 }
 
+// GetAll returns the full consul instance list. A nil result is ambiguous
+// between "source errored" (monitor GetServices/GetServiceEntries failure)
+// and "source legitimately empty": the sourceErr flag below distinguishes
+// the two.
+//
+// Lock discipline: every caller holds the provider lock across its GetAll
+// call — syncInstance and CompareAndFlush take it themselves, and
+// emitSyncAll takes it around its own read — so GetAll runs entirely under
+// the lock and writes the flag in-lock (a mutex orders only accesses that
+// BOTH take it; an unlocked tick-path write racing the handler-goroutine
+// writes was the round-2 review's data race). Callers outside this file
+// must not call GetAll without the lock.
 func (c *consul) GetAll() (result []*v2.Instance) {
 	// Get all services from consul
 	var err error
@@ -152,6 +174,7 @@ func (c *consul) GetAll() (result []*v2.Instance) {
 	if err != nil {
 		err = errors.WithMessage(err, "get services from consul")
 		log.Logger.Errorf(err.Error())
+		c.sourceErr = err
 		return nil
 	}
 	// Process new cache
@@ -164,6 +187,7 @@ func (c *consul) GetAll() (result []*v2.Instance) {
 			if err != nil {
 				err = errors.WithMessage(err, "get service endpoints from consul")
 				log.Logger.Errorf(err.Error())
+				c.sourceErr = err
 				return nil
 			}
 			if instances := c.toInstance(endpoints); instances != nil {
@@ -173,9 +197,20 @@ func (c *consul) GetAll() (result []*v2.Instance) {
 			}
 		}
 	}
+	c.sourceErr = nil
 	log.Logger.Infof("consul getall size: %d", len(result))
 
 	return result
+}
+
+// sourceError returns the error of the last GetAll, if any. Test-only
+// observation helper for the flag emitSyncAll decides on: it takes the
+// provider lock like every other sourceErr access (the discipline
+// documented on the field).
+func (c *consul) sourceError() error {
+	c.Lock()
+	defer c.Unlock()
+	return c.sourceErr
 }
 
 func (c *consul) InstanceChanged(instance *api.CatalogService) (err error) {
@@ -313,11 +348,38 @@ func (c *consul) ProcessIntervalFullPush() {
 }
 
 // emitSyncAll pushes the provider's full instance list as one SyncAll event
-// through the existing worker.Handle seam. An empty list emits nothing,
-// mirroring the k8s provider's guard (a full reconcile of nothing is a no-op).
+// through the existing worker.Handle seam. The event is emitted even when
+// the list is EMPTY (AUDIT-B-4, mirroring the k8s provider): an empty full
+// instance list is the "every instance of this provider vanished" reconcile
+// signal — the empty SyncAll event reaches every sink's PushAll, and the
+// Nacos sink's remembered-pairs sweep prunes the pairs this provider used
+// to own. Suppressing the event on an empty list would leave a
+// decommissioned app's remote registrations as permanent drift.
+//
+// The one exception is a FAILED source read (agent-2 review of the B-4
+// fix): consul's GetAll returns nil on monitor errors too, and an
+// error-time empty SyncAll would drive the nacos prune into deregistering
+// every remembered ecs pair — one consul blip becoming a full nacos ecs
+// outage. When the last GetAll errored, emission is skipped and a warning
+// is logged instead; the next tick retries. (The k8s provider needs no
+// equivalent: its informer-cache List cannot error, and the full-push loop
+// starts only after HasSynced.)
+//
+// The whole read-then-decide sequence runs under the provider lock (the
+// round-2 review's fix): the lock pairs this goroutine's sourceErr write
+// (inside GetAll) with the handler-goroutine writes under
+// syncInstance/CompareAndFlush — the tick path must take the same lock or
+// the flag has no happens-before edge. Holding it across worker.Handle is
+// safe: Handle is a plain handler-table dispatch, and CompareAndFlush
+// already holds this lock across the worker.GetAll RPC (a strictly wider
+// footprint), so no new lock-ordering surface is introduced.
 func (c *consul) emitSyncAll() {
+	c.Lock()
 	all := c.GetAll()
-	if len(all) == 0 {
+	err := c.sourceErr
+	c.Unlock()
+	if err != nil {
+		log.Logger.Warnf("consul source read failed, skipping the SyncAll emission this tick (an empty push would prune every remembered ecs pair): %s", err.Error())
 		return
 	}
 	c.worker.Handle(&worker.Event{

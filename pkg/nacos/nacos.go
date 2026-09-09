@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"spotter/internal/domain/instance"
 	"spotter/internal/ports"
@@ -30,6 +31,32 @@ const SinkName = "nacos"
 type Sink struct {
 	client *Client
 	logger ports.Logger
+
+	// remembered (AUDIT-B-4) records every (service, cluster) pair the sink
+	// has ever pushed non-offline instances for — the pairs whose remote
+	// registrations this sink owns. The prune sweeps the pushed pairs UNION
+	// these remembered pairs: a pair whose pushed set becomes empty is the
+	// "every instance of this service vanished upstream" reconcile signal,
+	// and without the memory the prune would have no key for it (an empty
+	// desired map iterates zero pairs), leaving a decommissioned app's
+	// remote registrations as permanent drift.
+	//
+	// Survivability is one push interval, not a restart: the memory rebuilds
+	// from the next register of each pair (a live service always re-pushes),
+	// so the only window where a restart loses the sweep target is a service
+	// that vanishes exactly while spotter is down — its drift then heals the
+	// first time any instance of the pair re-registers, or stays until a
+	// manual clean (documented residual, plan §7.4 language).
+	remembered   map[clusterKeyOf]bool
+	rememberedMu sync.Mutex
+}
+
+// clusterKeyOf is the prune's (service, cluster) pair identity. It is the
+// exported-shaped twin of the local type prune() builds, hoisted so the
+// remembered map can share it.
+type clusterKeyOf struct {
+	service string
+	cluster string
 }
 
 // Sink satisfies the internal/ports.InstanceSink port exactly (the
@@ -42,7 +69,7 @@ func NewSink(addr string, logger ports.Logger) (*Sink, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Sink{client: client, logger: client.logger}, nil
+	return &Sink{client: client, logger: client.logger, remembered: map[clusterKeyOf]bool{}}, nil
 }
 
 // Push applies the per-instance policy of plan §7.3:
@@ -74,6 +101,17 @@ func (s *Sink) Push(triggerTime int64, instances []*instance.Instance) error {
 // clusters present in the data, so a k8s full push never touches
 // ecs-cluster instances — per-provider ownership is preserved end-to-end
 // (plan §7.4).
+//
+// The empty-push semantics (AUDIT-B-4): an EMPTY pushed list is not a no-op
+// — it is the "every instance of this provider vanished" reconcile signal.
+// A push of zero instances carries no (service, cluster) key of its own, so
+// the prune additionally sweeps the pairs this sink REMEMBERS from earlier
+// pushes (see the remembered field): each remembered pair with an empty
+// desired set has every remote instance of that pair pruned. Together with
+// the providers emitting their SyncAll event even when the full list is
+// empty, this heals a fully decommissioned service within one push
+// interval. An empty PushAll on a sink with no remembered pairs is still a
+// no-op (nothing is known to be owned).
 func (s *Sink) PushAll(triggerTime int64, instances []*instance.Instance) error {
 	if err := s.Push(triggerTime, instances); err != nil {
 		return err
@@ -84,7 +122,9 @@ func (s *Sink) PushAll(triggerTime int64, instances []*instance.Instance) error 
 // prune removes the remote instances of the pushed (service, cluster) pairs
 // that the pushed set no longer contains. Offline (Status 3) pushed
 // instances are treated as absent, so their remote counterparts are pruned
-// even if the per-instance deregister failed to run.
+// even if the per-instance deregister failed to run. Pairs the sink
+// remembers from earlier pushes are swept with their (possibly empty)
+// desired set — the vanished-service reconcile of AUDIT-B-4.
 //
 // The listing is the CATALOG view (ListCatalogInstances), not the instance
 // list: the instance list hides enabled=false entries — the exact state
@@ -112,8 +152,28 @@ func (s *Sink) prune(instances []*instance.Instance) error {
 		}
 	}
 
-	var firstErr error
+	// Remember the pairs this push asserts ownership of, and union them with
+	// the previously remembered pairs: a pair that drops out of the pushed
+	// set entirely still gets swept (desired stays absent for it), which is
+	// the vanished-service signal.
+	s.rememberedMu.Lock()
+	for key := range desired {
+		s.remembered[clusterKeyOf(key)] = true
+	}
+	union := make(map[clusterKey]map[string]bool, len(desired)+len(s.remembered))
 	for key, wanted := range desired {
+		union[key] = wanted
+	}
+	for rememberedKey := range s.remembered {
+		key := clusterKey(rememberedKey)
+		if _, ok := union[key]; !ok {
+			union[key] = map[string]bool{} // remembered pair, empty desired: prune everything remote
+		}
+	}
+	s.rememberedMu.Unlock()
+
+	var firstErr error
+	for key, wanted := range union {
 		hosts, err := s.client.ListCatalogInstances(key.service, key.cluster)
 		if err != nil {
 			// A real Nacos answers HTTP 500 with a "cluster ... is not
