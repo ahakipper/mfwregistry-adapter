@@ -199,8 +199,14 @@ func (c *Client) ListInstances(serviceName string) ([]Host, error) {
 // instances). Unlike ListInstances, the catalog lists instances with
 // enabled=false too, so the PushAll prune can see — and delete — the
 // disabled remote drift the instance list hides (the F8 fix). Pagination
-// follows the ListServices discipline: iterate while a page comes back full,
-// capped at maxServiceListPages.
+// follows the ListServices discipline — iterate while a page comes back full,
+// capped at maxServiceListPages — hardened with a count-based stop: a server
+// that clamps the effective page size below the requested pageSize=100
+// serves pages that always look SHORT, so the short-page rule alone would
+// silently truncate the walk at one clamped page (a partial prune view). The
+// response's Count is the server's declared total, so the walk keeps going
+// while the accumulated total is below it; the count rule cannot run past
+// the end because a count-terminated walk returns exactly Count hosts.
 func (c *Client) ListCatalogInstances(serviceName, clusterName string) ([]Host, error) {
 	hosts := make([]Host, 0)
 	for page := 1; page <= maxServiceListPages; page++ {
@@ -219,6 +225,19 @@ func (c *Client) ListCatalogInstances(serviceName, clusterName string) ([]Host, 
 		}
 		hosts = append(hosts, body.List...)
 		if len(body.List) < catalogPageSize {
+			// The count-based stop: a clamped page (shorter than requested
+			// only because the server capped the effective page size) with
+			// the declared total still uncollected is NOT the end — keep
+			// walking. A short page whose Count is absent, zero, or already
+			// reached stays the termination for well-behaved servers.
+			if body.Count > 0 && len(hosts) < body.Count {
+				continue
+			}
+			return hosts, nil
+		}
+		// A full-length page whose Count has been collected ends the walk
+		// here instead of paging once more for an empty confirmation page.
+		if body.Count > 0 && len(hosts) >= body.Count {
 			return hosts, nil
 		}
 	}

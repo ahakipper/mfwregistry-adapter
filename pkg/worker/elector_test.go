@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"sync"
 	"testing"
@@ -680,6 +681,76 @@ func TestStopWithNilEtcdClient(t *testing.T) {
 }
 
 // --- goroutine-leak helpers (documented approximations) --------------------
+
+// TestLoggerToPortsNilStaysNil (AUDIT-A-6): the adapter must pass a nil
+// logger through unchanged — the candidate constructor applies its own
+// default, so widening nil into a nop implementation would silently change
+// which logger the candidate sees.
+func TestLoggerToPortsNilStaysNil(t *testing.T) {
+	if got := loggerToPorts(nil); got != nil {
+		t.Fatalf("loggerToPorts(nil) = %#v, want nil (the candidate applies its own default)", got)
+	}
+}
+
+// TestLoggerToPortsFullLoggerPassthrough (AUDIT-A-6): a logger that already
+// implements the full ports.Logger must pass through as the SAME value (the
+// identity), not be wrapped — the widened wrapper would drop the
+// implementation's Warn/Error behavior behind nop stubs.
+func TestLoggerToPortsFullLoggerPassthrough(t *testing.T) {
+	full := ports.NopLogger{}
+	got := loggerToPorts(full)
+	if got != ports.Logger(full) {
+		t.Fatalf("loggerToPorts(NopLogger) = %#v, want the identical value (no wrapping)", got)
+	}
+}
+
+// infoOnlyRecorder is an Info-only logger: it satisfies the elector's
+// minimal logger seam (and nothing more), recording Info calls.
+type infoOnlyRecorder struct {
+	infos []string
+}
+
+func (l *infoOnlyRecorder) Info(args ...interface{}) {
+	l.infos = append(l.infos, fmt.Sprint(args...))
+}
+
+// TestLoggerToPortsInfoOnlyWidening (AUDIT-A-6): an Info-only logger is
+// widened to the full ports.Logger with Info delegated to the original and
+// every other method nop-safe (the widened value must satisfy the port so
+// the candidate never nil-derefs, and the nop methods must not panic).
+func TestLoggerToPortsInfoOnlyWidening(t *testing.T) {
+	recorder := &infoOnlyRecorder{}
+	got := loggerToPorts(recorder)
+
+	var asPorts ports.Logger
+	var ok bool
+	if asPorts, ok = got.(ports.Logger); !ok {
+		t.Fatalf("loggerToPorts(info-only) = %T, want a ports.Logger implementation", got)
+	}
+	// The widened value is not the original (which does not satisfy the
+	// port) and not nil: it is the adapter.
+	if asPorts == nil {
+		t.Fatal("loggerToPorts(info-only) = nil, want the widened adapter")
+	}
+
+	// Info delegates to the original (fmt.Sprint joins with no separator,
+	// matching how log.Logger would render the args).
+	asPorts.Info("delegated", 42)
+	if len(recorder.infos) != 1 || recorder.infos[0] != "delegated42" {
+		t.Fatalf("Info did not delegate: recorder.infos = %#v, want one entry \"delegated42\"", recorder.infos)
+	}
+
+	// The remaining methods are nop-safe: none panics and none reaches the
+	// recorder.
+	asPorts.Infof("f %d", 1)
+	asPorts.Warn("w")
+	asPorts.Warnf("wf %d", 2)
+	asPorts.Error("e")
+	asPorts.Errorf("ef %d", 3)
+	if len(recorder.infos) != 1 {
+		t.Fatalf("nop methods reached the recorder: recorder.infos = %#v, want still one entry", recorder.infos)
+	}
+}
 
 // goroutineMin samples runtime.NumGoroutine for dur and returns the minimum
 // seen, smoothing out transient runtime and test-framework goroutines.

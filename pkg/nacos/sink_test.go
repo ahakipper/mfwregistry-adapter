@@ -574,6 +574,37 @@ func TestBlackboxSinkPushAllPruneSurfacesOtherCatalog500s(t *testing.T) {
 	}
 }
 
+// TestBlackboxSinkPushAllPruneSurfacesNotFoundBodyOn400: the not-found
+// tolerance requires BOTH the 500 status AND the "is not found" body marker
+// (isCatalogNotFound, nacos.go). A 400 whose body carries the same marker is
+// NOT the real server's absent-catalog answer — it is a rejected request
+// (Permanent()), and the prune must surface it instead of tolerating it as
+// an empty list: the 400-with-body-marker shape would otherwise be silently
+// swallowed, hiding a client-class break behind the empty-tolerance path.
+// (The 500-without-marker negative is pinned by
+// TestBlackboxSinkPushAllPruneSurfacesOtherCatalog500s.)
+func TestBlackboxSinkPushAllPruneSurfacesNotFoundBodyOn400(t *testing.T) {
+	const notFoundBody = `{"status":400,"message":"service pay-user is not found!","data":null,"code":400,"serverIp":"127.0.0.1"}`
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/nacos/v1/ns/catalog/instances" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, notFoundBody)
+			return
+		}
+		writeStubOK(w)
+	}))
+	defer stub.Close()
+	sink, err := nacos.NewSink(stub.URL, &fakes.FakeLogger{})
+	if err != nil {
+		t.Fatalf("NewSink(stub) error = %v", err)
+	}
+
+	pushed := []*instance.Instance{domainInstance("pod-a", "pay-user", "10.0.0.1", 8080, "k8s", 1)}
+	if err := sink.PushAll(7, pushed); err == nil {
+		t.Fatal("PushAll(catalog 400 with not-found body) error = nil, want the surfaced error (tolerance is 500-only)")
+	}
+}
+
 // writeStubOK answers a register/deregister request with the Nacos success
 // text.
 func writeStubOK(w http.ResponseWriter) {

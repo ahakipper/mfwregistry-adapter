@@ -249,8 +249,10 @@ func (k *k8s) hasInstanceDiff(old, new *sv.Instance) (diff bool) {
 	} else if new.Reversion > old.Reversion {
 		diff = true
 	} else if new.EnvType != old.EnvType || new.State != old.State || new.Status != old.Status ||
-		new.EnvGroup != old.EnvGroup || new.InstanceId != old.InstanceId || new.Ip != old.Ip {
+		new.EnvGroup != old.EnvGroup || new.InstanceId != old.InstanceId || new.Ip != old.Ip ||
+		new.Enabled != old.Enabled {
 		// Excluding the CPU and memory comparison new.Cpu != old.Cpu || new.Memory != old.Memory, because the discovery center stores them as int type, so every comparison shows a difference
+		// Enabled joins the compared set so a pure enabled flip (no status, state, reversion or ip change) still propagates — a no-op for every shape the current conversion produces (Enabled is derived from status there), pure hardening for future sources.
 		diff = true
 	}
 

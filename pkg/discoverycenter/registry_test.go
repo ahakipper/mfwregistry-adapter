@@ -3,6 +3,7 @@ package discoverycenter
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"spotter/internal/domain/instance"
@@ -81,6 +82,43 @@ func TestDiscoveryCenterPushAllErrorNotifiesExactTitle(t *testing.T) {
 	}}
 	if got := notifier.Notifications(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("notifications = %#v, want %#v", got, want)
+	}
+}
+
+// TestDiscoveryCenterPushTransportErrorNotifies (AUDIT-B-7, the M8b
+// mutation): the atlas stand-in is STOPPED — the RPC fails with a transport
+// error (Unavailable), not a code!=0 answer. Push must surface the error AND
+// the notifier must receive a notification: the notification is the retry
+// loop's operator signal when Atlas is down, and swallowing it (returning
+// nil or skipping the Notify call) would let an outage vanish silently —
+// the mutation that escaped the entire discoverycenter suite. The title is
+// the incremental-sync title; the content is the transport error text
+// itself (no rpc code: a transport error answers no response at all).
+func TestDiscoveryCenterPushTransportErrorNotifies(t *testing.T) {
+	server, registry, _, notifier := newRegistryFixture(t, false)
+	// STOP the stand-in before the push: the dialed connection now fails
+	// with a transport error instead of answering.
+	server.Close()
+
+	err := registry.Push(123, []*instance.Instance{{InstanceId: "instance-1"}})
+	if err == nil {
+		t.Fatal("Push() error = nil, want the transport error surfaced")
+	}
+
+	got := notifier.Notifications()
+	if len(got) != 1 {
+		t.Fatalf("notifications = %#v, want exactly one (the operator signal when Atlas is down)", got)
+	}
+	if got[0].Title != "Failed to sync data incrementally" {
+		t.Fatalf("notification title = %q, want %q", got[0].Title, "Failed to sync data incrementally")
+	}
+	if got[0].Content == "" {
+		t.Fatal("notification content = empty, want the transport error text")
+	}
+	// A transport error carries no rpc code: the content is the raw gRPC
+	// error, not the "failed with code" shape of a code!=0 answer.
+	if strings.Contains(got[0].Content, "failed with code") {
+		t.Fatalf("notification content = %q, want the transport error text (not a code!=0 answer)", got[0].Content)
 	}
 }
 

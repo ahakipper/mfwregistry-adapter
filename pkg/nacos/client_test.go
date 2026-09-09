@@ -4,9 +4,13 @@
 package nacos_test
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -410,6 +414,75 @@ func TestBlackboxClientListCatalogInstancesMissingParamsRejected(t *testing.T) {
 			t.Fatalf("%s: status = %d, want 400; body: %s", name, status, body)
 		}
 	}
+}
+
+// TestBlackboxClientListCatalogInstancesStopsAtCount: the clamped-page shape
+// — a server that answers 1-element pages regardless of the requested
+// pageSize=100, with count carrying the true total of 3. A 1-element page is
+// always "short" against the requested 100, so the short-page termination
+// alone would stop the walk after ONE host and silently return 1 of 3
+// instances (a truncated prune view). The count-based stop keeps the walk
+// going while the accumulated total is below Count, so all 3 hosts are
+// collected across the 1-element pages. A stub HTTP server serves the shape
+// (the nacosmock honors the requested pageSize, so it cannot clamp).
+func TestBlackboxClientListCatalogInstancesStopsAtCount(t *testing.T) {
+	hosts := []map[string]interface{}{
+		{"instanceId": "10.0.0.1#8001#k8s#DEFAULT_GROUP@@pay-user", "ip": "10.0.0.1", "port": 8001, "enabled": true, "clusterName": "k8s", "serviceName": "pay-user"},
+		{"instanceId": "10.0.0.2#8002#k8s#DEFAULT_GROUP@@pay-user", "ip": "10.0.0.2", "port": 8002, "enabled": false, "clusterName": "k8s", "serviceName": "pay-user"},
+		{"instanceId": "10.0.0.3#8003#k8s#DEFAULT_GROUP@@pay-user", "ip": "10.0.0.3", "port": 8003, "enabled": true, "clusterName": "k8s", "serviceName": "pay-user"},
+	}
+	var catalogCalls int
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/nacos/v1/ns/catalog/instances" {
+			t.Errorf("unexpected request %s %s", request.Method, request.URL.Path)
+			http.Error(w, "unexpected", http.StatusBadRequest)
+			return
+		}
+		catalogCalls++
+		pageNo, _ := strconv.Atoi(request.URL.Query().Get("pageNo"))
+		// Serve exactly one host per page — a clamped effective page size —
+		// with Count carrying the true total.
+		if pageNo < 1 || pageNo > len(hosts) {
+			writeJSONStub(w, map[string]interface{}{"count": len(hosts), "list": []map[string]interface{}{}})
+			return
+		}
+		writeJSONStub(w, map[string]interface{}{"count": len(hosts), "list": hosts[pageNo-1 : pageNo]})
+	}))
+	defer stub.Close()
+	client, err := nacos.NewClient(stub.URL, &fakes.FakeLogger{})
+	if err != nil {
+		t.Fatalf("NewClient(stub) error = %v", err)
+	}
+
+	got, err := client.ListCatalogInstances("pay-user", "k8s")
+	if err != nil {
+		t.Fatalf("ListCatalogInstances(clamped pages) error = %v", err)
+	}
+	if len(got) != len(hosts) {
+		t.Fatalf("ListCatalogInstances(clamped pages) = %d hosts, want %d (count-based stop walks every 1-element page); got %v", len(got), len(hosts), got)
+	}
+	seenDisabled := false
+	for i, host := range got {
+		if host.IP != fmt.Sprintf("10.0.0.%d", i+1) {
+			t.Fatalf("host[%d] = %s, want the page order preserved", i, host.IP)
+		}
+		if !host.Enabled {
+			seenDisabled = true
+		}
+	}
+	if !seenDisabled {
+		t.Fatal("no disabled host in the catalog answer, want the middle one disabled")
+	}
+	if catalogCalls != len(hosts) {
+		t.Fatalf("catalog calls = %d, want %d (one per clamped page, then the count stop)", catalogCalls, len(hosts))
+	}
+}
+
+// writeJSONStub marshals payload as a JSON response (the stub-server helper
+// for wire-shape tests).
+func writeJSONStub(w http.ResponseWriter, payload interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 // get issues one raw GET against the nacosmock and returns the status and

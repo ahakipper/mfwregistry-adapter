@@ -425,6 +425,18 @@ func TestHasInstanceDiffCases(t *testing.T) {
 			},
 			want: false,
 		},
+		{
+			// Pure enabled flip: same status/state/reversion/ip/env, only
+			// Enabled differs. No current conversion shape produces it (the
+			// k8s conversion derives Enabled from status), so this is a
+			// hardening pin — the flag is part of the diff field set and must
+			// propagate rather than be swallowed by the equality fallthrough.
+			name: "enabled flip reports a diff",
+			mutate: func(new *sv.Instance) {
+				new.Enabled = !new.Enabled
+			},
+			want: true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -1356,6 +1368,14 @@ func TestObj2InstanceId(t *testing.T) {
 		{"ns1/name-with-dashes", "name-with-dashes"},
 		{"pod-a", ""},
 		{"", ""},
+		// Multi-slash shapes: the contract is keys[1] (the SECOND slash
+		// segment), not the last. These PIN the current behavior — fragile
+		// (a key not shaped "namespace/name" yields something that is not
+		// an instance id) but latent: the k8s robot only ever enqueues
+		// two-segment keys. The audit chose documenting over changing.
+		{"ns/sub/pod", "sub"},
+		{"ns/a/b/c/pod", "a"},
+		{"/pod", "pod"},
 	}
 	for _, tc := range tests {
 		if got := k.obj2InstanceId(k8srobot.QueueObject{Key: tc.key}); got != tc.want {
