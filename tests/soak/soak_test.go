@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +91,7 @@ func TestSoakLocalStack(t *testing.T) {
 		k8s:       k8s,
 		expected:  newExpectedState(),
 		scenarios: []scenarioResult{},
+		metrics:   newMetricsObserver(),
 	}
 
 	// --- teardown discipline (plan §8.4 step 5: binary first, then -----
@@ -187,12 +189,33 @@ type soakHarness struct {
 	child     *spotterChild
 	scenarios []scenarioResult
 
+	metrics *metricsObserver
+
 	checksRun    int
 	checksPassed int
 	divergences  int
 	healMax      time.Duration
 	restarts     int
 	converged    bool
+
+	// Retry-queue observation (D-5): the depths recorded each assert cycle,
+	// the last time churn (or a scenario) touched the sources, and the drain
+	// violation the final bound reports (nil when the queue drained).
+	queueDepthsLog  []string
+	lastSourceChurn time.Time
+	drainBreach     *drainViolation
+	// pendingHeldDepths is the PREVIOUS cycle's nonzero depth observation
+	// past the drain gate (nil when that observation was all-zero or inside
+	// the heal window): the worker publishes the gauge at the START of each
+	// 5s retry tick, so a single nonzero observation can be a stale
+	// publication from before a mid-tick heal — a breach records only when
+	// nonzero depths persist across two consecutive observations (see
+	// checkQueueDrain).
+	pendingHeldDepths map[string]int
+
+	// Atlas payload parity (D-11): the divergences of the latest pass (nil
+	// when the stand-in's payloads match the model).
+	atlasDivergence []atlasDivergence
 }
 
 // scenarioResult records one edge scenario's outcome (§8.6's summary table).
@@ -280,9 +303,13 @@ func (h *soakHarness) runWindow() {
 		case <-time.After(500 * time.Millisecond):
 		}
 		// Scenarios fire at their scheduled wall-clock points, in order.
+		// Each one mutates the sources (scale, deregister, outage, restart),
+		// so it also re-arms the D-5 drain clock: the queue's legitimate
+		// heal window restarts from the last source touch.
 		for scenarioIdx < len(scenarioClock) && time.Since(started) >= scenarioClock[scenarioIdx].when {
 			h.log.event("scenario window point reached (idx %d)", scenarioIdx)
 			scenarioClock[scenarioIdx].run()
+			h.lastSourceChurn = time.Now()
 			scenarioIdx++
 		}
 	}
@@ -296,8 +323,11 @@ func (h *soakHarness) runWindow() {
 
 // churn rotates the sources: k8s pod set sizes oscillate 1..10 and consul
 // entries rotate under the two stable app-codes plus a rotating one
-// (§8.5 continuous churn).
+// (§8.5 continuous churn). Every churn marks the last-source-touch clock the
+// retry-queue drain bound keys on (D-5: quiescence = no churn for one
+// full-push bound).
 func (h *soakHarness) churn(tick int) {
+	h.lastSourceChurn = time.Now()
 	// k8s: scale spike-app in a 1..10 oscillation, rotating a second
 	// app-code's presence.
 	replicas := tick%(10-1+1) + 1
@@ -400,25 +430,53 @@ func (h *soakHarness) refreshExpected(appCodes []string) {
 // assertOnce runs one standing assertion cycle and records it. Divergences
 // inside the current bounds are observations (the soak reports a complete
 // picture); the final convergence check is the hard criterion (§8.5).
+//
+// D-5: the cycle also scrapes the child's sync_error_gauge and appends the
+// depths to the check line, so the queue state is visible post-run (the 1h
+// run that held 130 pending entries printed nothing about it). The drain
+// bound itself is enforced by checkQueueDrain (see finalConvergence and
+// runWindow's end-of-window pass).
 func (h *soakHarness) assertOnce(remaining time.Duration) {
+	depths, depthErr := h.metrics.queueDepths()
+	queueDetail := "queue=unobserved"
+	if depthErr == nil {
+		queueDetail = formatDepths(depths)
+		h.queueDepthsLog = append(h.queueDepthsLog, queueDetail)
+		h.checkQueueDrain(depths, false)
+	}
 	services, divergences, err := h.nacos.checkState(h.expected)
 	if err != nil {
-		h.log.record(checkResult{Time: time.Now(), Detail: fmt.Sprintf("check error: %v", err)}, 0)
+		h.log.record(checkResult{
+			Time: time.Now(), Detail: fmt.Sprintf("check error: %v; %s", err, queueDetail),
+		}, 0)
 		return
+	}
+	// D-11: the Atlas payload parity runs in the same cycle — the nacos view
+	// converging while the Atlas payloads diverge is exactly the fanout
+	// corruption this pass exists to catch.
+	atlasDiffs := h.assertAtlasParity(nil)
+	h.atlasDivergence = atlasDiffs
+	if len(atlasDiffs) > 0 {
+		parts := make([]string, 0, len(atlasDiffs))
+		for _, d := range atlasDiffs {
+			parts = append(parts, d.String())
+		}
+		queueDetail += " atlas_payload_divergence[" + strings.Join(parts, "; ") + "]"
 	}
 	h.checksRun++
 	worst := time.Duration(0)
-	detail := ""
+	detail := queueDetail
 	if len(divergences) > 0 {
 		h.divergences += len(divergences)
 		parts := make([]string, 0, len(divergences))
 		for _, d := range divergences {
 			parts = append(parts, d.String())
 		}
-		detail = strings.Join(parts, "; ")
-		if len(detail) > 300 {
-			detail = detail[:300] + "..."
+		divergenceDetail := strings.Join(parts, "; ")
+		if len(divergenceDetail) > 300 {
+			divergenceDetail = divergenceDetail[:300] + "..."
 		}
+		detail = divergenceDetail + "; " + queueDetail
 		// The divergence age is unknown per-item; bound the worst by what
 		// the remaining window still allows to heal.
 		worst = h.schedule.IncrementalBound
@@ -430,8 +488,117 @@ func (h *soakHarness) assertOnce(remaining time.Duration) {
 	}, worst)
 }
 
+// retryQueueTick is the worker's retry-loop publication cadence (pkg/worker
+// unsynced_service.go: the 5s ticker whose syncOnce calls recordDepths). One
+// tick is the longest a published gauge can lag a mid-tick heal, so the drain
+// bound's persistence judgment spans two consecutive publications.
+const retryQueueTick = 5 * time.Second
+
+// checkQueueDrain enforces the D-5 standing bound: after churn quiescence
+// (lastSourceChurn + one full-push bound — the slowest legitimate heal path),
+// every sink's queue depth must be 0. A non-draining queue is F7's exact
+// signature (the live incident: 130 entries held, 9624 futile retries).
+//
+// One nonzero observation is NOT enough to record a breach: the worker
+// publishes the depths at the START of each retry tick (pkg/worker
+// recordDepths, before that tick's pushes), so an entry that heals mid-tick
+// leaves the published gauge stale-nonzero for up to one tick. A breach
+// therefore records only when nonzero depths persist across two consecutive
+// observations — every caller cadence (the standing assert cycle, the
+// strict gate's post-tick re-scrape) spans at least one retry tick, so the
+// pair observes two distinct publications. A later all-zero observation
+// clears both the pending observation and a recorded breach: a depth that
+// returned to zero was publication lag or a late heal, not a queue that
+// never drains. strict is the final pass's mode: it judges regardless of
+// the quiescence arithmetic (the caller's convergence wait already settled
+// the sources). On violation the summary line names the held depth per
+// sink (the held instance ids are not observable through the metrics
+// endpoint — the depths are the observable surface; the child log holds the
+// ids).
+func (h *soakHarness) checkQueueDrain(depths map[string]int, strict bool) {
+	if h.lastSourceChurn.IsZero() {
+		return // no churn yet: nothing has had a chance to queue
+	}
+	quiesced := time.Since(h.lastSourceChurn) > h.schedule.FullPushBound
+	if !strict && !quiesced {
+		h.pendingHeldDepths = nil // heal window re-armed: no persistence state
+		return                    // still inside the legitimate heal window
+	}
+	held := heldSinks(depths)
+	if len(held) == 0 {
+		// All-zero: the pending observation resets and a recorded breach
+		// clears (the queue drained — see the persistence rationale above).
+		h.pendingHeldDepths = nil
+		h.drainBreach = nil
+		return
+	}
+	if h.pendingHeldDepths == nil {
+		// First nonzero observation past the gate: hold it, judge on the
+		// next one (up to one retry tick of publication lag must be
+		// tolerated).
+		h.pendingHeldDepths = copyDepths(depths)
+		return
+	}
+	if h.drainBreach == nil {
+		h.drainBreach = &drainViolation{
+			sink:   held[0], // the alphabetically first held sink; depths carries all
+			depths: copyDepths(depths),
+			since:  time.Now(),
+		}
+		h.log.event("queue drain bound TRIPPED: %s", formatDepths(depths))
+	}
+	// Keep the worst observation current.
+	for sink, depth := range depths {
+		if depth > h.drainBreach.depths[sink] {
+			h.drainBreach.depths[sink] = depth
+		}
+	}
+	h.drainBreach.sink = held[0]
+	h.drainBreach.heldFor = time.Since(h.drainBreach.since)
+}
+
+// heldSinks returns the sinks with a non-zero depth, sorted (deterministic
+// reporting). The __total__ label is excluded when at least one named sink
+// is held (it double-counts them); it is reported alone when ONLY ghost-sink
+// keys are held — the AUDIT-A-3 shape the per-sink series cannot see.
+func heldSinks(depths map[string]int) []string {
+	var named, total []string
+	for sink, depth := range depths {
+		if depth <= 0 {
+			continue
+		}
+		if sink == queueTotalLabel {
+			total = append(total, sink)
+			continue
+		}
+		named = append(named, sink)
+	}
+	sort.Strings(named)
+	if len(named) > 0 {
+		return named
+	}
+	return total
+}
+
+// queueTotalLabel is the worker's total-across-sinks metrics label
+// (pkg/worker unsynced_service.go: "__total__" — the label no sink can
+// claim, reported so ghost-sink keys stay visible).
+const queueTotalLabel = "__total__"
+
+// copyDepths clones a depth map.
+func copyDepths(depths map[string]int) map[string]int {
+	cloned := make(map[string]int, len(depths))
+	for sink, depth := range depths {
+		cloned[sink] = depth
+	}
+	return cloned
+}
+
 // finalConvergence is §8.5's hard criterion: after the window, one full
 // comparison pass (with the sources settled) must return zero divergence.
+// The D-5 drain bound rides the same wait: while the convergence loop is
+// still healing, the queue may legitimately hold entries; once it passes
+// (or the bound expires), the queue must be empty for every sink.
 func (h *soakHarness) finalConvergence() {
 	h.t.Logf("final convergence check (bound: incremental %s, full push %s)",
 		h.schedule.IncrementalBound, h.schedule.FullPushBound)
@@ -460,9 +627,41 @@ func (h *soakHarness) finalConvergence() {
 		}
 		_, divergences, err := h.nacos.checkState(h.expected)
 		if err == nil && len(divergences) == 0 {
-			h.converged = true
-			h.log.event("final convergence: PASS (zero divergence)")
-			return
+			// D-11 hard gate: nacos converged but the Atlas payloads still
+			// diverge is the fanout corruption shape — not a pass.
+			h.atlasDivergence = h.assertAtlasParity(nil)
+			if len(h.atlasDivergence) == 0 {
+				h.converged = true
+				// The D-5 hard gate: converged sources + a non-draining
+				// queue is exactly the F7 shape the soak must not call a
+				// pass. A nonzero first scrape is re-scraped after one retry
+				// tick before it can count: the worker publishes the depths
+				// at the START of each tick (pkg/worker recordDepths, before
+				// that tick's pushes), so an entry that healed mid-tick
+				// reads stale-nonzero for up to one tick — the breach
+				// requires the depth to persist across two consecutive
+				// publications (the two checkQueueDrain calls below are
+				// those two observations; its pending rule holds the first,
+				// and an all-zero second publication clears it).
+				if depths, depthErr := h.metrics.queueDepths(); depthErr == nil {
+					h.checkQueueDrain(depths, true)
+					if len(heldSinks(depths)) > 0 {
+						time.Sleep(retryQueueTick)
+						if reDepths, reErr := h.metrics.queueDepths(); reErr == nil {
+							h.checkQueueDrain(reDepths, true)
+						}
+					}
+				}
+				h.log.event("final convergence: PASS (zero divergence, atlas payloads match; %s)", formatDepthsOrUnobserved(h))
+				return
+			}
+			parts := make([]string, 0, len(h.atlasDivergence))
+			for _, d := range h.atlasDivergence {
+				parts = append(parts, d.String())
+			}
+			h.log.event("final convergence pending: atlas payload divergence: %s", strings.Join(parts, "; "))
+			time.Sleep(5 * time.Second)
+			continue
 		}
 		if err != nil {
 			h.log.event("final convergence check error: %v", err)
@@ -476,6 +675,15 @@ func (h *soakHarness) finalConvergence() {
 		time.Sleep(5 * time.Second)
 	}
 	h.log.event("final convergence: FAIL (divergence persisted past bound)")
+}
+
+// formatDepthsOrUnobserved renders the last recorded queue-depth line (or
+// the unobserved marker when the metrics endpoint never answered).
+func formatDepthsOrUnobserved(h *soakHarness) string {
+	if len(h.queueDepthsLog) == 0 {
+		return "queue=unobserved"
+	}
+	return h.queueDepthsLog[len(h.queueDepthsLog)-1]
 }
 
 // report prints the verdict summary into the test log.
@@ -494,6 +702,20 @@ func (h *soakHarness) report() {
 	if !h.converged {
 		problems = append(problems, "final state did not converge to zero divergence")
 	}
+	if h.drainBreach != nil {
+		// F7's exact signature, now observable: the retry queue did not
+		// drain after churn quiescence. The named depth is the observable
+		// surface; the held instance ids live in the child log (the queue
+		// logs every add and every failed retry attempt with the data).
+		problems = append(problems, h.drainBreach.String())
+	}
+	if len(h.atlasDivergence) > 0 {
+		parts := make([]string, 0, len(h.atlasDivergence))
+		for _, d := range h.atlasDivergence {
+			parts = append(parts, d.String())
+		}
+		problems = append(problems, "Atlas payload divergence (D-11): "+strings.Join(parts, "; "))
+	}
 	for _, s := range h.scenarios {
 		if !s.Pass {
 			problems = append(problems, fmt.Sprintf("scenario (%s) %s failed: %s", s.Letter, s.Name, s.Note))
@@ -507,8 +729,8 @@ func (h *soakHarness) report() {
 		h.t.Errorf("soak verdict: FAIL — %s", strings.Join(problems, "; "))
 		return
 	}
-	h.t.Logf("soak verdict: PASS (converged, %d/%d scenarios, atlas push count %d)",
-		passedScenarios, len(h.scenarios), len(h.atlas.Calls()))
+	h.t.Logf("soak verdict: PASS (converged, %d/%d scenarios, atlas push count %d, final %s)",
+		passedScenarios, len(h.scenarios), len(h.atlas.Calls()), formatDepthsOrUnobserved(h))
 }
 
 // verdict renders a pass/fail label.

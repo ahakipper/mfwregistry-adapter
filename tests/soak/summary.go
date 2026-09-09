@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -66,6 +67,20 @@ func (h *soakHarness) writeSummary(stamp string) string {
 	fmt.Fprintf(&b, "- Spotter starts: %d (restarts: %d)\n", h.child.startsCount(), h.restarts)
 	fmt.Fprintf(&b, "- Atlas stand-in calls: %d (SynInstance/SynAllInstance/GetAllInstance)\n", h.atlasPushCount())
 	fmt.Fprintf(&b, "- Final convergence: %s\n", convLabel(h.converged))
+
+	// D-5: the retry-queue observation block. The per-cycle depths land in
+	// the check lines of the raw log; the summary carries the last observed
+	// line, the max depth, and the drain verdict — F7's non-draining queue
+	// signature is a first-class summary row now.
+	fmt.Fprintf(&b, "- Retry queue (sync_error_gauge, last observed): %s\n", h.lastQueueDepthLine())
+	if maxSink, maxDepth := h.maxQueueDepth(); maxDepth > 0 {
+		fmt.Fprintf(&b, "- Retry queue max depth: %d (sink %s)\n", maxDepth, maxSink)
+	} else {
+		fmt.Fprintf(&b, "- Retry queue max depth: 0 (never held an entry)\n")
+	}
+	fmt.Fprintf(&b, "- Retry queue drain bound (D-5, quiescence + %s): %s\n",
+		h.schedule.FullPushBound, h.drainLabel())
+	fmt.Fprintf(&b, "- Atlas payload parity (D-11): %s\n", h.atlasParityLabel())
 	fmt.Fprintf(&b, "\nRaw log: %s (local only, not committed).\n", filepath.Join(h.cfg.WorkDir, "soak-"+stamp+".log"))
 
 	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
@@ -88,6 +103,76 @@ func convLabel(ok bool) string {
 		return "PASS (zero divergence on the final full comparison)"
 	}
 	return "FAIL (divergence persisted past the bound)"
+}
+
+// lastQueueDepthLine returns the most recently observed queue-depth line
+// (D-5), or the unobserved marker.
+func (h *soakHarness) lastQueueDepthLine() string {
+	if len(h.queueDepthsLog) == 0 {
+		return "unobserved (metrics endpoint never answered)"
+	}
+	return h.queueDepthsLog[len(h.queueDepthsLog)-1]
+}
+
+// maxQueueDepth returns the sink and depth of the deepest single-sink
+// observation ever recorded in the raw log lines (the per-cycle depth lines
+// carry "queue[a=0,n=1,...]" shapes; the parse tolerates them).
+func (h *soakHarness) maxQueueDepth() (string, int) {
+	maxDepth := 0
+	maxSink := ""
+	for _, line := range h.queueDepthsLog {
+		for sink, depth := range parseDepthsLine(line) {
+			if depth > maxDepth {
+				maxDepth = depth
+				maxSink = sink
+			}
+		}
+	}
+	return maxSink, maxDepth
+}
+
+// parseDepthsLine parses one "queue[a=0,n=1,__total__=1]" line back into a
+// map (best-effort; malformed lines yield an empty map).
+func parseDepthsLine(line string) map[string]int {
+	depths := map[string]int{}
+	open := strings.Index(line, "[")
+	closeAt := strings.LastIndex(line, "]")
+	if open < 0 || closeAt <= open {
+		return depths
+	}
+	for _, pair := range strings.Split(line[open+1:closeAt], ",") {
+		eq := strings.Index(pair, "=")
+		if eq < 0 {
+			continue
+		}
+		value, err := strconv.Atoi(strings.TrimSpace(pair[eq+1:]))
+		if err != nil {
+			continue
+		}
+		depths[strings.TrimSpace(pair[:eq])] = value
+	}
+	return depths
+}
+
+// drainLabel renders the D-5 drain-bound verdict for the summary.
+func (h *soakHarness) drainLabel() string {
+	if h.drainBreach == nil {
+		return "PASS (queue drained to 0 after churn quiescence)"
+	}
+	return "FAIL — " + h.drainBreach.String()
+}
+
+// atlasParityLabel renders the D-11 Atlas payload parity verdict for the
+// summary.
+func (h *soakHarness) atlasParityLabel() string {
+	if len(h.atlasDivergence) == 0 {
+		return "PASS (every SynInstance payload matched the expected model)"
+	}
+	parts := make([]string, 0, len(h.atlasDivergence))
+	for _, d := range h.atlasDivergence {
+		parts = append(parts, d.String())
+	}
+	return "FAIL — " + strings.Join(parts, "; ")
 }
 
 // timeNow is a tiny seam for the stamp; kept for determinism in future reuse.

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -121,7 +122,9 @@ type nacosHost struct {
 	Metadata    map[string]string `json:"metadata"`
 }
 
-// clusterView returns the instance ids of one service grouped by cluster.
+// clusterView returns the instance ids of one service grouped by cluster,
+// read from the v1 instance list (the view spotter's own GetAll sees). The
+// union with the catalog view happens in fullView.
 func (o *nacosObserver) clusterView(serviceName string) (map[string][]string, error) {
 	target := o.addr + "/nacos/v1/ns/instance/list?" + url.Values{
 		"serviceName": {serviceName},
@@ -151,18 +154,80 @@ func (o *nacosObserver) clusterView(serviceName string) (map[string][]string, er
 		return nil, fmt.Errorf("nacos list %s decode: %w", serviceName, err)
 	}
 	view := map[string][]string{}
-	composites := map[string][]string{} // cluster -> composite ids (dup check)
 	for _, host := range body.Hosts {
 		domainID := host.Metadata["instanceId"]
 		if domainID == "" {
 			domainID = host.InstanceID // no metadata: fall back to the composite id
 		}
 		view[host.ClusterName] = append(view[host.ClusterName], domainID)
-		composites[host.ClusterName] = append(composites[host.ClusterName], host.InstanceID)
 	}
 	for cluster := range view {
 		sort.Strings(view[cluster])
-		sort.Strings(composites[cluster])
+	}
+	return view, nil
+}
+
+// clusterViewCatalog reads the ADMIN catalog view of one (service, cluster)
+// pair (GET /nacos/v1/ns/catalog/instances — the same endpoint and query
+// params the production prune reads since the F8 fix): unlike instance/list
+// it serves ENABLED=FALSE instances too, so a disabled zombie is a
+// divergence here instead of a silent pass (AUDIT-D-4: the soak's read side
+// used the same blind endpoint as the pre-fix prune — "final convergence:
+// PASS" while the catalog held drift).
+//
+// The batch-1 tolerance is mirrored: a real nacos answers HTTP 500 with a
+// "cluster/service ... is not found" body when the pair has no catalog entry
+// at all — the steady state of a fully pruned service — and that answer
+// counts as an EMPTY view, not an error. Every other non-2xx goes through
+// the shared classification (leaderless 500s stay retryable).
+func (o *nacosObserver) clusterViewCatalog(serviceName, clusterName string) (map[string][]string, error) {
+	view := map[string][]string{}
+	for page := 1; ; page++ {
+		target := o.addr + "/nacos/v1/ns/catalog/instances?" + url.Values{
+			"serviceName": {serviceName},
+			"clusterName": {clusterName},
+			"groupName":   {defaultNacosGroup},
+			"namespaceId": {defaultNacosNamespace},
+			"pageSize":    {"100"},
+			"pageNo":      {strconv.Itoa(page)},
+			"hasIpCount":  {"false"},
+		}.Encode()
+		response, err := o.http.Get(target) //nolint:gosec // fixed loopback URL
+		if err != nil {
+			return nil, fmt.Errorf("nacos catalog %s/%s: %w", serviceName, clusterName, err)
+		}
+		if response.StatusCode >= 300 {
+			body, _ := io.ReadAll(io.LimitReader(response.Body, 1<<10))
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusInternalServerError &&
+				strings.Contains(string(body), "is not found") {
+				return view, nil // no catalog entry: the fully-pruned steady state
+			}
+			return nil, classifyNacosAnswer(fmt.Sprintf("nacos catalog %s/%s", serviceName, clusterName),
+				response.StatusCode, string(body))
+		}
+		var body struct {
+			Count int         `json:"count"`
+			List  []nacosHost `json:"list"`
+		}
+		if err := jsonDecode(response.Body, &body); err != nil {
+			_ = response.Body.Close()
+			return nil, fmt.Errorf("nacos catalog %s/%s decode: %w", serviceName, clusterName, err)
+		}
+		_ = response.Body.Close()
+		for _, host := range body.List {
+			domainID := host.Metadata["instanceId"]
+			if domainID == "" {
+				domainID = host.InstanceID
+			}
+			view[host.ClusterName] = append(view[host.ClusterName], domainID)
+		}
+		if len(body.List) < 100 {
+			break
+		}
+	}
+	for cluster := range view {
+		sort.Strings(view[cluster])
 	}
 	return view, nil
 }
@@ -452,7 +517,17 @@ func (e *expectedState) consulFor(appCode string) []string {
 	return e.consul[appCode]
 }
 
-// fullView fetches every service's cluster view in one pass.
+// fullView fetches every service's cluster view in one pass, UNIONING the
+// instance/list view (what spotter's GetAll sees) with the admin catalog
+// view of both modeled clusters (AUDIT-D-4): the list hides enabled=false
+// instances — the exact state spotter's own unhealthy pushes write — so a
+// disabled zombie would silently pass a list-only comparison. The catalog
+// view reads per (service, cluster): the two clusters the model maps
+// instances to (k8s and ecs). An id present in either view is present in
+// the union ONCE, so a zombie the list hides becomes an "extra"
+// divergence — the union is per-id SET semantics, not concatenation: the
+// catalog view is a superset of the list view, so a healthy id reported
+// by both must not count twice (see unionClusterView).
 func (o *nacosObserver) fullView(appCodes []string) (map[string]map[string][]string, error) {
 	view := map[string]map[string][]string{}
 	for _, appCode := range appCodes {
@@ -460,11 +535,68 @@ func (o *nacosObserver) fullView(appCodes []string) (map[string]map[string][]str
 		if err != nil {
 			return nil, err
 		}
+		for _, cluster := range []string{"k8s", "ecs"} {
+			catalogClusters, err := o.clusterViewCatalog(appCode, cluster)
+			if err != nil {
+				return nil, err
+			}
+			clusters = unionClusterView(clusters, catalogClusters)
+		}
 		if len(clusters) > 0 {
 			view[appCode] = clusters
 		}
 	}
 	return view, nil
+}
+
+// unionClusterView merges two cluster->ids views with per-id SET
+// semantics: an id present in either view is present in the union ONCE.
+// The catalog view is a superset of the list view (it serves everything
+// the list serves, plus enabled=false instances), so a plain
+// concatenation would count every healthy instance twice — the
+// multiset diff would flag an extra+duplicate divergence on every assert
+// cycle of a perfectly converged stack. The count kept per id is the
+// MAX of its counts in the two views: that collapses the cross-view
+// overlap while PRESERVING a genuine within-one-view duplicate (nacos
+// actually serving the same id twice in a single view still counts
+// twice, so the comparison's duplicate detection keeps its teeth).
+func unionClusterView(base, extra map[string][]string) map[string][]string {
+	clusters := map[string]struct{}{}
+	for cluster := range base {
+		clusters[cluster] = struct{}{}
+	}
+	for cluster := range extra {
+		clusters[cluster] = struct{}{}
+	}
+	merged := map[string][]string{}
+	for cluster := range clusters {
+		counts := idCounts(base[cluster])
+		for id, count := range idCounts(extra[cluster]) {
+			if count > counts[id] {
+				counts[id] = count
+			}
+		}
+		union := make([]string, 0, len(counts))
+		for id, count := range counts {
+			for i := 0; i < count; i++ {
+				union = append(union, id)
+			}
+		}
+		if len(union) > 0 {
+			sort.Strings(union)
+			merged[cluster] = union
+		}
+	}
+	return merged
+}
+
+// idCounts counts the occurrences of each id in one view's slice.
+func idCounts(ids []string) map[string]int {
+	counts := map[string]int{}
+	for _, id := range ids {
+		counts[id]++
+	}
+	return counts
 }
 
 // diffMultisets compares the wanted and remote id multisets: missing =

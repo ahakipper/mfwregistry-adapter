@@ -778,3 +778,100 @@ func TestStartProvidersNacosReadinessGate(t *testing.T) {
 		t.Fatalf("InitializeProviders calls = %d, want 0 (startup failed at the gate)", initializeCalls)
 	}
 }
+
+// TestStartProvidersWiresEmptyIPShellSafely (AUDIT-D E2E-2, the F7 enabling
+// hole's wiring proof): through the REAL server wiring — the
+// startProvidersWithNacosAddr harness builds the fanout (atlas + the real
+// nacos Sink over the nacosmock), the real DefaultWorker with its live retry
+// loop — one offline instance with an EMPTY Ip must be skipped by the sink's
+// empty-IP deregister guard (pkg/nacos pushOne): the v1 DELETE derives its
+// composite id from the ip parameter, and a DELETE without one is answered
+// 400 forever — the exact request shape that poisoned the retry queue in the
+// live incident (9624 futile retries). The assertions are the guard's wiring
+// proof through the server seam:
+//
+//   - zero DELETE requests reach the nacosmock (no deregister was even
+//     attempted — the skip happens before the wire);
+//   - zero POST requests either: the event's only instance is offline, so
+//     nothing registers;
+//   - the retry queue stays empty (observed through the worker's metrics
+//     seam: the captured worker is driven by the server construction, which
+//     wires the server's nil recorder — so the queue-emptiness proof is the
+//     request side: a poisoned queue would keep firing DELETEs on its 5s
+//     ticker, and the request log stays empty for two full retry cycles).
+func TestStartProvidersWiresEmptyIPShellSafely(t *testing.T) {
+	server := nacosmock.Start()
+	defer server.Close()
+
+	captured, s, result := startProvidersWithNacosAddr(t, server.URL())
+	if captured == nil {
+		t.Fatal("initializeProviders received a nil worker")
+	}
+
+	// The offline shell: status 3 with an empty Ip — the k8s CompareAndFlush
+	// case-3 shape (atlas leftovers pushed offline with whatever Ip atlas
+	// reported, AUDIT-C-5) that reached the sink live.
+	shell := &v2.Instance{
+		InstanceId: "pod-empty-ip", AppCode: "pay-user", Ip: "",
+		Ports: []*v2.PortInfo{{Port: 8080}}, Provider: "k8s",
+		Status: 3, Reversion: 1, EnvType: "test",
+	}
+	captured.Handle(&worker.Event{Trigger: 1, Data: []*v2.Instance{shell}, Operate: worker.OperateTypeSync})
+
+	// Two full retry cycles of the real 5s ticker (10s + margin): a poisoned
+	// queue would have fired at least two DELETE rounds by then.
+	time.Sleep(12 * time.Second)
+
+	requests := server.Requests()
+	if deletes := countNacosDeletes(requests); deletes != 0 {
+		t.Fatalf("nacos DELETE requests after the empty-IP offline push = %d, want 0 (the sink's empty-IP skip guard must hold through the server wiring); requests = %s",
+			deletes, formatNacosRequests(requests))
+	}
+	if posts := countNacosPosts(requests); posts != 0 {
+		t.Fatalf("nacos POST requests after the empty-IP offline push = %d, want 0 (the event carries one offline instance; nothing registers); requests = %s",
+			posts, formatNacosRequests(requests))
+	}
+
+	s.Stop()
+	select {
+	case <-result:
+	case <-time.After(3 * time.Second):
+		t.Fatal("startProviders() did not return after Stop")
+	}
+}
+
+// countNacosDeletes counts the DELETE requests against the nacos instance
+// endpoint in the mock's recorded request log.
+func countNacosDeletes(requests []nacosmock.Request) int {
+	count := 0
+	for _, request := range requests {
+		if request.Method == "DELETE" && request.Path == "/nacos/v1/ns/instance" {
+			count++
+		}
+	}
+	return count
+}
+
+// countNacosPosts counts the POST (register) requests against the nacos
+// instance endpoint.
+func countNacosPosts(requests []nacosmock.Request) int {
+	count := 0
+	for _, request := range requests {
+		if request.Method == "POST" && request.Path == "/nacos/v1/ns/instance" {
+			count++
+		}
+	}
+	return count
+}
+
+// formatNacosRequests renders the recorded requests for a failure message.
+func formatNacosRequests(requests []nacosmock.Request) string {
+	var parts []string
+	for _, request := range requests {
+		parts = append(parts, request.Method+" "+request.Path)
+	}
+	if len(parts) == 0 {
+		return "(none)"
+	}
+	return strings.Join(parts, ", ")
+}
