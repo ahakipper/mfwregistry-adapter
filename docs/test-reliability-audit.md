@@ -1,6 +1,6 @@
 # Test Reliability Audit — Findings
 
-**Status:** IN PROGRESS (auditors A, B, C still running; D complete)
+**Status:** AUDIT COMPLETE — 41 findings (A:9, B:8, C:16, D:12; 5 P0, 14 P1, 22 P2/P3); fix phase starting per the backlog below
 **Date:** 2026-09-10
 **Method binding:** every finding is confirmed by full code reading; verification claims were executed (test runs / live probes / scratch experiments in /tmp). Severity: P0 = real production risk + test blind spot, P1 = test cannot catch a plausible regression, P2 = weak/misleading/pinning gap.
 
@@ -47,16 +47,107 @@ infra/config preset equality matrix; composition root_test override/ownership se
 
 ## Auditor A — worker domain
 
-(pending)
+Suites executed: `go test ./pkg/worker/... -count=1` (run twice, ok), `-race` (ok), `go vet` clean. 8 mutation experiments (M1-M8) run in a /tmp repo copy — never in-repo; repo left clean. Mutations ran against the ENTIRE worker suite plus internal and `-tags e2e` where noted.
+
+| ID | Sev | Summary | Location (test / production) |
+|---|---|---|---|
+| AUDIT-A-1 | P0 | SyncAll failure path has ZERO test coverage — the only SyncAll test drives success. Executed mutation M8 (delete `unsyncedService.Add` from the SyncAll handler): the ENTIRE repo suite passes (worker + internal + e2e). A plausible refactor ships with a green suite and failed full-push batches would wait a 6h PushAllInterval instead of 5s retry. SyncAll is also F8's only healer (drives the nacos prune) | worker_test.go:83 / worker.go:66-73; k8s.go:427-440 |
+| AUDIT-A-2 | P0 | `FanoutError` has no `Unwrap` → `errors.As` cannot see a Permanent error nested inside it. Executed: the exact production nesting (`%w`-wrapped APIError inside SinkFailure inside FanoutError) is NOT classifiable. Safe today only because retry uses PushTo (returns the raw sink error); executed mutation M7 (PushTo routes through Push) reintroduces the infinite 4xx spin — and `TestBlackboxRetryQueueSemanticsDropsPermanentError` still PASSES under M7 (it drives a plain sink, never the fanout). The natural refactor re-breaks F7 with no failing test | fanout_test.go:484+ / fanout.go:25-59, unsynced_service.go:217-218,200-201 |
+| AUDIT-A-3 | P1 | A queued key for a sink that no longer exists leaks forever (never pushed, never deleted, invisible to sync_error_gauge — recordDepths reports registered names only). Executed on pristine code: Add with sink "ghost" → after 2 cycles Len()==1, no pushes, metrics show [{atlas 0}]. Latent today (restart recreates the store), structurally reachable, untested | — / unsynced_service.go:175-177,246-251 |
+| AUDIT-A-4 | P1 | `NewElectorWithDeps(nil-logger).Stop()` panics (executed, confirmed twice): the nil-logger defaulting exists only in NewElectorWithCandidate (elector.go:142-144); the deps constructor flows nil straight into ElectWorker, whose logStop falls back to the nil pkg/log global. The shipped nil-logger-safety test covers only the sibling constructor | elector_test.go:160-167,174-204 / elector.go:309-315,110-129 |
+| AUDIT-A-5 | P2 | The F7-class blackbox tests never exercise the production error shape at worker level: permanentError is a flat struct, never `%w`-wrapped, never fanned out. The one positive control (worker + real FanoutSink + wrapped Permanent error) was written by the auditor, not the suite | blackbox_test.go:297-306 / nacos.go:230 |
+| AUDIT-A-6 | P2 | `loggerToPorts`/`infoOnlyLogger` adapter (3 branches) has zero tests; "simplifying" it to always widen silently degrades elector logs to nop with no failing test | — / elector.go:81-100 |
+| AUDIT-A-7 | P2 | v2.go `NewInstanceServiceClient` surface is dead code (grep: zero callers) with zero tests; the gRPC path bypasses it via discoverycenter's own conn.Invoke. Tests exercise only the type aliases. If anyone ever swaps to this client, every RPC fails at runtime (codec) and no test catches it | — / v2.go:56-94, discoverycenter/client.go:94-110 |
+| AUDIT-A-8 | P2 | aggregate/controller.go is entirely commented-out scaffolding — "no tests" is CORRECT, not a gap. Live concern: RegisterAggregateProvider appends to the package-global Providers slice without a mutex. Do not add tests for commented-out code | — / controller.go:32-134 |
+| AUDIT-A-9 | P2 | Elector fake's synchronous notify cannot reproduce the real candidate's goroutine dispatch: a post-Stop channel delivery is possible in production (stopped check and send are not atomic) but unobservable with this fake. Impact minor (consumer dedups) | elector_test.go:89-101 / election.go:253, elector.go:239 |
+
+### Auditor A — confirmed reliable (mutations that FAILED these tests: M1/M2/M3/M4/M5)
+
+Per-sink delete/retry independence (fanout_test 484-616); permanent-vs-transient drop at plain-sink level (blackbox 311-346); mid-cycle re-add survival via re-add-inside-Push (blackbox 356-385, fanout 757-806); keep-highest-Reversion (4 tests under M3); the sinkFanout seam assertion (7 tests under M5 — contract drift loudly caught); lock discipline never-hold-across-push (the 500ms slow-sink vs 250ms Add bound, 2x margin); errors.As detection of FanoutError at helper level; FanoutSink contract suite; elector F1/F2/F5c/F6 under -race; retry-queue blackbox over the real 5s ticker.
 
 ## Auditor B — nacos + mocks domain
 
-(pending)
+Suites executed: `go test ./pkg/nacos/... ./pkg/discoverycenter/... ./internal/testkit/... -count=1` (all ok) and `-race` (all ok). 8 mutations + an F8-fix PROTOTYPE (mock endpoint + client method + prune switch + 2 new regression tests, red/green validated) in a /tmp repo copy, since destroyed; repo clean. Live nacos 2.1.0 probed with 20 experiments (P1-P20, auditb-* throwaways all cleaned up and verified gone; demo services intact). Nacos 2.1.0 source consulted for the exact hiding filters.
+
+| ID | Sev | Summary | Location (test / production) |
+|---|---|---|---|
+| AUDIT-B-1 | P0 | F8 confirmed and SHARPLY characterized: instance/list hides exactly `enabled=false` instances (probe failure alone does NOT hide — live P7/P10 + nacos source `if (!ip.isEnabled()) continue;`). Spotter ITSELF sets enabled=false on every status-2 push (nacos.go:200-202) — every instance spotter marks unhealthy becomes invisible to its own prune AND to its own GetAll. The unremovable case is any enabled=false entry; DELETE with full tuple still works on hidden entries immediately (P17) | — / nacos.go:108,198-202, client.go:164-178 |
+| AUDIT-B-2 | P0 | nacosmock ListInstances is unfaithful in exactly the F8 dimension: serves enabled=false instances that real nacos hides. Executed lifecycle E3: push {pod-a online, srv-b unhealthy} then push {pod-a} — mock prunes srv-b; real nacos keeps it forever. Two existing tests actively PIN the unfaithful behavior (client_test.go:244, sink_test.go:561) | nacosmock/server.go:302-310 / nacos.go:108,146 |
+| AUDIT-B-3 | P1 | The F7 skip-guard's documented fallback ("PushAll prune owns remote cleanup") is false for enabled=false drift — the exact case the unhealthy lifecycle produces. Register-side sibling of F7 unguarded: status=1/2 with empty Ip passes the filter (rejects only status==1... common.go:95 rejects status 1 only, domain rules.go:90 likewise) → POST 400 (live P4) → permanent-drop → instance silently lost. pushOne's empty-IP guard covers only the offline branch | sink_test.go / nacos.go:180-185,200-206 |
+| AUDIT-B-4 | P1 | Prune "whole service vanished" case: desired is built only from pushed instances — a (service,cluster) with zero pushed instances produces no key, prune never visits it. Providers cannot emit an empty SyncAll (k8s.go:443-455, :279-296 len>0 guards) so the reconcile never happens end-to-end. A decommissioned app's nacos drift (enabled=false or spotter-outage-window) is permanent | — / nacos.go:86-104, k8s.go:443-455,279-296 |
+| AUDIT-B-5 | P2 | nacosmock fidelity table (13 divergences, all live-probed or source-verified): load-bearing are #1 (no enabled filter — the F8 root) and #9 (catalog/instances endpoint absent — blocks the fix); mock is stricter-than-real for clusterName-less register (#6, harmless); DELETE-idempotent-200, ok-text, enabled-default, pagination all faithful | nacosmock/server.go / — |
+| AUDIT-B-6 | P1 | F7 regression pins verified mutation-protected at all 3 layers (M1-M4 each fail the right tests). Residual gaps: retry-queue permanent-drop test drives a plain sink, never the fanout+PushTo nesting (corroborates AUDIT-A-2); register-side empty-IP (B-3) has no pin at all | blackbox_test.go:297-306 / fanout.go:25-59 |
+| AUDIT-B-7 | P2 | discoverycenter: transport-error propagation pinned at client level (M7 caught), but registry-level swallow of transport errors (M8b) escapes the entire discoverycenter suite — notification-on-transport-error (the retry loop's operator signal when Atlas is down) has no regression pin | blackbox/registry tests / client.go:123-135, registry.go:64-75 |
+| AUDIT-B-8 | P2 | Sink policy edges verified correct/benign against live nacos: status 0/1/2/3 all pinned; port=0 accepted and round-trips (live P5); empty clusterName→DEFAULT matches real default; metadata skip matches; deregister-of-nonexistent is idempotent-200 (P2/P3, benign, unpinned) | sink_test.go / nacos.go:172-194,248-253,239-244 |
+
+### Auditor B — F8 fix design (prototype-validated in /tmp: red/green, blast radius measured)
+
+1. client.go: add `ListCatalogInstances(service, cluster)` — GET /nacos/v1/ns/catalog/instances (params serviceName, clusterName, groupName, namespaceId, pageSize=100, pageNo, hasIpCount=false; decode {count, list:[Host]}; paginate; count total in response). Keep ListInstances for GetAll unchanged.
+2. nacos.go prune(): switch nacos.go:108 to ListCatalogInstances(key.service, key.cluster); keep the cluster guard (defense in depth). Treat the 500 "cluster/service is not found!" bodies as empty-list (else a fully-pruned service logs an error every interval; 500 is retriable so no spin either way — decide explicitly). Update the pushOne comment (its "prune owns remote cleanup" claim becomes true only now).
+3. nacosmock: serveInstanceList skips !instance.Enabled (5-line fidelity fix, M6-validated); add serveCatalogInstances (requires serviceName+clusterName, serves ALL instances incl. enabled=false, paginates).
+4. Tests: MUST update the two fidelity-pinning tests (client_test.go:244, sink_test.go:561) and two mock self-tests (server_test.go:112, :371); ADD TestBlackboxSinkPushAllPrunesDisabledRemoteInstance + TestBlackboxSinkPushAllUnhealthyThenVanishedIsPruned (both validated FAIL-pre/PASS-post; they stay green if EITHER mock fidelity or the prune switch lands alone — the fix needs both together).
+5. Worker interaction: pair with AUDIT-A-2 — if prune errors get wrapped per-sink, FanoutError needs Unwrap() []error so Permanent classification survives nesting.
 
 ## Auditor C — providers domain
 
-(pending)
+Suites executed: `go test ./pkg/providers/... -count=1` x2 (ok, no order dependence), `-race` x3 (ok), testkit ok, `-tags e2e` ok (37s). 14 mutation-mindset probes via `go test -overlay` with scratch files in /tmp (repo untouched). Live consul (127.0.0.1:18500) probed with 5 throwaway auditc-* services, all cleaned up and verified gone; k3s read-only. 9 mutations caught, 5 escaped (each documented below).
+
+| ID | Sev | Summary | Location (test / production) |
+|---|---|---|---|
+| AUDIT-C-1 | P1 | k8s formatState NEVER reports crash/error: the post-loop block (conversion.go:350-355) overwrites any non-empty state with "unknown" — CrashLoopBackOff pods (with or without LastTerminationState) probe as state=unknown (executed). InstanceStateError/InstanceStateCrash are unreachable dead values; even without the overwrite, the error-vs-crash distinction is inverted vs its documented meaning. Zero tests reference CrashLoopBackOff | — / conversion.go:335-356, common.go:14-17 |
+| AUDIT-C-2 | P1 | k8s Succeeded/Failed(non-Evicted) pods convert to an offline(3) shell for a LIVE pod (executed: Job-completed pod passes all filters and is pushed as a deregistration while the object still exists in the informer; every 6h full push re-deletes it). Mutation making them ONLINE escapes the entire k8s suite. Also asymmetry: Failed+Evicted→2 but Failed+other→3 | — / conversion.go:218-249 |
+| AUDIT-C-3 | P1 | k8s Running pod with n containers but zero ContainerStatuses converts to online(1)/running/enabled=true — vacuous `ready=true` (executed). Real shape: early Running pod before kubelet reports statuses → traffic routed before containers start. The only empty-statuses test filters on pending-state instead | k8s_whitebox_test.go:839-858 / conversion.go:227-238,265-279 |
+| AUDIT-C-4 | P1 | k8s status=2 (unhealthy) shells with empty Ip escape BOTH the filter (rejects empty Ip only when status==1) and the F7 guard (triggers only when status==3) — executed: Running+Ready=false+PodIP="" → status=2/probing flows to worker; nacos sink registers status-2 (POST with empty ip, also rejected) → the F7 class via a different road; 4xx lands as permanent-drop, 5xx retries on an unfixable request. All three IPless-delete tests use DeletionTimestamp(→3) | k8s_whitebox_test.go:566+ / common.go:97, k8s.go:198, nacos.go:200-206 |
+| AUDIT-C-5 | P1 | k8s CompareAndFlush case-3 pushes atlas leftovers offline with whatever Ip atlas reported (executed: empty-IP atlas record flows through). The nacos sink's empty-IP skip holds, but any other sink receives the shell; the retry PoC treats the resulting 400 as permanent-drop. Test uses remoteInstance() with Ip="1.1.1.1" always | k8s_whitebox_test.go:1018-1043 / k8s.go:366-375 |
+| AUDIT-C-6 | P2 | consul convertSatus matches exactly ONE CheckID "service:"+appcode — live-verified: every real multi-instance deployment marks all-but-one instance unhealthy (consul auto-names checks service:<service-ID> / service:<name>:2). No test models two instances of one appcode or the auto-named shapes; mutation any-passing-check⇒online escapes consul suite AND e2e | — / convertion.go:250-272 |
+| AUDIT-C-7 | P2 | consul node health ignored: serfHealth critical + service check passing ⇒ online/running (scratch probe). Today the passing=1 wire filter masks it; the converter-level rule is untested and wrong in isolation | — / convertion.go:250-272, monitor.go:274 |
+| AUDIT-C-8 | P2 | consul extractDiff add-branch force-overwrites status=1/running/enabled=true regardless of converted health (executed: critical-check instance emitted ONLINE on first appearance) — mutation removing the force-overwrite escapes consul suite AND e2e; semantics undefended | — / consul.go:216-225 |
+| AUDIT-C-9 | P2 | consul debounce idle-time semantics not observable: mutation dropping the idle-time condition passes all three debounce tests (the 50ms poll already collapses the tested burst pattern; the unit tests inject directly into the change channel, bypassing the watch loop) | monitor_test.go / monitor.go:183-203 |
+| AUDIT-C-10 | P2 | consul interval assignment (the past bug, fixed b3578b6) is NOT pinned: the blackbox test overwrites c.interval after construction (lines 445, 494) so deleting the constructor assignment stays green; and e2e fanout_pipeline_test.go:113-118 still carries the factually-wrong "never assigns it" comment — a reader fixing per that comment re-breaks it | blackbox_test.go:404,445,494, e2e comment / consul.go:55-62 |
+| AUDIT-C-11 | P2 | k8s obj2InstanceId returns keys[1]: "ns/sub/pod"→"sub" (executed) — latent (real keys are ns/name) but only 2-slash/no-slash shapes tested; keys[0] mutation IS caught | k8s_whitebox_test.go:1348-1365 / k8s.go:260-269 |
+| AUDIT-C-12 | P2 | NewK8SProvider/NewConsulProvider swallow ants.NewPool error; nil pool panics on first Submit (executed). Latent (NewPool fails only on invalid options); no test can see it since newTestProvider also ignores the error | — / k8s.go:65, consul.go:65 |
+| AUDIT-C-13 | P3 | committed test artifact: pkg/providers/consul/app.log (95KB) tracked in git since 0be3570 (gitignore can't untrack); k8s has an artifact guard, consul has none | — / — |
+| AUDIT-C-14 | P3 | aggregate/controller.go dead code (zero callers; body commented out) — not a gap, but the real composition point (internal/server.go initializeProvidersFromConfig/start/stop) has no provider-ordering tests. k8srobot zero direct tests; unprotected behaviors: enqueue SILENTLY DROPS events when the 4096 queue is full (mass rolling-update burst loses DELETEs with no log/metric); NewRobot fail-fast on one bad kubeconfig takes down ALL clusters; HasSynced is all-AND so one stuck informer blocks the provider forever; monitor busy-wait never checks ctx → Run() never returns | — / k8srobot.go:195-199,120-136,222-230; k8s.go:88-97,133 |
+| AUDIT-C-15 | P3 | consulmock fidelity gaps vs live consul v1.15.10 (measured): mock returns immediately, real consul BLOCKS the full 5s wait → monitor's real change-detection latency is ~5.05s/cycle, 100x the debounce test's clock; ModifyIndex does NOT change on check-status flips (measured) → Reversion stays constant on health transitions so extractDiff's update branch never fires on health changes (propagates only via delete+re-add or full push) — no test pins this; Node.Address shared by all instances on one agent (measured) while convertInstance uses Node.Address as instance Ip → multi-instance collision; e2e fixture's distinct Node addresses are an unreal single-agent shape | consulmock/server.go / monitor.go:148-170, convertion.go:116,97 |
+| AUDIT-C-16 | P3 | fakes.go FakeEventQueue.Add bakes in highest-Reversion-wins (the production policy it should verify, not encode); sampleInstance is the kit's only instance factory and cannot express empty-IP shells (C-4/C-5 shapes) | fakes.go:610-630, fakes_test.go:297-307 / — |
+
+### Auditor C — confirmed reliable (mutation-verified)
+
+F7 regression group (merge-or-drop, idempotent, own-IP-wins — mut1/mut11 fail them); hasInstanceDiff 11-case table (mut2 fails 4); CompareAndFlush cases 1/2/3 + PushAppCodes filter (mut3 fails 2); emitSyncAll/ProcessIntervalFullPush (mut14 fails the empty-guard test); monitor/Run integration incl. robot.Finish (mut10); consul client_factory (14 tests + blackbox — the best-tested file in the domain); consul monitor unit tier incl. watchConsul wire query shape (mut8); consulmock deep-copy isolation + 6x20 concurrency; consul e2e pipeline (field-by-field conversion verification, single-instance only).
 
 ## Deduplicated fix-phase backlog
 
-(to be assembled after all auditors report; seeded with F8: prune blind spot — list via `v1/ns/catalog/instances`, live-verified wire behavior in the plan doc)
+Counts: 41 findings (A:9, B:8, C:16, D:12) — P0×5, P1×14, P2/P3×22. Cross-auditor duplicates merged (D-3≡B-2, D-7≡A-2≡B-6-gap1, C-10≡D-2, B-3≡C-4 partially). Fixes are SERIALIZED in batches via agent-1 + agent-2 review; every batch runs the full matrix before commit.
+
+### Batch 1 — F7/F8 family (P0, production bugs)
+- **F8/AUDIT-B-1+B-2**: catalog-based prune + nacosmock fidelity + 2 regression tests, exactly per auditor-B's validated design (blast radius: 4 tests to update).
+- **AUDIT-A-2/D-7/B-6-gap1**: `FanoutError.Unwrap() []error` + blackbox test: worker over real FanoutSink, nacos member failing with the production-shaped `%w`-wrapped Permanent error → queued key dropped (M7's escape route closed).
+- **AUDIT-A-1**: SyncAll failure-path test — `worker.Handle(SyncAll)` with a failing sink → assert the retry queue holds the batch (mutation M8 survival closed).
+
+### Batch 2 — k8s/consul conversion boundary bugs (P1, production behavior)
+- **AUDIT-C-1**: formatState post-loop overwrite kills crash/error states (CrashLoopBackOff → "unknown"); fix the branch logic + table tests incl. LastTerminationState shapes.
+- **AUDIT-C-2**: Succeeded/Failed(non-Evicted) → offline shell for a live pod; decide semantics (offline push for a live object is at least intentional-ish, but must be PINNED, and Failed+Evicted vs Failed+other asymmetry documented).
+- **AUDIT-C-3**: zero ContainerStatuses ⇒ vacuous online/enabled; treat empty statuses as not-ready (probing/unhealthy).
+- **AUDIT-B-3/C-4**: register-side empty-IP guard in nacos sink pushOne (status 1/2 + empty Ip → skip + warn, mirror of the offline guard) + domain-filter asymmetry pin (D-8).
+
+### Batch 3 — wiring/e2e/queue hardening (P1, test gaps on load-bearing seams)
+- **AUDIT-D-1**: NewServerFromDeps wiring test (etcdmock + fakes.FakeNotifier + lease-revocation → assert the EMERGENCY page fires through the REAL chain).
+- **AUDIT-D-2/C-10**: e2e fanout pipeline real tick (interval 0→1, delete the hand-fed Handle + stale comment); consul interval assignment pin (stop the blackbox from overwriting c.interval).
+- **AUDIT-B-4**: "service fully vanished" prune — lift the empty-list guard on emitSyncAll/flushInstances so an empty full push still triggers PushAll (prune of a decommissioned app), with tests.
+- **AUDIT-A-3**: ghost-sink keys — drop (with a log) keys whose sink is not registered at retry time; record total Len in metrics.
+- **AUDIT-A-4**: NewElectorWithDeps nil-logger defaulting (mirror of NewElectorWithCandidate) + Stop() safety test.
+
+### Batch 4 — soak/e2e observation power (P1/P2, the "next incident is invisible" gaps)
+- **AUDIT-D-5**: soak metricsObserver scraping sync_error_gauge + hard drain bound after churn quiescence.
+- **AUDIT-D-4**: soak finalConvergence reads catalog/instances in addition to instance/list.
+- **AUDIT-D E2E-1/E2E-2**: permanent-4xx chain e2e (nacosmock 400 → real Sink → real worker → queue drop + DELETE request-count ≤2) and empty-IP shell through server wiring.
+- **AUDIT-D-11**: soak Atlas payload equality.
+
+### Batch 5 — hygiene and P2/P3 sweep (as time permits, each still verified)
+- AUDIT-C-13 untrack pkg/providers/consul/app.log; A-6 loggerToPorts pins; C-11 obj2InstanceId >2-slash shapes; C-12 ants error propagation; A-7 dead-code v2 client (delete or document); A-8 aggregate dead code (delete or leave, add mutex or note); B-7 registry transport-error notify pin; C-15 consulmock blocking-query/ModifyIndex/Node.Address fidelity documentation; C-16 fakes policy-baking note; D-6/D-9/D-10/D-12 pins.
+
+### Documented, explicitly NOT fixed (design input, needs product decision)
+- AUDIT-C-6: consul convertSatus single-CheckID semantics (one online instance per appcode per agent) — documented env limitation; changing it changes production health semantics.
+- AUDIT-C-7/C-8: consul node-health/extractDiff force-online — same family, deferred with the C-6 decision.
+- AUDIT-C-9: debounce idle-time observability (timer arithmetic IS pinned; the poll-collapse redundancy noted).
+- AUDIT-B-8 last item / D-12: readiness-200-while-leaderless — accepted retry-holds behavior, to be documented not changed.
