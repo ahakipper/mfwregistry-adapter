@@ -38,11 +38,42 @@ type Sink struct {
 	// remembered (AUDIT-B-4) records every (service, cluster) pair the sink
 	// has ever pushed non-offline instances for — the pairs whose remote
 	// registrations this sink owns. The prune sweeps the pushed pairs UNION
-	// these remembered pairs: a pair whose pushed set becomes empty is the
-	// "every instance of this service vanished upstream" reconcile signal,
-	// and without the memory the prune would have no key for it (an empty
-	// desired map iterates zero pairs), leaving a decommissioned app's
+	// the remembered pairs of the CLUSTERS PRESENT IN THE PUSH: a pair of a
+	// present cluster whose desired set becomes empty is the "every instance
+	// of this service vanished upstream" reconcile signal, and without the
+	// memory the prune would have no key for it (the vanished service drops
+	// out of the desired map entirely), leaving a decommissioned app's
 	// remote registrations as permanent drift.
+	//
+	// The sweep is scoped to the pushed clusters because the cluster name IS
+	// the provider tag (clusterOf returns ins.Provider) while pushes arrive
+	// PER-PROVIDER (each provider's emitSyncAll pushes its own full list
+	// through one shared sink): a push from provider X may only prune pairs
+	// provider X owns. The pre-scoping shape unioned every remembered pair
+	// into every push, so a k8s-only full push gave the ecs pair
+	// (demo-pay-service, ecs) an empty desired set and DELETEd every remote
+	// instance of it — the live delete/re-register flapping incident (the
+	// collision is at the PAIR level, which the host loop's ClusterName
+	// guard cannot see: an ecs pair's hosts ARE ecs-cluster hosts).
+	//
+	// An EMPTY pushed list carries no cluster and therefore no provider
+	// identity (worker.Event has no provider field), so it sweeps NOTHING
+	// remembered — the conservative no-op. The batch-3 semantics (an empty
+	// push wipes every remembered pair) re-opened the cross-provider bug
+	// through the empty door: one provider's empty SyncAll — a k8s informer
+	// glitch, a consul source blip — deleted every OTHER provider's
+	// instances. The vanished-service heal instead rides the same
+	// provider's NON-empty full push: its remaining instances keep the
+	// provider's cluster present in the push, so its vanished services are
+	// swept (and the providers' offline markers — k8s CompareAndFlush
+	// case-3 — delete vanished instances per-instance through Push). The
+	// residual is deliberate: a provider whose ENTIRE source list is empty
+	// no longer auto-heals its remote registrations — a total-empty source
+	// (a cluster with zero pods, a consul catalog with zero services) is
+	// indistinguishable from a broken source view, and its blast radius
+	// must not be every spotter-managed registration; the drift heals the
+	// first time any instance of the pair re-registers, or stays until a
+	// manual clean (documented residual, plan §7.4 language).
 	//
 	// Survivability is one push interval, not a restart: the memory rebuilds
 	// from the next register of each pair (a live service always re-pushes),
@@ -114,20 +145,19 @@ func (s *Sink) Push(triggerTime int64, instances []*instance.Instance) error {
 // (serviceName, clusterName) pair present in the pushed set it lists
 // Nacos's current instances of that service and DELETEs every remote
 // instance of that cluster not in the pushed set. The prune is scoped to
-// clusters present in the data, so a k8s full push never touches
-// ecs-cluster instances — per-provider ownership is preserved end-to-end
-// (plan §7.4).
+// clusters present in the data — both the desired pairs and the remembered
+// sweep — so a k8s full push never touches ecs-cluster instances:
+// per-provider ownership is preserved end-to-end (plan §7.4).
 //
-// The empty-push semantics (AUDIT-B-4): an EMPTY pushed list is not a no-op
-// — it is the "every instance of this provider vanished" reconcile signal.
-// A push of zero instances carries no (service, cluster) key of its own, so
-// the prune additionally sweeps the pairs this sink REMEMBERS from earlier
-// pushes (see the remembered field): each remembered pair with an empty
-// desired set has every remote instance of that pair pruned. Together with
-// the providers emitting their SyncAll event even when the full list is
-// empty, this heals a fully decommissioned service within one push
-// interval. An empty PushAll on a sink with no remembered pairs is still a
-// no-op (nothing is known to be owned).
+// The vanished-service semantics (AUDIT-B-4): a remembered pair of a
+// cluster PRESENT in this push, whose desired set is empty, is the "every
+// instance of this service vanished upstream" signal and has every remote
+// instance pruned — the pushing provider still owns that pair, its other
+// instances keep the cluster in the push, and the vanished service's
+// remote registrations heal within one push interval. An EMPTY pushed list
+// is a conservative no-op: it carries no (service, cluster) key and no
+// provider identity, so the prune sweeps nothing remembered (see the
+// remembered field for why the empty door must not wipe).
 func (s *Sink) PushAll(triggerTime int64, instances []*instance.Instance) error {
 	if err := s.Push(triggerTime, instances); err != nil {
 		return err
@@ -137,10 +167,14 @@ func (s *Sink) PushAll(triggerTime int64, instances []*instance.Instance) error 
 
 // prune removes the remote instances of the pushed (service, cluster) pairs
 // that the pushed set no longer contains. Offline (Status 3) pushed
-// instances are treated as absent, so their remote counterparts are pruned
-// even if the per-instance deregister failed to run. Pairs the sink
-// remembers from earlier pushes are swept with their (possibly empty)
-// desired set — the vanished-service reconcile of AUDIT-B-4.
+// instances are treated as absent — their pair still gets an (empty) desired
+// set, so their remote counterparts are pruned even if the per-instance
+// deregister failed to run. Remembered pairs of the CLUSTERS PRESENT IN
+// THIS PUSH are swept with their (possibly empty) desired set — the
+// vanished-service reconcile of AUDIT-B-4, correctly scoped: the cluster
+// name is the provider tag, so a k8s push sweeps k8s pairs only, never the
+// ecs pairs the consul provider owns. An empty push carries no cluster, so
+// it sweeps nothing remembered.
 //
 // The listing is the CATALOG view (ListCatalogInstances), not the instance
 // list: the instance list hides enabled=false entries — the exact state
@@ -155,6 +189,7 @@ func (s *Sink) prune(instances []*instance.Instance) error {
 	}
 
 	desired := map[clusterKey]map[string]bool{}
+	pushedClusters := map[string]bool{}
 	for _, ins := range instances {
 		if ins == nil {
 			continue
@@ -163,15 +198,19 @@ func (s *Sink) prune(instances []*instance.Instance) error {
 		if desired[key] == nil {
 			desired[key] = map[string]bool{}
 		}
+		pushedClusters[key.cluster] = true
 		if ins.Status != instance.InstanceStatusOffline {
 			desired[key][compositeID(ins)] = true
 		}
 	}
 
 	// Remember the pairs this push asserts ownership of, and union them with
-	// the previously remembered pairs: a pair that drops out of the pushed
-	// set entirely still gets swept (desired stays absent for it), which is
-	// the vanished-service signal.
+	// the remembered pairs of the pushed clusters: a pair of a pushed
+	// cluster that drops out of the pushed set entirely still gets swept
+	// (desired stays absent for it), which is the vanished-service signal —
+	// while a remembered pair of a cluster NOT in this push belongs to a
+	// different provider and must never be swept here (the live incident:
+	// a k8s-only push deleting the ecs pair the consul provider owns).
 	s.rememberedMu.Lock()
 	for key := range desired {
 		s.remembered[clusterKeyOf(key)] = true
@@ -181,6 +220,9 @@ func (s *Sink) prune(instances []*instance.Instance) error {
 		union[key] = wanted
 	}
 	for rememberedKey := range s.remembered {
+		if !pushedClusters[rememberedKey.cluster] {
+			continue // another provider's pair: this push may not sweep it
+		}
 		key := clusterKey(rememberedKey)
 		if _, ok := union[key]; !ok {
 			union[key] = map[string]bool{} // remembered pair, empty desired: prune everything remote

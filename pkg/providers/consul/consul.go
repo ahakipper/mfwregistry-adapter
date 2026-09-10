@@ -349,18 +349,25 @@ func (c *consul) ProcessIntervalFullPush() {
 
 // emitSyncAll pushes the provider's full instance list as one SyncAll event
 // through the existing worker.Handle seam. The event is emitted even when
-// the list is EMPTY (AUDIT-B-4, mirroring the k8s provider): an empty full
-// instance list is the "every instance of this provider vanished" reconcile
-// signal — the empty SyncAll event reaches every sink's PushAll, and the
-// Nacos sink's remembered-pairs sweep prunes the pairs this provider used
-// to own. Suppressing the event on an empty list would leave a
-// decommissioned app's remote registrations as permanent drift.
+// the list is EMPTY (AUDIT-B-4, mirroring the k8s provider): the emission
+// keeps the full-push reconcile cadence uniform — every sink's PushAll runs
+// each interval, and an empty list is a conservative no-op at the Nacos
+// sink (a bare empty push carries no provider identity, so the sink sweeps
+// nothing remembered; wiping every remembered pair on it would be the
+// cross-provider incident — one provider's empty list deleting every other
+// provider's instances, see the Nacos Sink's remembered field). The
+// vanished-service heal rides this event's NON-empty pushes: the pushed
+// instances carry the provider tag (Provider -> clusterName), and the sink
+// prunes the remembered pairs of exactly that cluster whose desired set
+// went empty — this provider's vanished services, never another's.
 //
 // The one exception is a FAILED source read (agent-2 review of the B-4
 // fix): consul's GetAll returns nil on monitor errors too, and an
-// error-time empty SyncAll would drive the nacos prune into deregistering
-// every remembered ecs pair — one consul blip becoming a full nacos ecs
-// outage. When the last GetAll errored, emission is skipped and a warning
+// error-time empty SyncAll would assert a false "everything vanished"
+// full state to every sink — the Nacos sink treats an empty push
+// conservatively (no remembered sweep), but the Atlas full-sync carries
+// the empty list to the server, whose semantics spotter does not own.
+// When the last GetAll errored, emission is skipped and a warning
 // is logged instead; the next tick retries. (The k8s provider needs no
 // equivalent: its informer-cache List cannot error, and the full-push loop
 // starts only after HasSynced.)
@@ -379,7 +386,7 @@ func (c *consul) emitSyncAll() {
 	err := c.sourceErr
 	c.Unlock()
 	if err != nil {
-		log.Logger.Warnf("consul source read failed, skipping the SyncAll emission this tick (an empty push would prune every remembered ecs pair): %s", err.Error())
+		log.Logger.Warnf("consul source read failed, skipping the SyncAll emission this tick (an error-time empty full-sync would assert a false vanished state to every sink): %s", err.Error())
 		return
 	}
 	c.worker.Handle(&worker.Event{

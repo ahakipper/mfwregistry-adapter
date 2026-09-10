@@ -1080,16 +1080,20 @@ func TestBlackboxSinkReadinessGate(t *testing.T) {
 	}
 }
 
-// TestBlackboxSinkPushAllEmptyListPrunesRememberedPairs (AUDIT-B-4): the
-// "service fully vanished" reconcile. PushAll with an EMPTY instance list
-// is not a no-op: the sink remembers every (service, cluster) pair it has
-// pushed, and an empty desired set for a remembered pair means every remote
-// registration of that pair is an orphan and must be pruned. Without the
-// remembered-pairs sweep an empty push produced no desired keys at all, so
-// a decommissioned app's remote registrations (including the enabled=false
-// drift the instance list hides) were permanent. Restart survivability is
-// one register: a pair re-enters the memory on its next non-empty push.
-func TestBlackboxSinkPushAllEmptyListPrunesRememberedPairs(t *testing.T) {
+// TestBlackboxSinkPushAllEmptyListSweepsNothing (the empty-door half of the
+// cross-provider fix, AUDIT-B-4 rescoped): an EMPTY pushed list carries no
+// cluster and therefore no provider identity — worker.Event has no provider
+// field, and the fan-out PushAll hands the sink the bare instance list — so
+// the sink cannot tell WHICH provider went empty. The batch-3 semantics
+// swept every remembered pair on it, which re-opened the live incident
+// through the empty door: a single provider's empty SyncAll (an empty k8s
+// pod list, a consul source blip) deleted EVERY provider's instances. The
+// conservative contract now: an empty push sweeps nothing remembered — no
+// DELETE is issued for pairs the sink owns. (The vanished-service heal
+// rides the provider's non-empty pushes instead, pinned by
+// TestBlackboxSinkPushAllVanishedServicePrunedSameCluster and
+// TestBlackboxSinkPushAllOfflineMarkerPrunesPair.)
+func TestBlackboxSinkPushAllEmptyListSweepsNothing(t *testing.T) {
 	sink, server := newSinkAt(t)
 
 	// Two instances of one (service, cluster) — the pair the sink will own.
@@ -1103,36 +1107,38 @@ func TestBlackboxSinkPushAllEmptyListPrunesRememberedPairs(t *testing.T) {
 	if got := len(server.Instances("pay-user", "k8s")); got != 2 {
 		t.Fatalf("k8s instances after push 1 = %d, want 2; state = %v", got, server.Instances("pay-user", "k8s"))
 	}
-	// An unrelated cluster must never be touched by the k8s pair's sweep.
-	server.SetInstances([]nacosmock.Host{
-		{IP: "10.0.0.9", Port: 8081, Enabled: true, Metadata: map[string]string{"instanceId": "srv-other"}},
-	}, "DEFAULT_GROUP", "pay-user", "ecs")
+	// An unrelated cluster's pair is owned too (the consul provider's).
+	ecsPair := []*instance.Instance{domainInstance("srv-a", "pay-user", "10.0.0.9", 8081, "ecs", 1)}
+	if err := sink.PushAll(1, ecsPair); err != nil {
+		t.Fatalf("PushAll(ecs pair) error = %v", err)
+	}
 
-	// Push 2: the empty list — every instance of the service vanished
-	// upstream. Both remembered-pair registrations must be pruned.
+	// The empty push — provider identity unknowable. Nothing is swept.
 	if err := sink.PushAll(2, nil); err != nil {
-		t.Fatalf("PushAll(empty) error = %v", err)
+		t.Fatalf("PushAll(empty) error = %v, want nil (the conservative no-op)", err)
 	}
 
-	if got := server.Instances("pay-user", "k8s"); len(got) != 0 {
-		t.Fatalf("k8s instances after empty push = %v, want 0 (both pruned)", got)
+	if got := len(server.Instances("pay-user", "k8s")); got != 2 {
+		t.Fatalf("k8s instances after the empty push = %d, want 2 (an empty push sweeps nothing remembered)", got)
 	}
-	if deregisterRequest(server, "10.0.0.1", 8080) == nil {
-		t.Fatalf("no DELETE of 10.0.0.1; requests = %v", server.Requests())
-	}
-	if deregisterRequest(server, "10.0.0.2", 8080) == nil {
-		t.Fatalf("no DELETE of 10.0.0.2; requests = %v", server.Requests())
-	}
-	// Per-provider ownership still holds: the ecs registration is untouched.
 	if got := len(server.Instances("pay-user", "ecs")); got != 1 {
-		t.Fatalf("ecs instances after the k8s empty push = %d, want 1 (other cluster untouched)", got)
+		t.Fatalf("ecs instances after the empty push = %d, want 1 (an empty push sweeps nothing remembered)", got)
+	}
+	for _, ip := range []string{"10.0.0.1", "10.0.0.2", "10.0.0.9"} {
+		for _, request := range server.Requests() {
+			if request.Method == "DELETE" && request.Query.Get("ip") == ip {
+				t.Fatalf("the empty push issued a DELETE of %s; requests = %v", ip, server.Requests())
+			}
+		}
 	}
 
-	// A second empty push is the steady state of the fully pruned pair: no
-	// error (a clean pair lists nothing; the not-found tolerance applies to
-	// the real server's 500), and the ecs cluster is still untouched.
+	// The conservative no-op is idempotent: a second empty push is the same
+	// steady state.
 	if err := sink.PushAll(3, nil); err != nil {
-		t.Fatalf("PushAll(second empty) error = %v, want nil (steady state)", err)
+		t.Fatalf("PushAll(second empty) error = %v, want nil", err)
+	}
+	if got := len(server.Instances("pay-user", "k8s")); got != 2 {
+		t.Fatalf("k8s instances after the second empty push = %d, want 2", got)
 	}
 	if got := len(server.Instances("pay-user", "ecs")); got != 1 {
 		t.Fatalf("ecs instances after the second empty push = %d, want 1", got)
@@ -1141,7 +1147,9 @@ func TestBlackboxSinkPushAllEmptyListPrunesRememberedPairs(t *testing.T) {
 
 // TestBlackboxSinkPushAllEmptyListNoRememberedPairsIsNoop: an empty push on
 // a sink that owns nothing must stay a no-op — the remembered-pairs sweep
-// may not fabricate work for services the sink never registered.
+// may not fabricate work for services the sink never registered. (With the
+// scoped sweep this is subsumed by the empty-list contract, but it stays as
+// the direct pin of the own-nothing corner.)
 func TestBlackboxSinkPushAllEmptyListNoRememberedPairsIsNoop(t *testing.T) {
 	sink, server := newSinkAt(t)
 	// Remote state exists (someone else's registrations), the sink never
@@ -1158,5 +1166,164 @@ func TestBlackboxSinkPushAllEmptyListNoRememberedPairsIsNoop(t *testing.T) {
 	}
 	if deregisterRequest(server, "10.0.0.7", 8080) != nil {
 		t.Fatal("an empty push with no remembered pairs deregistered a foreign instance")
+	}
+}
+
+// TestBlackboxSinkPushAllCrossProviderNeverPrunesOtherProvider (THE live
+// incident, the P0 this fix exists for): the sink is shared by both
+// providers, pushes arrive per-provider, and the remembered map is global —
+// so the union sweep of a k8s-only push used to give the ecs pair an empty
+// desired set and DELETE every remote instance of it (demo-pay-service
+// flapping 0↔2 every push interval). The scoping invariant: a PushAll whose
+// pushed instances are all cluster X may only sweep remembered pairs of
+// cluster X.
+func TestBlackboxSinkPushAllCrossProviderNeverPrunesOtherProvider(t *testing.T) {
+	sink, server := newSinkAt(t)
+
+	// 1. The consul provider's push registers the pay instances under the
+	// ecs cluster — the pair (demo-pay-service, ecs) enters remembered.
+	consulPush := []*instance.Instance{
+		domainInstance("srv-pay-1", "demo-pay-service", "127.0.0.1", 9848, "ecs", 1),
+		domainInstance("srv-pay-2", "demo-pay-service", "127.0.0.1", 8848, "ecs", 1),
+	}
+	if err := sink.PushAll(1, consulPush); err != nil {
+		t.Fatalf("PushAll(consul) error = %v", err)
+	}
+	if got := len(server.Instances("demo-pay-service", "ecs")); got != 2 {
+		t.Fatalf("ecs instances after the consul push = %d, want 2; state = %v", got, server.Instances("demo-pay-service", "ecs"))
+	}
+
+	// 2. The k8s provider's full push carries ONLY its own instances (a
+	// different service, the k8s cluster). The pre-fix prune unioned the
+	// remembered (demo-pay-service, ecs) pair into this push with an empty
+	// desired set and deleted both pay instances.
+	k8sPush := []*instance.Instance{
+		domainInstance("pod-a", "demo-user", "10.0.0.1", 8080, "k8s", 1),
+		domainInstance("pod-b", "demo-user", "10.0.0.2", 8080, "k8s", 1),
+	}
+	if err := sink.PushAll(2, k8sPush); err != nil {
+		t.Fatalf("PushAll(k8s only) error = %v", err)
+	}
+
+	// 3. The pay instances SURVIVE the k8s push: no DELETE was issued for
+	// any ecs-pair instance, and the pair is still registered.
+	if got := len(server.Instances("demo-pay-service", "ecs")); got != 2 {
+		t.Fatalf("ecs instances after the k8s-only push = %d, want 2 (the cross-provider sweep must never touch them); state = %v",
+			got, server.Instances("demo-pay-service", "ecs"))
+	}
+	for _, ip := range []string{"127.0.0.1"} {
+		for _, port := range []int{9848, 8848} {
+			if deregisterRequest(server, ip, port) != nil {
+				t.Fatalf("the k8s-only push issued a DELETE of %s#%d (the ecs pair the consul provider owns); requests = %v",
+					ip, port, server.Requests())
+			}
+		}
+	}
+
+	// 4. Same-provider scoping still prunes: the consul provider's next full
+	// list WITHOUT the pay service — the ecs cluster stays present through
+	// the surviving demo-order instance, so the vanished (demo-pay-service,
+	// ecs) pair is swept with an empty desired set.
+	consulPush2 := []*instance.Instance{
+		domainInstance("srv-order-1", "demo-order", "127.0.0.2", 9849, "ecs", 1),
+	}
+	if err := sink.PushAll(3, consulPush2); err != nil {
+		t.Fatalf("PushAll(consul without pay) error = %v", err)
+	}
+	if got := len(server.Instances("demo-pay-service", "ecs")); got != 0 {
+		t.Fatalf("ecs pay instances after the same-provider vanished push = %d, want 0 (both pruned); state = %v",
+			got, server.Instances("demo-pay-service", "ecs"))
+	}
+	if deregisterRequest(server, "127.0.0.1", 9848) == nil {
+		t.Fatalf("no DELETE of the vanished pay instance 127.0.0.1#9848; requests = %v", server.Requests())
+	}
+	if deregisterRequest(server, "127.0.0.1", 8848) == nil {
+		t.Fatalf("no DELETE of the vanished pay instance 127.0.0.1#8848; requests = %v", server.Requests())
+	}
+	if got := len(server.Instances("demo-order", "ecs")); got != 1 {
+		t.Fatalf("ecs order instances after the vanished push = %d, want 1 (the pushed survivor)", got)
+	}
+}
+
+// TestBlackboxSinkPushAllVanishedServicePrunedSameCluster (the B-4 heal in
+// its rescoped form): a provider whose full push keeps its cluster present
+// (through any surviving instance of the same provider) but drops a
+// remembered service entirely has that vanished pair's remote registrations
+// pruned — the empty-desired sweep, scoped to the pushing provider's
+// cluster. The pair heals without an offline marker AND without the
+// destructive empty push: the vanished service simply vanishes from the
+// pushed set while a sibling instance keeps the cluster in it.
+func TestBlackboxSinkPushAllVanishedServicePrunedSameCluster(t *testing.T) {
+	sink, server := newSinkAt(t)
+
+	// Push 1: two services under the k8s cluster.
+	first := []*instance.Instance{
+		domainInstance("pod-a", "pay-user", "10.0.0.1", 8080, "k8s", 1),
+		domainInstance("pod-c", "other-app", "10.0.0.3", 8080, "k8s", 1),
+	}
+	if err := sink.PushAll(1, first); err != nil {
+		t.Fatalf("PushAll(push 1) error = %v", err)
+	}
+
+	// Push 2: pay-user vanished upstream — other-app's instance keeps the
+	// k8s cluster present in the push, so the remembered (pay-user, k8s)
+	// pair sweeps with an empty desired set.
+	second := []*instance.Instance{
+		domainInstance("pod-c", "other-app", "10.0.0.3", 8080, "k8s", 1),
+	}
+	if err := sink.PushAll(2, second); err != nil {
+		t.Fatalf("PushAll(push 2) error = %v", err)
+	}
+
+	if got := len(server.Instances("pay-user", "k8s")); got != 0 {
+		t.Fatalf("pay-user k8s instances after the vanished-service push = %d, want 0 (the remembered pair swept); state = %v",
+			got, server.Instances("pay-user", "k8s"))
+	}
+	if deregisterRequest(server, "10.0.0.1", 8080) == nil {
+		t.Fatalf("no DELETE of the vanished pay-user instance; requests = %v", server.Requests())
+	}
+	if got := len(server.Instances("other-app", "k8s")); got != 1 {
+		t.Fatalf("other-app instances after the vanished-service push = %d, want 1 (the pushed survivor)", got)
+	}
+}
+
+// TestBlackboxSinkPushAllOfflineMarkerPrunesPair (the offline-marker heal):
+// the provider's CompareAndFlush case-3 route for a vanished service — an
+// offline (Status 3) marker instance whose Provider field keeps the pair
+// tagged. The marker creates the desired pair with an EMPTY wanted set (the
+// composite id is only added for non-offline instances), so the prune
+// deletes every remote instance of the pair: the vanished service heals
+// through a push that carries the provider identity, never through the
+// destructive empty push.
+func TestBlackboxSinkPushAllOfflineMarkerPrunesPair(t *testing.T) {
+	sink, server := newSinkAt(t)
+
+	// Push 1: inst-A online — the pair registers.
+	first := []*instance.Instance{
+		domainInstance("srv-a", "pay-user", "10.0.0.1", 8080, "ecs", 1),
+	}
+	if err := sink.PushAll(1, first); err != nil {
+		t.Fatalf("PushAll(online) error = %v", err)
+	}
+	if got := len(server.Instances("pay-user", "ecs")); got != 1 {
+		t.Fatalf("ecs instances after the online push = %d, want 1; state = %v", got, server.Instances("pay-user", "ecs"))
+	}
+
+	// Push 2: the offline marker (Status 3, with the ip and Provider kept).
+	// The per-instance policy deregisters it, and the prune's desired pair
+	// holds an empty wanted set — a remote instance the deregister missed
+	// (or that came back between the two) is swept too. Here the pair's
+	// single remote instance is removed by the sweep even though the
+	// per-instance deregister already ran.
+	offlineMarker := []*instance.Instance{
+		domainInstance("srv-a", "pay-user", "10.0.0.1", 8080, "ecs", 3),
+	}
+	if err := sink.PushAll(2, offlineMarker); err != nil {
+		t.Fatalf("PushAll(offline marker) error = %v", err)
+	}
+
+	if got := len(server.Instances("pay-user", "ecs")); got != 0 {
+		t.Fatalf("ecs instances after the offline-marker push = %d, want 0 (the pair's remote instance pruned); state = %v",
+			got, server.Instances("pay-user", "ecs"))
 	}
 }

@@ -485,10 +485,13 @@ func TestBlackboxConsulIntervalFullPushEmitsSyncAll(t *testing.T) {
 // TestBlackboxConsulIntervalFullPushEmitsEmptySyncAllWithoutInstances: a
 // tick whose consul source is empty (GetAll returns nothing) still emits
 // exactly one SyncAll event carrying an EMPTY data list (AUDIT-B-4,
-// mirroring the k8s provider): the empty full list is the "every instance
-// of this provider vanished" reconcile signal — every sink's PushAll
-// receives it and the Nacos sink's remembered-pairs sweep prunes the pairs
-// this provider used to own. No incremental (Sync) events may be emitted.
+// mirroring the k8s provider): the emission keeps the full-push reconcile
+// cadence uniform — every sink's PushAll runs each interval. The empty
+// list itself is a conservative no-op at the Nacos sink (a bare empty
+// push carries no provider identity, so nothing remembered is swept — see
+// the sink's remembered field); the vanished-service heal rides the
+// provider's non-empty pushes. No incremental (Sync) events may be
+// emitted.
 func TestBlackboxConsulIntervalFullPushEmitsEmptySyncAllWithoutInstances(t *testing.T) {
 	server := consulmock.Start()
 	defer server.Close()
@@ -568,11 +571,13 @@ func TestBlackboxConsulProviderConstructorAssignsInterval(t *testing.T) {
 // TestBlackboxConsulIntervalFullPushSkipsSyncAllWhenSourceErrors (agent-2
 // review of the AUDIT-B-4 fix): a tick whose consul source READ FAILS must
 // NOT emit a SyncAll event. consul's GetAll returns nil on monitor errors
-// as well as on legit-empty, and an error-time empty SyncAll would drive
-// the nacos PushAll prune into deregistering every remembered ecs pair —
-// one transient consul blip becoming a full nacos ecs discovery outage.
-// The error state is observable via the provider's sourceErr; the healthy
-// side (legit empty still emits) is pinned by
+// as well as on legit-empty, and an error-time empty SyncAll would assert a
+// false "everything vanished" full state to every sink — the Atlas
+// full-sync carries the empty list server-side, whose semantics spotter
+// does not own (the Nacos side is conservative for empty pushes, but the
+// guard protects the whole fan-out). The error state is observable via the
+// provider's sourceErr; the healthy side (legit empty still emits) is
+// pinned by
 // TestBlackboxConsulIntervalFullPushEmitsEmptySyncAllWithoutInstances.
 //
 // The failure is injected the same way monitor_test.go injects API errors:

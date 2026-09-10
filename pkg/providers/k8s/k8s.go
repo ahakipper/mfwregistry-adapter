@@ -465,12 +465,17 @@ func (k *k8s) ProcessIntervalFullPush() {
 
 // emitSyncAll pushes the provider's full instance list as one SyncAll event
 // through the existing worker.Handle seam. The event is emitted even when
-// the list is EMPTY (AUDIT-B-4): an empty full instance list is exactly the
-// "every instance of this provider vanished" reconcile signal — the empty
-// SyncAll event reaches every sink's PushAll, and the Nacos sink's
-// remembered-pairs sweep prunes the pairs this provider used to own.
-// Suppressing the event on an empty list would leave a decommissioned
-// app's remote registrations as permanent drift.
+// the list is EMPTY (AUDIT-B-4): the emission keeps the full-push reconcile
+// cadence uniform — every sink's PushAll runs each interval, and an empty
+// list is a conservative no-op at the Nacos sink (a bare empty push carries
+// no provider identity, so the sink sweeps nothing remembered; wiping every
+// remembered pair on it would be the cross-provider incident — one
+// provider's empty list deleting every other provider's instances, see the
+// Nacos Sink's remembered field). The vanished-service heal rides this
+// event's NON-empty pushes: the pushed instances carry the provider tag
+// (Provider -> clusterName), and the sink prunes the remembered pairs of
+// exactly that cluster whose desired set went empty — the provider's
+// vanished services, never another provider's.
 func (k *k8s) emitSyncAll() {
 	all := k.GetAll()
 	k.worker.Handle(&worker.Event{

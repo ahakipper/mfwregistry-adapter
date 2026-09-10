@@ -1475,12 +1475,14 @@ func TestProcessIntervalFullPushEmitsSyncAllAfterCompareAndFlush(t *testing.T) {
 
 // TestProcessIntervalFullPushEmitsEmptySyncAllWithoutInstances: a tick whose
 // provider source is empty still emits exactly one SyncAll event carrying an
-// EMPTY data list (AUDIT-B-4): the empty full list is the "every instance of
-// this provider vanished" reconcile signal — every sink's PushAll receives
-// it and the Nacos sink's remembered-pairs sweep prunes the pairs this
-// provider used to own. No incremental (Sync) events may be emitted. The
-// pre-B-4 behavior (suppressing the event entirely) left a decommissioned
-// app's remote registrations as permanent drift.
+// EMPTY data list (AUDIT-B-4): the emission keeps the full-push reconcile
+// cadence uniform — every sink's PushAll runs each interval. The empty list
+// itself is a conservative no-op at the Nacos sink (a bare empty push
+// carries no provider identity, so nothing remembered is swept — see the
+// sink's remembered field); the vanished-service heal rides the provider's
+// non-empty pushes. No incremental (Sync) events may be emitted. The
+// pre-B-4 behavior (suppressing the event entirely) broke the cadence for
+// no benefit: the next non-empty push would reconcile everything anyway.
 func TestProcessIntervalFullPushEmitsEmptySyncAllWithoutInstances(t *testing.T) {
 	robot := newFakeRobot(nil, nil, false)
 	w := &fakeWorker{getAllResponse: &sv.InstanceList{}}
