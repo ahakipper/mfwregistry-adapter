@@ -109,6 +109,152 @@ func TestDeregisterMissingParamsRejected(t *testing.T) {
 	}
 }
 
+// TestClusterUpdateStoresConfig: PUT /nacos/v1/ns/cluster stores the cluster
+// configuration per (service, group, cluster) — the endpoint the Nacos sink
+// calls to disable the server-side health check (healthChecker
+// {"type":"NONE"}) — and answers the plain-text "ok" like the register
+// endpoint. The recorded configuration is observable through ClusterConfig,
+// a repeated PUT re-writes it (idempotent), and the configuration is
+// independent per cluster and per service.
+//
+// The mock's missing-param wording is its own ("Param 'x' is required");
+// the real server's differs — see serveCluster's comment. Only the 400
+// class is contractual.
+func TestClusterUpdateStoresConfig(t *testing.T) {
+	server := Start()
+	defer server.Close()
+
+	form := map[string]string{
+		"serviceName":           "pay-user",
+		"clusterName":           "k8s",
+		"checkPort":             "0",
+		"useInstancePort4Check": "false",
+		"healthChecker":         `{"type":"NONE"}`,
+		"groupName":             "DEFAULT_GROUP",
+		"namespaceId":           "public",
+	}
+	status, body := doForm(t, server, http.MethodPut, "/nacos/v1/ns/cluster", form)
+	if status != http.StatusOK {
+		t.Fatalf("PUT /nacos/v1/ns/cluster status = %d, want %d; body: %s", status, http.StatusOK, body)
+	}
+	if body != "ok" {
+		t.Fatalf("PUT /nacos/v1/ns/cluster body = %q, want the Nacos success text %q", body, "ok")
+	}
+
+	config := server.ClusterConfig("pay-user", "DEFAULT_GROUP", "k8s")
+	if config == nil {
+		t.Fatal("ClusterConfig(pay-user, DEFAULT_GROUP, k8s) = nil, want the stored configuration")
+	}
+	if config.ServiceName != "pay-user" || config.ClusterName != "k8s" || config.GroupName != "DEFAULT_GROUP" {
+		t.Fatalf("stored configuration identity = %s/%s/%s, want pay-user/DEFAULT_GROUP/k8s", config.ServiceName, config.GroupName, config.ClusterName)
+	}
+	if config.NamespaceID != "public" {
+		t.Fatalf("stored configuration namespace = %q, want public", config.NamespaceID)
+	}
+	if config.CheckPort != 0 || config.UseInstancePort4Check {
+		t.Fatalf("stored configuration checkPort/useInstancePort4Check = %d/%v, want 0/false", config.CheckPort, config.UseInstancePort4Check)
+	}
+	if config.HealthCheckerType != "NONE" {
+		t.Fatalf("stored configuration health checker type = %q, want NONE (the server-side health check off)", config.HealthCheckerType)
+	}
+
+	// Getter isolation: mutating the returned snapshot does not corrupt the
+	// server's stored configuration.
+	config.HealthCheckerType = "TAMPERED"
+	if got := server.ClusterConfig("pay-user", "DEFAULT_GROUP", "k8s").HealthCheckerType; got != "NONE" {
+		t.Fatalf("ClusterConfig() snapshot leaked a mutation: health checker type = %q, want NONE", got)
+	}
+
+	// Isolation per cluster and per service: another cluster of the same
+	// service and the same cluster of another service were never configured.
+	if got := server.ClusterConfig("pay-user", "DEFAULT_GROUP", "ecs"); got != nil {
+		t.Fatalf("ClusterConfig(pay-user, ecs) = %+v, want nil (never configured)", got)
+	}
+	if got := server.ClusterConfig("other-app", "DEFAULT_GROUP", "k8s"); got != nil {
+		t.Fatalf("ClusterConfig(other-app, k8s) = %+v, want nil (never configured)", got)
+	}
+
+	// An unconfigured pair with a re-written health checker value updates
+	// the stored record (a repeated PUT is a re-write).
+	form["healthChecker"] = `{"type":"TCP"}` + " " // trailing whitespace: still valid JSON
+	form["checkPort"] = "1"
+	form["useInstancePort4Check"] = "true"
+	status, body = doForm(t, server, http.MethodPut, "/nacos/v1/ns/cluster", form)
+	if status != http.StatusOK {
+		t.Fatalf("repeated PUT status = %d, want %d; body: %s", status, http.StatusOK, body)
+	}
+	updated := server.ClusterConfig("pay-user", "DEFAULT_GROUP", "k8s")
+	if updated.HealthCheckerType != "TCP" || updated.CheckPort != 1 || !updated.UseInstancePort4Check {
+		t.Fatalf("re-written configuration = %+v, want checker TCP, checkPort 1, useInstancePort4Check true", updated)
+	}
+}
+
+// TestClusterUpdateRejectsMissingAndMalformedParams: the cluster update
+// requires serviceName, clusterName, checkPort, useInstancePort4Check and a
+// healthChecker that parses as a JSON object with a type field — each
+// omission or malformation answers 400, never a silent default.
+func TestClusterUpdateRejectsMissingAndMalformedParams(t *testing.T) {
+	server := Start()
+	defer server.Close()
+
+	full := map[string]string{
+		"serviceName":           "pay-user",
+		"clusterName":           "k8s",
+		"checkPort":             "0",
+		"useInstancePort4Check": "false",
+		"healthChecker":         `{"type":"NONE"}`,
+	}
+	without := func(key string) map[string]string {
+		form := make(map[string]string, len(full))
+		for k, v := range full {
+			form[k] = v
+		}
+		delete(form, key)
+		return form
+	}
+	tests := []struct {
+		name string
+		form map[string]string
+	}{
+		{name: "missing serviceName", form: without("serviceName")},
+		{name: "missing clusterName", form: without("clusterName")},
+		{name: "missing checkPort", form: without("checkPort")},
+		{name: "missing useInstancePort4Check", form: without("useInstancePort4Check")},
+		{name: "missing healthChecker", form: without("healthChecker")},
+		{name: "invalid checkPort", form: map[string]string{
+			"serviceName": "pay-user", "clusterName": "k8s", "checkPort": "http",
+			"useInstancePort4Check": "false", "healthChecker": `{"type":"NONE"}`,
+		}},
+		{name: "healthChecker is not JSON", form: map[string]string{
+			"serviceName": "pay-user", "clusterName": "k8s", "checkPort": "0",
+			"useInstancePort4Check": "false", "healthChecker": "{not-json",
+		}},
+		{name: "healthChecker has no type field", form: map[string]string{
+			"serviceName": "pay-user", "clusterName": "k8s", "checkPort": "0",
+			"useInstancePort4Check": "false", "healthChecker": `{}`,
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, body := doForm(t, server, http.MethodPut, "/nacos/v1/ns/cluster", tt.form)
+			if status != http.StatusBadRequest {
+				t.Fatalf("PUT /nacos/v1/ns/cluster (%s) status = %d, want %d; body: %s", tt.name, status, http.StatusBadRequest, body)
+			}
+		})
+	}
+
+	// Nothing was stored by the rejected requests.
+	if got := server.ClusterConfig("pay-user", "DEFAULT_GROUP", "k8s"); got != nil {
+		t.Fatalf("ClusterConfig after rejected requests = %+v, want nil (nothing stored)", got)
+	}
+
+	// Only PUT is the update verb; the endpoint rejects other methods.
+	status, _ := doForm(t, server, http.MethodPost, "/nacos/v1/ns/cluster", full)
+	if status != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /nacos/v1/ns/cluster status = %d, want %d (PUT only)", status, http.StatusMethodNotAllowed)
+	}
+}
+
 // TestListInstancesReturnsServiceInstances: the list endpoint answers for
 // the whole service (group-scoped) with the F0-observed v2.1.0 hosts shape —
 // and HIDES the disabled ecs host, the real Nacos view filter (nacos

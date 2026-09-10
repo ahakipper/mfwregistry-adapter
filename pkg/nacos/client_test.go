@@ -144,6 +144,74 @@ func TestBlackboxClientDeregisterErrorPropagates(t *testing.T) {
 	}
 }
 
+// TestBlackboxClientUpdateClusterSendsQueryForm: the cluster update is a
+// body-less PUT whose parameters ride the QUERY STRING — the v1 servlet does
+// not parse a form body on PUT (verified live against Nacos 2.1.0: the
+// query-string form answers ok, the form-body form does not) — carrying
+// every required parameter with the NONE health checker and the client's
+// fixed group/namespace convention. The stored configuration (the mock's
+// record of the wire) carries the same mapping.
+func TestBlackboxClientUpdateClusterSendsQueryForm(t *testing.T) {
+	client, server := newClientAt(t)
+
+	if err := client.UpdateCluster("pay-user", "k8s"); err != nil {
+		t.Fatalf("UpdateCluster(pay-user, k8s) error = %v", err)
+	}
+
+	requests := server.Requests()
+	if len(requests) != 1 {
+		t.Fatalf("requests = %d, want 1 (the cluster update)", len(requests))
+	}
+	got := requests[0]
+	if got.Method != "PUT" || got.Path != "/nacos/v1/ns/cluster" {
+		t.Fatalf("cluster update request = %s %s, want PUT /nacos/v1/ns/cluster", got.Method, got.Path)
+	}
+	// The parameters are on the query string (the recorded Query IS the
+	// URL's query), never a form body — a body would be invisible to the
+	// real servlet and silently dropped.
+	want := map[string]string{
+		"serviceName":           "pay-user",
+		"clusterName":           "k8s",
+		"checkPort":             "0",
+		"useInstancePort4Check": "false",
+		"healthChecker":         `{"type":"NONE"}`,
+		"groupName":             "DEFAULT_GROUP",
+		"namespaceId":           "public",
+	}
+	for key, value := range want {
+		if got.Query.Get(key) != value {
+			t.Fatalf("cluster update query[%s] = %q, want %q (all: %v)", key, got.Query.Get(key), value, got.Query)
+		}
+	}
+
+	// The stored state carries the same mapping: the NONE checker.
+	config := server.ClusterConfig("pay-user", "DEFAULT_GROUP", "k8s")
+	if config == nil || config.HealthCheckerType != "NONE" {
+		t.Fatalf("stored cluster config = %+v, want the NONE health checker", config)
+	}
+}
+
+// TestBlackboxClientUpdateCluster400AnswerIsPermanentAPIError: a 4xx answer
+// to the cluster update (a malformed-parameter rejection) surfaces as
+// *nacos.APIError with Permanent() true — the same classification contract
+// as every other endpoint.
+func TestBlackboxClientUpdateCluster400AnswerIsPermanentAPIError(t *testing.T) {
+	client, server := newClientAt(t)
+	server.SetStatus(400)
+
+	err := client.UpdateCluster("pay-user", "k8s")
+	if err == nil {
+		t.Fatal("UpdateCluster() error = nil, want the HTTP 400 error")
+	}
+	var apiErr *nacos.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("UpdateCluster() error = %T (%v), want *nacos.APIError", err, err)
+	}
+	if !apiErr.Permanent() {
+		t.Fatalf("APIError.Permanent() = false for status %d, want true (4xx)", apiErr.Status)
+	}
+}
+
 // TestBlackboxClient400AnswerIsPermanentAPIError: a 4xx answer surfaces as
 // *nacos.APIError with Permanent() true — the request itself is rejected, so
 // the retry queue must be able to classify and drop it (the live incident:

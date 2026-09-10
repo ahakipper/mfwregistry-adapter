@@ -20,7 +20,10 @@ const SinkName = "nacos"
 
 // Sink is the Nacos ports.InstanceSink: it maps domain instances onto the
 // Nacos v1 OpenAPI (plan §7.3) and owns the PushAll prune reconcile
-// (plan §7.4).
+// (plan §7.4). It also configures every (service, cluster) pair it
+// registers with the NONE health checker (UpdateCluster), so Nacos's own
+// server-side health check never runs on spotter-managed data — spotter is
+// the health authority.
 //
 // Instances are registered PERSISTENT (ephemeral=false): spotter is a
 // replicator asserting the desired state of other people's instances, not a
@@ -47,7 +50,15 @@ type Sink struct {
 	// that vanishes exactly while spotter is down — its drift then heals the
 	// first time any instance of the pair re-registers, or stays until a
 	// manual clean (documented residual, plan §7.4 language).
-	remembered   map[clusterKeyOf]bool
+	remembered map[clusterKeyOf]bool
+	// healthCheckDone records every (service, cluster) pair whose cluster
+	// configuration the sink has successfully applied — the UpdateCluster
+	// PUT that switches Nacos's own server-side health check off (see
+	// ensureClusterHealthCheckDisabled). Applied once per pair per process:
+	// re-applying after a restart (fresh process, empty map) is safe because
+	// the PUT is idempotent, the same survivability contract as remembered.
+	healthCheckDone map[clusterKeyOf]bool
+	// rememberedMu guards remembered and healthCheckDone.
 	rememberedMu sync.Mutex
 }
 
@@ -69,7 +80,12 @@ func NewSink(addr string, logger ports.Logger) (*Sink, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Sink{client: client, logger: client.logger, remembered: map[clusterKeyOf]bool{}}, nil
+	return &Sink{
+		client:          client,
+		logger:          client.logger,
+		remembered:      map[clusterKeyOf]bool{},
+		healthCheckDone: map[clusterKeyOf]bool{},
+	}, nil
 }
 
 // Push applies the per-instance policy of plan §7.3:
@@ -318,7 +334,60 @@ func (s *Sink) register(ins *instance.Instance) error {
 		return fmt.Errorf("nacos: register %s: %w", ins.InstanceId, err)
 	}
 	s.logger.Infof("nacos: registered instance %s as %s", ins.InstanceId, compositeID(ins))
+	s.ensureClusterHealthCheckDisabled(ins.AppCode, clusterOf(ins))
 	return nil
+}
+
+// ensureClusterHealthCheckDisabled applies the cluster configuration that
+// turns Nacos's server-side health check off for one (service, cluster)
+// pair, once per pair per process: the FIRST successful register of a pair
+// follows up its registration with UpdateCluster (healthChecker NONE).
+//
+// WHY (the product decision): spotter's service discovery already owns
+// health authority — the K8s readiness / consul health state arrives as the
+// instance status and drives the enabled flag this sink pushes — so Nacos's
+// independent TCP probes duplicate that authority with worse information:
+// they test ip:port reachability from the Nacos server's own network
+// position, a vantage the workload's clients never share. The audit and the
+// live demo both showed the two channels disagreeing (a persistent instance
+// spotter asserts healthy gets flipped unhealthy by Nacos's probe, with no
+// path back but re-registration). Under NONE, registration alone decides.
+//
+// Trigger discipline: the application rides the register path, never the
+// prune's remember path, so offline-only pushes never configure a pair — a
+// pair becomes this sink's to configure through the same first non-offline
+// push that registers it. There is no batch apply at startup: pairs are
+// configured as they are first pushed, and clusters that existed before this
+// change get configured on the first register after the restart.
+//
+// Failure discipline: a failed PUT logs a warning and does NOT fail the
+// register push — the instance registration itself succeeded, and the
+// cluster configuration is configuration-of-record, not per-instance data —
+// and the pair's marker stays unset, so the next push retries the update
+// (bounded: at most one attempt per pushed instance until it succeeds,
+// self-healing, no retry-queue poisoning). The PUT is idempotent, so a
+// mid-push retry or a restart's fresh-process re-apply is always safe. The
+// mutex is not held across the HTTP call (a 10s-timeout request must not
+// block the prune's remember sweep); pushes are sequential in this sink, and
+// the worst case of concurrent first-registers of one pair is a duplicated
+// idempotent PUT.
+func (s *Sink) ensureClusterHealthCheckDisabled(service, cluster string) {
+	key := clusterKeyOf{service: service, cluster: cluster}
+	s.rememberedMu.Lock()
+	done := s.healthCheckDone[key]
+	s.rememberedMu.Unlock()
+	if done {
+		return
+	}
+	if err := s.client.UpdateCluster(service, cluster); err != nil {
+		s.logger.Warnf("nacos: disabling server-side health check for %s/%s failed, will retry on the next push: %v",
+			service, cluster, err)
+		return
+	}
+	s.rememberedMu.Lock()
+	s.healthCheckDone[key] = true
+	s.rememberedMu.Unlock()
+	s.logger.Infof("nacos: disabled server-side health check for %s/%s", service, cluster)
 }
 
 // deregister deletes one instance by its composite id parameters — the

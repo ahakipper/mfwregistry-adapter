@@ -24,6 +24,23 @@ const instanceIDFormat = "%s#%d#%s#%s@@%s"
 // same default the real Nacos applies.
 const defaultGroupName = "DEFAULT_GROUP"
 
+// defaultNamespaceID is the namespace assumed when a request omits
+// namespaceId, the same default the real Nacos applies (public).
+const defaultNamespaceID = "public"
+
+// ClusterConfig is one stored cluster configuration, the state form of the
+// PUT /nacos/v1/ns/cluster request. A nil ClusterConfig return means the
+// (service, group, cluster) was never configured.
+type ClusterConfig struct {
+	ServiceName           string
+	ClusterName           string
+	GroupName             string
+	NamespaceID           string
+	CheckPort             int
+	UseInstancePort4Check bool
+	HealthCheckerType     string
+}
+
 // Request is an immutable snapshot of a request received by Server.
 type Request struct {
 	Method string
@@ -108,25 +125,36 @@ func fromHost(group, service string, host Host) *Instance {
 // Server is a thread-safe, minimal Nacos v1 OpenAPI server for tests.
 //
 // Endpoints: POST/DELETE /nacos/v1/ns/instance (register/deregister),
-// GET /nacos/v1/ns/instance/list (per-service view query, hides disabled
-// instances like the real one), GET /nacos/v1/ns/catalog/instances (the
-// admin catalog view incl. disabled instances, paginated),
+// PUT /nacos/v1/ns/cluster (the cluster configuration update, e.g. the NONE
+// health checker), GET /nacos/v1/ns/instance/list (per-service view query,
+// hides disabled instances like the real one), GET /nacos/v1/ns/catalog/
+// instances (the admin catalog view incl. disabled instances, paginated),
 // GET /nacos/v1/ns/service/list (paginated service names) and
 // GET /nacos/v1/console/health/readiness. All parameters are form values
-// URL-encoded on the query string, exactly like the real v1 API.
+// URL-encoded on the query string, exactly like the real v1 API — including
+// on PUT, whose form body the real servlet does not parse.
 type Server struct {
 	mu        sync.RWMutex
 	server    *httptest.Server
 	instances map[string]*Instance // keyed by composite id
-	injected  int                  // HTTP status injected on every endpoint; 0 = off
-	delay     time.Duration        // injected per-request delay
+	clusters  map[clusterKey]*ClusterConfig
+	injected  int           // HTTP status injected on every endpoint; 0 = off
+	delay     time.Duration // injected per-request delay
 	requests  []Request
 	closeOnce sync.Once
 }
 
+// clusterKey is the (service, group, cluster) identity of one stored cluster
+// configuration.
+type clusterKey struct {
+	service string
+	group   string
+	cluster string
+}
+
 // Start starts a Nacos mock on a loopback-only HTTP listener.
 func Start() *Server {
-	s := &Server{instances: make(map[string]*Instance)}
+	s := &Server{instances: make(map[string]*Instance), clusters: make(map[clusterKey]*ClusterConfig)}
 	s.server = httptest.NewServer(http.HandlerFunc(s.serveHTTP))
 	return s
 }
@@ -201,6 +229,24 @@ func (s *Server) Requests() []Request {
 	return requests
 }
 
+// ClusterConfig returns a snapshot of the stored cluster configuration of
+// one (service, group, cluster), or nil when the pair was never configured
+// (an empty group addresses the DEFAULT_GROUP, like the real server). The
+// snapshot is independent: mutating it does not corrupt the server's state.
+func (s *Server) ClusterConfig(service, group, cluster string) *ClusterConfig {
+	if group == "" {
+		group = defaultGroupName
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	stored, ok := s.clusters[clusterKey{service: service, group: group, cluster: cluster}]
+	if !ok {
+		return nil
+	}
+	config := *stored
+	return &config
+}
+
 // SetStatus injects an HTTP status returned by every endpoint. 0 restores
 // normal behavior (plan §7.5 failure injection).
 func (s *Server) SetStatus(status int) {
@@ -240,6 +286,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, request *http.Request) {
 	switch {
 	case request.URL.Path == "/nacos/v1/ns/instance":
 		s.serveInstance(w, request)
+	case request.URL.Path == "/nacos/v1/ns/cluster":
+		s.serveCluster(w, request)
 	case request.URL.Path == "/nacos/v1/ns/instance/list":
 		s.serveInstanceList(w, request)
 	case request.URL.Path == "/nacos/v1/ns/catalog/instances":
@@ -283,6 +331,86 @@ func (s *Server) serveInstance(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+}
+
+// serveCluster handles PUT /nacos/v1/ns/cluster: the cluster configuration
+// update (healthChecker/checkPort/useInstancePort4Check), the request the
+// Nacos sink's UpdateCluster sends to switch the server-side health check
+// off ({"type":"NONE"}). The configuration is stored per (service, group,
+// cluster) as configuration-of-record and observable through ClusterConfig;
+// it has NO behavioral coupling to the instance endpoints (the mock never
+// simulated probing anyway). A repeated PUT re-writes the same
+// configuration — the real server's update is equally idempotent.
+//
+// Error fidelity note: the REAL server answers a missing parameter with a
+// different wording ("caused by: Required String parameter 'serviceName'
+// is not present" family); the mock keeps its own "Param 'x' is required"
+// style — clients are expected to treat any 400 as a rejected request, and
+// the exact text is not part of any contract.
+func (s *Server) serveCluster(w http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPut {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	values := request.URL.Query()
+	service := values.Get("serviceName")
+	cluster := values.Get("clusterName")
+	healthChecker := values.Get("healthChecker")
+	if service == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Param 'serviceName' is required"})
+		return
+	}
+	if cluster == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Param 'clusterName' is required"})
+		return
+	}
+	if values.Get("checkPort") == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Param 'checkPort' is required"})
+		return
+	}
+	if values.Get("useInstancePort4Check") == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Param 'useInstancePort4Check' is required"})
+		return
+	}
+	if healthChecker == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Param 'healthChecker' is required"})
+		return
+	}
+	checkPort, err := strconv.Atoi(values.Get("checkPort"))
+	if err != nil || checkPort < 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Param 'checkPort' is not a non-negative integer"})
+		return
+	}
+	// The healthChecker arrives as a JSON string ({"type":"NONE"}); a value
+	// that is not a JSON object with a type field is a rejected request.
+	var checker struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(healthChecker), &checker); err != nil || checker.Type == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Param 'healthChecker' is not a JSON object with a type field"})
+		return
+	}
+	group := values.Get("groupName")
+	if group == "" {
+		group = defaultGroupName
+	}
+	namespace := values.Get("namespaceId")
+	if namespace == "" {
+		namespace = defaultNamespaceID
+	}
+	config := &ClusterConfig{
+		ServiceName:           service,
+		ClusterName:           cluster,
+		GroupName:             group,
+		NamespaceID:           namespace,
+		CheckPort:             checkPort,
+		UseInstancePort4Check: values.Get("useInstancePort4Check") == "true",
+		HealthCheckerType:     checker.Type,
+	}
+	s.mu.Lock()
+	s.clusters[clusterKey{service: service, group: group, cluster: cluster}] = config
+	s.mu.Unlock()
+	writeOK(w)
 }
 
 // serveInstanceList handles GET /nacos/v1/ns/instance/list: every stored

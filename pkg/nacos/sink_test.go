@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -82,6 +84,207 @@ func registerRequest(server *nacosmock.Server, ip string, port int) *nacosmock.R
 	return nil
 }
 
+// clusterUpdateRequests returns every PUT /nacos/v1/ns/cluster request
+// addressing the given (service, cluster) — the UpdateCluster calls the sink
+// issues to disable Nacos's server-side health check.
+func clusterUpdateRequests(server *nacosmock.Server, service, cluster string) []nacosmock.Request {
+	var matched []nacosmock.Request
+	for _, request := range server.Requests() {
+		if request.Method == "PUT" && request.Path == "/nacos/v1/ns/cluster" &&
+			request.Query.Get("serviceName") == service && request.Query.Get("clusterName") == cluster {
+			matched = append(matched, request)
+		}
+	}
+	return matched
+}
+
+// TestBlackboxSinkFirstRegisterDisablesServerSideHealthCheck: the FIRST
+// non-offline push of a (service, cluster) pair follows its register with
+// exactly one UpdateCluster (healthChecker NONE) — the product change:
+// spotter owns health authority (K8s readiness / consul checks drive the
+// pushed enabled flag), so Nacos's own TCP probes must not run on
+// spotter-managed data. The PUT lands AFTER the register it configures.
+func TestBlackboxSinkFirstRegisterDisablesServerSideHealthCheck(t *testing.T) {
+	sink, server := newSinkAt(t)
+
+	ins := domainInstance("pod-a", "pay-user", "10.0.0.1", 8080, "k8s", 1)
+	if err := sink.Push(1, []*instance.Instance{ins}); err != nil {
+		t.Fatalf("Push() error = %v", err)
+	}
+
+	updates := clusterUpdateRequests(server, "pay-user", "k8s")
+	if len(updates) != 1 {
+		t.Fatalf("cluster updates for pay-user/k8s = %d, want exactly 1 (the first register configures the pair); requests = %v",
+			len(updates), server.Requests())
+	}
+	if got := updates[0].Query.Get("healthChecker"); got != `{"type":"NONE"}` {
+		t.Fatalf("cluster update healthChecker = %q, want the NONE checker", got)
+	}
+	// The configuration is recorded as configuration-of-record too.
+	config := server.ClusterConfig("pay-user", "DEFAULT_GROUP", "k8s")
+	if config == nil || config.HealthCheckerType != "NONE" {
+		t.Fatalf("stored cluster config = %+v, want the NONE health checker", config)
+	}
+	// The PUT follows the register, never precedes it.
+	requests := server.Requests()
+	registerIndex, updateIndex := -1, -1
+	for i, request := range requests {
+		if request.Method == "POST" && request.Query.Get("ip") == "10.0.0.1" {
+			registerIndex = i
+		}
+		if request.Method == "PUT" && request.Path == "/nacos/v1/ns/cluster" {
+			updateIndex = i
+		}
+	}
+	if registerIndex == -1 || updateIndex == -1 || updateIndex < registerIndex {
+		t.Fatalf("register at %d, cluster update at %d, want the update after the register; requests = %v",
+			registerIndex, updateIndex, requests)
+	}
+}
+
+// TestBlackboxSinkSecondPushDoesNotReissueClusterUpdate: the applied marker
+// makes the cluster update once-per-pair-per-process — a second push of the
+// same pair registers its instances without another PUT (the update is
+// configuration-of-record, not per-instance data).
+func TestBlackboxSinkSecondPushDoesNotReissueClusterUpdate(t *testing.T) {
+	sink, server := newSinkAt(t)
+
+	pair := []*instance.Instance{
+		domainInstance("pod-a", "pay-user", "10.0.0.1", 8080, "k8s", 1),
+	}
+	if err := sink.Push(1, pair); err != nil {
+		t.Fatalf("Push(1) error = %v", err)
+	}
+	if err := sink.Push(2, pair); err != nil {
+		t.Fatalf("Push(2) error = %v", err)
+	}
+	// A full push of the same pair counts too: the marker survives.
+	if err := sink.PushAll(3, pair); err != nil {
+		t.Fatalf("PushAll(3) error = %v", err)
+	}
+
+	if updates := clusterUpdateRequests(server, "pay-user", "k8s"); len(updates) != 1 {
+		t.Fatalf("cluster updates after three pushes of the same pair = %d, want 1 (the applied marker holds); requests = %v",
+			len(updates), server.Requests())
+	}
+	// A DIFFERENT pair of the same push still gets its own update: per-pair
+	// state, not per-process.
+	other := domainInstance("srv-a", "pay-user", "10.0.0.2", 8081, "ecs", 1)
+	if err := sink.Push(4, []*instance.Instance{other}); err != nil {
+		t.Fatalf("Push(ecs) error = %v", err)
+	}
+	if updates := clusterUpdateRequests(server, "pay-user", "ecs"); len(updates) != 1 {
+		t.Fatalf("cluster updates for pay-user/ecs = %d, want 1 (a new pair configures once)", len(updates))
+	}
+}
+
+// TestBlackboxSinkClusterUpdateFailureDoesNotFailPushAndRetries: a failed
+// cluster update must not fail the register push (the instance registration
+// itself succeeded; the cluster configuration is configuration-of-record),
+// and the pair's applied marker must stay unset so the NEXT push retries
+// the update — bounded, self-healing, no retry-queue poisoning. The failure
+// is injected with a stub HTTP server (the nacosmock's SetStatus knob hits
+// every endpoint, which would fail the register too); once the stub
+// recovers, the retry succeeds and the marker then holds.
+func TestBlackboxSinkClusterUpdateFailureDoesNotFailPushAndRetries(t *testing.T) {
+	var clusterFailures int32
+	var mu sync.Mutex
+	failing := int32(1) // 1: the cluster PUT fails; 0: recovered
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/nacos/v1/ns/cluster" {
+			mu.Lock()
+			failingNow := atomic.LoadInt32(&failing) == 1
+			if failingNow {
+				clusterFailures++
+			}
+			mu.Unlock()
+			if failingNow {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = io.WriteString(w, "injected cluster failure")
+				return
+			}
+		}
+		writeStubOK(w)
+	}))
+	defer stub.Close()
+	sink, err := nacos.NewSink(stub.URL, &fakes.FakeLogger{})
+	if err != nil {
+		t.Fatalf("NewSink(stub) error = %v", err)
+	}
+
+	pair := []*instance.Instance{domainInstance("pod-a", "pay-user", "10.0.0.1", 8080, "k8s", 1)}
+	// Push 1: the register succeeds, the cluster update fails — the push
+	// still returns nil.
+	if err := sink.Push(1, pair); err != nil {
+		t.Fatalf("Push() with the failing cluster update error = %v, want nil (the register succeeded)", err)
+	}
+	mu.Lock()
+	failures := clusterFailures
+	mu.Unlock()
+	if failures != 1 {
+		t.Fatalf("cluster update failures = %d, want 1", failures)
+	}
+
+	// Push 2 while still failing: the retry happens (the marker never set),
+	// and the push still succeeds.
+	if err := sink.Push(2, pair); err != nil {
+		t.Fatalf("Push(2) with the failing cluster update error = %v, want nil", err)
+	}
+	mu.Lock()
+	failures = clusterFailures
+	mu.Unlock()
+	if failures != 2 {
+		t.Fatalf("cluster update failures after two pushes = %d, want 2 (the failure leaves the pair unapplied, so it retries)", failures)
+	}
+
+	// Recovery: the next push's update succeeds and the marker then holds —
+	// no further attempts.
+	mu.Lock()
+	atomic.StoreInt32(&failing, 0)
+	mu.Unlock()
+	if err := sink.Push(3, pair); err != nil {
+		t.Fatalf("Push(3) after recovery error = %v, want nil", err)
+	}
+	if err := sink.Push(4, pair); err != nil {
+		t.Fatalf("Push(4) after recovery error = %v, want nil", err)
+	}
+	mu.Lock()
+	failures = clusterFailures
+	mu.Unlock()
+	if failures != 2 {
+		t.Fatalf("cluster update failures after recovery = %d, want 2 (the successful update set the marker; no further attempts)", failures)
+	}
+}
+
+// TestBlackboxSinkOfflineOnlyPushesNeverUpdateCluster: the cluster update
+// rides the register path only — an offline push deregisters, an
+// empty-ip shell and an unknown status are skipped, and none of them may
+// configure a pair: a pair becomes this sink's to configure through the
+// same first non-offline push that registers it.
+func TestBlackboxSinkOfflineOnlyPushesNeverUpdateCluster(t *testing.T) {
+	sink, server := newSinkAt(t)
+
+	offline := domainInstance("pod-a", "pay-user", "10.0.0.1", 8080, "k8s", 3)
+	if err := sink.Push(1, []*instance.Instance{offline}); err != nil {
+		t.Fatalf("Push(offline) error = %v", err)
+	}
+	shell := domainInstance("pod-shell", "pay-user", "", 8080, "k8s", 3)
+	if err := sink.Push(2, []*instance.Instance{shell}); err != nil {
+		t.Fatalf("Push(offline empty ip) error = %v", err)
+	}
+	unknown := domainInstance("pod-x", "pay-user", "10.0.0.9", 8082, "k8s", 0)
+	if err := sink.Push(3, []*instance.Instance{unknown}); err != nil {
+		t.Fatalf("Push(unknown status) error = %v", err)
+	}
+
+	requests := server.Requests()
+	for _, request := range requests {
+		if request.Method == "PUT" && request.Path == "/nacos/v1/ns/cluster" {
+			t.Fatalf("offline-only pushes issued a cluster update; requests = %v", requests)
+		}
+	}
+}
+
 func TestBlackboxSinkPushOnlineInstanceRegisters(t *testing.T) {
 	sink, server := newSinkAt(t)
 
@@ -91,8 +294,8 @@ func TestBlackboxSinkPushOnlineInstanceRegisters(t *testing.T) {
 	}
 
 	requests := server.Requests()
-	if len(requests) != 1 {
-		t.Fatalf("requests = %d, want 1 (the register)", len(requests))
+	if len(requests) != 2 {
+		t.Fatalf("requests = %d, want 2 (the register plus the first-register cluster update that disables Nacos's own health check)", len(requests))
 	}
 	got := requests[0]
 	if got.Method != "POST" {
@@ -295,7 +498,10 @@ func TestBlackboxSinkPushSequentialPerInstance(t *testing.T) {
 	}
 
 	// Every instance is registered, in order: sequential per-instance pushes
-	// (plan §7.4: Push applies the per-instance policy).
+	// (plan §7.4: Push applies the per-instance policy). The final request is
+	// the cluster update of the last pair's first register (pod-c's
+	// other-app/ecs pair), which follows its register — the order the
+	// register-then-configure discipline produces.
 	registers := 0
 	var lastSeen int = -1
 	requests := server.Requests()
@@ -308,8 +514,10 @@ func TestBlackboxSinkPushSequentialPerInstance(t *testing.T) {
 	if registers != 3 {
 		t.Fatalf("register requests = %d, want 3", registers)
 	}
-	if lastSeen != len(requests)-1 {
-		t.Fatalf("last request index = %d of %d, want the final request to be a register", lastSeen, len(requests))
+	last := requests[len(requests)-1]
+	if lastSeen != len(requests)-2 || last.Method != "PUT" || last.Path != "/nacos/v1/ns/cluster" {
+		t.Fatalf("last POST at %d of %d, final request = %s %s, want the last register followed by its pair's cluster update",
+			lastSeen, len(requests), last.Method, last.Path)
 	}
 	for _, appCode := range []string{"pay-user", "other-app"} {
 		if got := len(server.Instances(appCode, "k8s")) + len(server.Instances(appCode, "ecs")); got == 0 {

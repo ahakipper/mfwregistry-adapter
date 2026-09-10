@@ -4,8 +4,8 @@
 //
 // The client deliberately uses only net/http, net/url and encoding/json —
 // no SDK dependency, matching the repo's discoverycenter precedent: the
-// needed surface is four endpoints, timeouts stay under our control, and
-// an httptest-based mock (internal/testkit/nacosmock) covers the tests.
+// needed surface is a handful of endpoints, timeouts stay under our control,
+// and an httptest-based mock (internal/testkit/nacosmock) covers the tests.
 package nacos
 
 import (
@@ -45,15 +45,20 @@ const (
 	// enough that one page covers a normal service, small enough to keep
 	// single responses bounded (the plan's default loop size).
 	catalogPageSize = 100
+	// healthCheckerNone is the healthChecker JSON UpdateCluster sends: the
+	// NONE checker, the cluster configuration that switches Nacos's own
+	// server-side health check off (see UpdateCluster).
+	healthCheckerNone = `{"type":"NONE"}`
 )
 
-// Paths of the four v1 endpoints.
+// Paths of the v1 OpenAPI endpoints (and the console readiness probe).
 const (
 	pathInstance    = "/nacos/v1/ns/instance"
 	pathInstanceLis = "/nacos/v1/ns/instance/list"
 	pathServiceList = "/nacos/v1/ns/service/list"
 	pathReadiness   = "/nacos/v1/console/health/readiness"
 	pathCatalogList = "/nacos/v1/ns/catalog/instances"
+	pathCluster     = "/nacos/v1/ns/cluster"
 )
 
 // InstanceParams is the wire form of one instance for register and
@@ -170,6 +175,41 @@ func (c *Client) RegisterInstance(params InstanceParams) error {
 // DeregisterInstance deletes one instance by its composite id parameters.
 func (c *Client) DeregisterInstance(params InstanceParams) error {
 	return c.doForm(http.MethodDelete, pathInstance, params.values())
+}
+
+// UpdateCluster disables Nacos's server-side health check for one (service,
+// cluster) pair: it PUTs the cluster configuration with healthChecker
+// {"type":"NONE"} (PUT /nacos/v1/ns/cluster), the checker under which Nacos
+// stops TCP-probing the cluster's persistent instances and takes registration
+// as the health authority instead. See Sink.register for why spotter wants
+// that.
+//
+// Wire form (verified live against a v2.1.0 server): the servlet does NOT
+// parse a form body on PUT, so every parameter rides the QUERY STRING of a
+// body-less request — exactly the doForm shape (which URL-encodes its values
+// for every method, POST and DELETE included). checkPort and
+// useInstancePort4Check (note the literal "4" in the name) are required by
+// the controller but irrelevant under the NONE checker; they are sent as 0
+// and false. The controller does not read groupName; it is sent anyway to
+// match the client's always-address-the-fixed-group convention.
+// namespaceId is likewise sent explicitly (public). Success answers the same
+// plain-text "ok" as register, and the call is idempotent: repeating the PUT
+// re-writes the same configuration.
+//
+// Side effect to keep in mind (documented, accepted): the PUT REPLACES the
+// cluster's user metadata — the optional metadata param defaults to empty —
+// and spotter never sets cluster metadata, so for this sink the replacement
+// is a no-op.
+func (c *Client) UpdateCluster(serviceName, clusterName string) error {
+	values := url.Values{}
+	values.Set("serviceName", serviceName)
+	values.Set("clusterName", clusterName)
+	values.Set("checkPort", "0")
+	values.Set("useInstancePort4Check", "false")
+	values.Set("healthChecker", healthCheckerNone)
+	values.Set("groupName", DefaultGroup)
+	values.Set("namespaceId", DefaultNamespaceID)
+	return c.doForm(http.MethodPut, pathCluster, values)
 }
 
 // ListInstances returns every instance of one service in DefaultGroup.
@@ -328,9 +368,11 @@ func (e *APIError) Permanent() bool {
 	return e.Status >= 400 && e.Status < 500
 }
 
-// doForm issues one mutating request (register/deregister). Nacos answers
-// "ok" (plain text) on success; any other status is an error carrying the
-// status code and body.
+// doForm issues one mutating request (register/deregister/cluster update).
+// Nacos answers "ok" (plain text) on success; any other status is an error
+// carrying the status code and body. Every parameter rides the URL-encoded
+// query string — including on PUT, whose form body the v1 servlet does not
+// parse (see UpdateCluster).
 func (c *Client) doForm(method, path string, values url.Values) error {
 	target := joinURL(c.baseURL.String(), path)
 	target += "?" + values.Encode()
