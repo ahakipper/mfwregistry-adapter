@@ -1,0 +1,78 @@
+# The burst delete-leg race, per-pod sequences (burst-run window 22:12-22:38 only)
+# Pattern: the burst delete events deregister the pod (the termination updates immediately
+# before the delete are the events that PRODUCED the deregister — there is NO robot event
+# for the pod after its delete; the coalescing queue behaved correctly and is NOT implicated).
+# The re-register is the 60s FULL-PUSH TICK'S PUSH WAVE: the tick's source snapshot was read
+# BEFORE the burst delete events arrived (pre-delete, still containing the pod), and its
+# bounded-parallel register wave (population-scale) landed AFTER the event-path deregister
+# completed — the register races past the delete via the WAVE, not via a queued event. The
+# next 60s tick's CompareAndFlush case-3 then re-deregisters it (the heal).
+
+## obs-pod-1127
+{"level":"INFO","ts":"2026-09-11T22:14:34.569+0800","caller":"logging/logging.go:193","msg":"nacos: registered instance obs-pod-1127 as 10.0.49.248#7096#k8s#DEFAULT_GROUP@@obs-app-6"}
+{"level":"INFO","ts":"2026-09-11T22:15:03.854+0800","caller":"logging/logging.go:193","msg":"nacos: registered instance obs-pod-1127 as 10.0.49.248#7096#k8s#DEFAULT_GROUP@@obs-app-6"}  # the 60s full-push wave's register (22:15:02 tick)
+
+## obs-pod-1128
+{"level":"INFO","ts":"2026-09-11T22:14:34.582+0800","caller":"logging/logging.go:193","msg":"nacos: registered instance obs-pod-1128 as 10.0.49.249#7096#k8s#DEFAULT_GROUP@@obs-app-7"}
+{"level":"INFO","ts":"2026-09-11T22:15:02.523+0800","caller":"logging/logging.go:193","msg":"nacos: registered instance obs-pod-1128 as 10.0.49.249#7096#k8s#DEFAULT_GROUP@@obs-app-7"}  # the 60s full-push wave's register (22:15:02.330 tick)
+
+## obs-pod-1129
+{"level":"INFO","ts":"2026-09-11T22:14:34.594+0800","caller":"logging/logging.go:193","msg":"nacos: registered instance obs-pod-1129 as 10.0.49.250#7096#k8s#DEFAULT_GROUP@@obs-app-8"}
+{"level":"INFO","ts":"2026-09-11T22:15:05.552+0800","caller":"logging/logging.go:193","msg":"nacos: registered instance obs-pod-1129 as 10.0.49.250#7096#k8s#DEFAULT_GROUP@@obs-app-8"}  # the 60s full-push wave's register (22:15:02 tick)
+
+## obs-pod-1148
+{"level":"INFO","ts":"2026-09-11T22:14:34.864+0800","caller":"logging/logging.go:193","msg":"nacos: registered instance obs-pod-1148 as 10.0.50.13#7096#k8s#DEFAULT_GROUP@@obs-app-7"}
+{"level":"INFO","ts":"2026-09-11T22:15:02.523+0800","caller":"logging/logging.go:193","msg":"nacos: registered instance obs-pod-1148 as 10.0.50.13#7096#k8s#DEFAULT_GROUP@@obs-app-7"}  # the 60s full-push wave's register (22:15:02.330 tick)
+{"level":"INFO","ts":"2026-09-11T22:16:03.326+0800","caller":"logging/logging.go:193","msg":"nacos: registered instance obs-pod-1148 as 10.0.50.13#7096#k8s#DEFAULT_GROUP@@obs-app-7"}  # the 60s full-push wave's register (22:16:02.331 tick) — the post-delete re-register
+
+## obs-pod-1150
+{"level":"INFO","ts":"2026-09-11T22:14:34.881+0800","caller":"logging/logging.go:193","msg":"nacos: registered instance obs-pod-1150 as 10.0.50.15#7096#k8s#DEFAULT_GROUP@@obs-app-9"}
+{"level":"INFO","ts":"2026-09-11T22:15:03.150+0800","caller":"logging/logging.go:193","msg":"nacos: registered instance obs-pod-1150 as 10.0.50.15#7096#k8s#DEFAULT_GROUP@@obs-app-9"}  # the 60s full-push wave's register (22:15:02 tick)
+{"level":"INFO","ts":"2026-09-11T22:16:04.027+0800","caller":"logging/logging.go:193","msg":"nacos: registered instance obs-pod-1150 as 10.0.50.15#7096#k8s#DEFAULT_GROUP@@obs-app-9"}  # the 60s full-push wave's register (22:16:02 tick)
+
+## obs-pod-1490
+{"level":"INFO","ts":"2026-09-11T22:19:34.763+0800","caller":"logging/logging.go:193","msg":"nacos: registered instance obs-pod-1490 as 10.0.51.27#7096#k8s#DEFAULT_GROUP@@obs-app-9"}  # the batch create (event path)
+{"level":"INFO","ts":"2026-09-11T22:20:03.028+0800","caller":"logging/logging.go:193","msg":"nacos: registered instance obs-pod-1490 as 10.0.51.27#7096#k8s#DEFAULT_GROUP@@obs-app-9"}  # the 60s full-push wave's register (22:20:02.328 tick)
+
+## obs-pod-2452
+{"level":"INFO","ts":"2026-09-11T22:32:03.715+0800","caller":"logging/logging.go:193","msg":"nacos: registered instance obs-pod-2452 as 10.0.53.119#7096#k8s#DEFAULT_GROUP@@obs-app-11"}  # the batch create (event path)
+{"level":"INFO","ts":"2026-09-11T22:33:02.401+0800","caller":"logging/logging.go:193","msg":"nacos: registered instance obs-pod-2452 as 10.0.53.119#7096#k8s#DEFAULT_GROUP@@obs-app-11"}  # the 60s full-push wave's register (22:33:02.289 tick)
+{"level":"INFO","ts":"2026-09-11T22:33:03.714+0800","caller":"logging/logging.go:193","msg":"nacos: registered instance obs-pod-2452 as 10.0.53.119#7096#k8s#DEFAULT_GROUP@@obs-app-11"}  # the wave tail (bounded-parallel fanout)
+
+## The smoking-gun sequences (delete -> wave re-register -> next-tick case-3 heal)
+
+### batch-25% straggler obs-pod-1490 (10.0.51.27)
+22:19:34.763 registered (the batch create, event path — in-bound 5s up-convergence)
+22:20:03.028 registered (the 60s full-push wave, pre-delete snapshot)
+22:21:02.539 termination UPDATE (robot event — this update, not a late one,
+             PRODUCED the deregister; no robot event follows the delete)
+22:21:02.553 DELETE event (delete issued 22:20:46)
+22:21:02.596 DEREGISTERED (the event path completes)
+22:21:02.947 REGISTERED AGAIN (350ms after the deregister: the 60s tick's
+             push wave — the tick snapshotted 1176 pods at 22:21:02.314,
+             BEFORE the delete events started at 22:21:02.5, and its
+             bounded-parallel register wave landed after the deregister;
+             the queue is exonerated — no queued event exists post-delete)
+22:22:02.413 DEREGISTERED (the NEXT tick's CompareAndFlush case-3 — k8s.go:510
+             "atlas server pre delete instance size :6" at 22:22:02.402, the
+             servIns-shaped rsync with Label:null/Reversion:204801 immediately
+             preceding — NOT a PushAll prune)
+             => delete(22:20:46) -> healed(22:22:08 tick) = 82s > OBS_BOUND 60s
+
+### storm straggler obs-pod-1148 (10.0.50.13)
+22:14:34.864 registered (storm create, event path)
+22:15:02.523 registered (the 60s full-push wave, pre-delete snapshot)
+22:16:02.547 termination UPDATE, 22:16:02.553 DELETE (storm delete issued
+             22:15:44) -> 22:16:02.559 DEREGISTERED (the event path)
+22:16:03.326 REGISTERED AGAIN (767ms after the deregister — same wave race:
+             the 22:16:02.331 tick's snapshot preceded the delete events)
+22:17:02.437 DEREGISTERED (the NEXT tick's case-3 — k8s.go:510
+             "atlas server pre delete instance size :2" at 22:17:02.429;
+             the tick at 22:17:08 was already clean)
+
+### 75%-batch up-leg straggler obs-pod-2452 (10.0.53.119)
+22:32:03.715 registered (batch create issued 22:32:03, event path)
+22:33:02.401 registered (the 60s full-push wave's register, 22:33:02.289
+             tick — but nacos-side visibility did not include it until
+             ~22:33:08; up-convergence 65s)
+             => up leg 65s > OBS_BOUND 60s (the only UP-leg breach)

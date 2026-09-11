@@ -97,6 +97,48 @@ test-soak:
 
 .PHONY: test-soak
 
+# Observe tier (docs/dsca-4-observation.md §4/§4.6, batch Fix-D): the
+# sustained large-scale consistency observation. Owns a THROWAWAY stack
+# (nacos docker container on scratch port 28848, in-process Atlas
+# stand-in on 19997, embedded etcd, own spotter child on scratch metrics
+# port 19998) against a kwok cluster (default: the dsca1 cluster's
+# kubeconfig at ~/.kwok/clusters/dsca1/kubeconfig.yaml). The demo stack
+# (18848/18500/6443/12379/19999/19848/19849/18090) is never touched.
+#
+#   make test-observe                                  # the definitive 2h/1000 sustained run
+#   OBS_DURATION=30m OBS_SCALE=100 make test-observe   # the 30m/100 rehearsal (bursts ON)
+#   OBS_DURATION=25m make test-observe                 # the 25m/1000 burst-augmented window
+#   OBS_DURATION=1m OBS_SCALE=10 OBS_BURSTS=false make test-observe  # minutes-scale micro-run
+#
+# Knobs: OBS_DURATION (2h), OBS_SCALE (1000), OBS_SERVICES (20),
+# OBS_TICK (10s), OBS_CHURN_EVERY (20s), OBS_CHURN_RATE (5 %/min),
+# OBS_BURSTS (default: on for windows <= 30m — the §4.2 burst schedule;
+# false keeps the sustained-churn-only shape),
+# OBS_KUBECONFIG, OBS_NACOS_ADDR (127.0.0.1:28848),
+# OBS_ATLAS_PORT (19997), OBS_METRICS_PORT (19998).
+# Prerequisites: docker (the nacos image is the soak stack's tag), a
+# running kwok cluster, and the kwok node's capacity patched per
+# docs/dsca-1-scale.md. NOT part of test-all (hours of wall clock).
+OBS_DURATION ?= 2h
+OBS_TIMEOUT ?= 180m
+OBS_SCALE ?= 1000
+OBS_SERVICES ?= 20
+OBS_TICK ?= 10s
+OBS_CHURN_EVERY ?= 20s
+OBS_CHURN_RATE ?= 5
+
+test-observe:
+	@mkdir -p build/observe
+	go build -o build/observe/spotter .
+	@status=0; \
+	OBS_DURATION=$(OBS_DURATION) OBS_SCALE=$(OBS_SCALE) OBS_SERVICES=$(OBS_SERVICES) \
+	OBS_TICK=$(OBS_TICK) OBS_CHURN_EVERY=$(OBS_CHURN_EVERY) OBS_CHURN_RATE=$(OBS_CHURN_RATE) \
+	SPOTTER_BIN=build/observe/spotter \
+		go test -tags=observe -run '^TestObserveConsistency$$|^TestObserveUnit' -timeout $(OBS_TIMEOUT) -v ./tests/observe/... || status=$$?; \
+	exit $$status
+
+.PHONY: test-observe
+
 # Aggregate: everything, in tier order. Budget ~3 min on a dev machine.
 test-all: test-unit test-blackbox test-smoke test-e2e
 

@@ -1,0 +1,19 @@
+# Attempt-1 collapse: per-minute ERROR/WARN counts in the child log, 17:45-18:04
+# (the observe run's window where the colima 28848 port-forward died; the child's
+#  nacos pushes failed while the tunnel was down, then drained its retry backlog
+#  after the tunnel was re-established ~17:56)
+ 306 "ts":"2026-09-11T17:45
+ 306 "ts":"2026-09-11T17:46
+ 306 "ts":"2026-09-11T17:47
+ 306 "ts":"2026-09-11T17:48
+ 306 "ts":"2026-09-11T17:49
+ 306 "ts":"2026-09-11T17:50
+16695 "ts":"2026-09-11T17:51
+21789 "ts":"2026-09-11T17:52
+22389 "ts":"2026-09-11T17:53
+19327 "ts":"2026-09-11T17:54
+ 101 "ts":"2026-09-11T17:55
+ 101 "ts":"2026-09-11T17:56
+ 100 "ts":"2026-09-11T17:57
+ 100 "ts":"2026-09-11T17:58
+  66 "ts":"2026-09-11T17:59

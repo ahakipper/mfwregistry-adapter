@@ -1,0 +1,180 @@
+22:12:46 EVENT throwaway nacos ready at 127.0.0.1:28848
+22:12:47 EVENT embedded etcd ready: [http://127.0.0.1:63008]
+22:12:47 EVENT atlas stand-in listening on 127.0.0.1:19997
+22:12:47 EVENT spotter child started (pid 73985), metrics on :19998, reconcile-source nacos, leader-elect=false
+22:12:47 EVENT cold attach: applying 1000 pods
+22:13:02 EVENT cold attach applied: 1000 pods across 20 services
+22:13:06 EVENT tick 0 CONSISTENT src=1000(on 818/unh 0/pend 182/svc 20) rmt=60(on 60/dis 0/svc 20) inflight=758 div=758 queue=[retry 0 robot 0 dropped 0] 4582ms
+22:13:18 EVENT tick 0 CONSISTENT src=1000(on 1000/unh 0/pend 0/svc 20) rmt=1000(on 1000/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1369ms
+22:13:18 EVENT cold attach converged after 16s (source 1000, remote 1000)
+22:13:19 EVENT tick 1 CONSISTENT src=1000(on 1000/unh 0/pend 0/svc 20) rmt=1000(on 1000/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1287ms
+22:13:29 EVENT tick 2 CONSISTENT src=1000(on 1000/unh 0/pend 0/svc 20) rmt=1000(on 1000/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1096ms
+22:13:39 EVENT tick 3 CONSISTENT src=1000(on 1000/unh 0/pend 0/svc 20) rmt=1000(on 1000/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1392ms
+22:13:49 EVENT tick 4 CONSISTENT src=1000(on 1000/unh 0/pend 0/svc 20) rmt=1000(on 1000/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1021ms
+22:13:59 EVENT tick 5 CONSISTENT src=1000(on 1000/unh 0/pend 0/svc 20) rmt=1000(on 1000/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1086ms
+22:14:09 EVENT tick 6 CONSISTENT src=1000(on 1000/unh 0/pend 0/svc 20) rmt=1000(on 1000/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 904ms
+22:14:19 EVENT tick 7 CONSISTENT src=1000(on 1000/unh 0/pend 0/svc 20) rmt=1000(on 1000/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1218ms
+22:14:29 EVENT tick 8 CONSISTENT src=1000(on 1000/unh 0/pend 0/svc 20) rmt=1000(on 1000/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 920ms
+22:14:33 EVENT burst storm-100: applying 100 pods
+22:14:34 EVENT burst storm-100: 100 pods applied (ledger create@2026-09-11T22:14:33+08:00)
+22:14:39 EVENT tick 9 CONSISTENT src=1100(on 1100/unh 0/pend 0/svc 20) rmt=1100(on 1100/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1519ms
+22:14:39 EVENT burst storm-100: UP-converged after 5s
+22:14:49 EVENT tick 10 CONSISTENT src=1100(on 1100/unh 0/pend 0/svc 20) rmt=1100(on 1100/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1142ms
+22:14:59 EVENT tick 11 CONSISTENT src=1100(on 1100/unh 0/pend 0/svc 20) rmt=1100(on 1100/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1245ms
+22:15:09 EVENT tick 12 CONSISTENT src=1100(on 1100/unh 0/pend 0/svc 20) rmt=1100(on 1100/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1027ms
+22:15:19 EVENT tick 13 CONSISTENT src=1100(on 1100/unh 0/pend 0/svc 20) rmt=1100(on 1100/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1339ms
+22:15:29 EVENT tick 14 CONSISTENT src=1100(on 1100/unh 0/pend 0/svc 20) rmt=1100(on 1100/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 954ms
+22:15:39 EVENT tick 15 CONSISTENT src=1100(on 1100/unh 0/pend 0/svc 20) rmt=1100(on 1100/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1103ms
+22:15:49 EVENT tick 16 CONSISTENT src=1100(on 1100/unh 0/pend 0/svc 20) rmt=1100(on 1100/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1124ms
+22:15:59 EVENT tick 17 DIVERGENT src=1073(on 1073/unh 0/pend 0/svc 20) rmt=1070(on 1070/dis 0/svc 20) inflight=0 div=3 queue=[retry 0 robot 0 dropped 0] 1112ms
+22:16:02 EVENT burst storm-100: 100 pods deleted (ledger delete@2026-09-11T22:15:44+08:00)
+22:16:09 EVENT tick 18 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1066(on 1066/dis 0/svc 20) inflight=2 div=2 queue=[retry 0 robot 0 dropped 0] 983ms
+22:16:20 EVENT tick 19 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1066(on 1066/dis 0/svc 20) inflight=2 div=2 queue=[retry 0 robot 0 dropped 0] 2433ms
+22:16:29 EVENT tick 20 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1066(on 1066/dis 0/svc 20) inflight=2 div=2 queue=[retry 0 robot 0 dropped 0] 994ms
+22:16:39 EVENT tick 21 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1066(on 1066/dis 0/svc 20) inflight=2 div=2 queue=[retry 0 robot 0 dropped 0] 1182ms
+22:16:49 EVENT tick 22 DIVERGENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1066(on 1066/dis 0/svc 20) inflight=0 div=2 queue=[retry 0 robot 0 dropped 0] 1170ms
+22:16:59 EVENT tick 23 DIVERGENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1066(on 1066/dis 0/svc 20) inflight=0 div=2 queue=[retry 0 robot 0 dropped 0] 1187ms
+22:17:09 EVENT tick 24 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 970ms
+22:17:09 EVENT burst storm-100: DOWN-converged after 1m23s
+22:17:19 EVENT tick 25 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1092ms
+22:17:29 EVENT tick 26 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1025ms
+22:17:39 EVENT tick 27 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1076ms
+22:17:49 EVENT tick 28 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1123ms
+22:17:59 EVENT tick 29 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1179ms
+22:18:09 EVENT tick 30 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 969ms
+22:18:19 EVENT tick 31 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1200ms
+22:18:29 EVENT tick 32 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1023ms
+22:18:39 EVENT tick 33 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1078ms
+22:18:49 EVENT tick 34 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 944ms
+22:18:59 EVENT tick 35 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1162ms
+22:19:09 EVENT tick 36 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 979ms
+22:19:19 EVENT tick 37 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1080ms
+22:19:29 EVENT tick 38 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 944ms
+22:19:33 EVENT burst batch-200@25%: applying 200 pods
+22:19:36 EVENT burst batch-200@25%: 200 pods applied (ledger create@2026-09-11T22:19:33+08:00)
+22:19:39 EVENT tick 39 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1264(on 1264/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1245ms
+22:19:39 EVENT burst batch-200@25%: UP-converged after 5s
+22:19:49 EVENT tick 40 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1264(on 1264/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1145ms
+22:19:59 EVENT tick 41 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1264(on 1264/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1306ms
+22:20:09 EVENT tick 42 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1264(on 1264/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1115ms
+22:20:19 EVENT tick 43 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1264(on 1264/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1145ms
+22:20:29 EVENT tick 44 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1264(on 1264/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1081ms
+22:20:39 EVENT tick 45 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1264(on 1264/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1184ms
+22:20:49 EVENT tick 46 DIVERGENT src=1246(on 1246/unh 0/pend 0/svc 20) rmt=1244(on 1244/dis 0/svc 20) inflight=0 div=2 queue=[retry 0 robot 0 dropped 0] 1079ms
+22:20:59 EVENT tick 47 DIVERGENT src=1196(on 1196/unh 0/pend 0/svc 20) rmt=1193(on 1193/dis 0/svc 20) inflight=0 div=3 queue=[retry 0 robot 0 dropped 0] 1187ms
+22:21:09 EVENT tick 48 DIVERGENT src=1146(on 1146/unh 0/pend 0/svc 20) rmt=1150(on 1150/dis 0/svc 20) inflight=0 div=8 queue=[retry 0 robot 0 dropped 0] 1091ms
+22:21:20 EVENT tick 49 DIVERGENT src=1096(on 1096/unh 0/pend 0/svc 20) rmt=1100(on 1100/dis 0/svc 20) inflight=0 div=8 queue=[retry 0 robot 0 dropped 0] 1940ms
+22:21:24 EVENT burst batch-200@25%: 200 pods deleted (ledger delete@2026-09-11T22:20:46+08:00)
+22:21:29 EVENT tick 50 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1070(on 1070/dis 0/svc 20) inflight=6 div=6 queue=[retry 0 robot 0 dropped 0] 988ms
+22:21:39 EVENT tick 51 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1070(on 1070/dis 0/svc 20) inflight=6 div=6 queue=[retry 0 robot 0 dropped 0] 1182ms
+22:21:49 EVENT tick 52 DIVERGENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1070(on 1070/dis 0/svc 20) inflight=0 div=6 queue=[retry 0 robot 0 dropped 0] 966ms
+22:21:59 EVENT tick 53 DIVERGENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1070(on 1070/dis 0/svc 20) inflight=0 div=6 queue=[retry 0 robot 0 dropped 0] 1136ms
+22:22:09 EVENT tick 54 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 938ms
+22:22:09 EVENT burst batch-200@25%: DOWN-converged after 1m22s
+22:22:19 EVENT tick 55 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1035ms
+22:22:29 EVENT tick 56 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1042ms
+22:22:39 EVENT tick 57 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1103ms
+22:22:49 EVENT tick 58 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 969ms
+22:22:59 EVENT tick 59 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1160ms
+22:23:09 EVENT tick 60 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1036ms
+22:23:19 EVENT tick 61 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1127ms
+22:23:29 EVENT tick 62 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 979ms
+22:23:39 EVENT tick 63 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1073ms
+22:23:49 EVENT tick 64 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 961ms
+22:23:59 EVENT tick 65 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1132ms
+22:24:09 EVENT tick 66 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1018ms
+22:24:19 EVENT tick 67 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1222ms
+22:24:29 EVENT tick 68 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 914ms
+22:24:39 EVENT tick 69 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1050ms
+22:24:49 EVENT tick 70 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 936ms
+22:24:59 EVENT tick 71 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1077ms
+22:25:09 EVENT tick 72 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 980ms
+22:25:19 EVENT tick 73 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1131ms
+22:25:29 EVENT tick 74 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 905ms
+22:25:39 EVENT tick 75 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1101ms
+22:25:48 EVENT burst batch-200@50%: applying 200 pods
+22:25:49 EVENT tick 76 DIVERGENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1104(on 1104/dis 0/svc 20) inflight=0 div=40 queue=[retry 0 robot 0 dropped 0] 1199ms
+22:25:51 EVENT burst batch-200@50%: 200 pods applied (ledger create@2026-09-11T22:25:48+08:00)
+22:25:59 EVENT tick 77 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1264(on 1264/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1392ms
+22:25:59 EVENT burst batch-200@50%: UP-converged after 10s
+22:26:09 EVENT tick 78 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1264(on 1264/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1146ms
+22:26:19 EVENT tick 79 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1264(on 1264/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1348ms
+22:26:29 EVENT tick 80 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1264(on 1264/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1146ms
+22:26:39 EVENT tick 81 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1264(on 1264/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1172ms
+22:26:49 EVENT tick 82 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1264(on 1264/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1108ms
+22:26:59 EVENT tick 83 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1264(on 1264/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1252ms
+22:27:09 EVENT tick 84 DIVERGENT src=1221(on 1221/unh 0/pend 0/svc 20) rmt=1226(on 1226/dis 0/svc 20) inflight=0 div=11 queue=[retry 0 robot 0 dropped 0] 1152ms
+22:27:19 EVENT tick 85 DIVERGENT src=1171(on 1171/unh 0/pend 0/svc 20) rmt=1176(on 1176/dis 0/svc 20) inflight=0 div=11 queue=[retry 0 robot 0 dropped 0] 1272ms
+22:27:29 EVENT tick 86 DIVERGENT src=1121(on 1121/unh 0/pend 0/svc 20) rmt=1127(on 1127/dis 0/svc 20) inflight=0 div=10 queue=[retry 0 robot 0 dropped 0] 923ms
+22:27:39 EVENT tick 87 DIVERGENT src=1071(on 1071/unh 0/pend 0/svc 20) rmt=1077(on 1077/dis 0/svc 20) inflight=0 div=10 queue=[retry 0 robot 0 dropped 0] 986ms
+22:27:39 EVENT burst batch-200@50%: 200 pods deleted (ledger delete@2026-09-11T22:27:01+08:00)
+22:27:49 EVENT tick 88 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1072(on 1072/dis 0/svc 20) inflight=8 div=8 queue=[retry 0 robot 0 dropped 0] 1053ms
+22:27:59 EVENT tick 89 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1072(on 1072/dis 0/svc 20) inflight=8 div=8 queue=[retry 0 robot 0 dropped 0] 1083ms
+22:28:09 EVENT tick 90 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1045ms
+22:28:09 EVENT burst batch-200@50%: DOWN-converged after 1m7s
+22:28:19 EVENT tick 91 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1122ms
+22:28:29 EVENT tick 92 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 935ms
+22:28:39 EVENT tick 93 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1057ms
+22:28:49 EVENT tick 94 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1064ms
+22:28:59 EVENT tick 95 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1123ms
+22:29:09 EVENT tick 96 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 956ms
+22:29:19 EVENT tick 97 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1368ms
+22:29:29 EVENT tick 98 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 981ms
+22:29:39 EVENT tick 99 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1120ms
+22:29:49 EVENT tick 100 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1112ms
+22:29:59 EVENT tick 101 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1092ms
+22:30:09 EVENT tick 102 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 962ms
+22:30:19 EVENT tick 103 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1191ms
+22:30:29 EVENT tick 104 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 997ms
+22:30:39 EVENT tick 105 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 997ms
+22:30:49 EVENT tick 106 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 914ms
+22:30:59 EVENT tick 107 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1112ms
+22:31:09 EVENT tick 108 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 995ms
+22:31:19 EVENT tick 109 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1476ms
+22:31:29 EVENT tick 110 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1019ms
+22:31:39 EVENT tick 111 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1062ms
+22:31:49 EVENT tick 112 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1054ms
+22:31:59 EVENT tick 113 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1127ms
+22:32:03 EVENT burst batch-200@75%: applying 200 pods
+22:32:06 EVENT burst batch-200@75%: 200 pods applied (ledger create@2026-09-11T22:32:03+08:00)
+22:32:09 EVENT tick 114 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1207(on 1207/dis 0/svc 20) inflight=57 div=57 queue=[retry 0 robot 0 dropped 0] 1121ms
+22:32:19 EVENT tick 115 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1207(on 1207/dis 0/svc 20) inflight=57 div=57 queue=[retry 0 robot 0 dropped 0] 1631ms
+22:32:29 EVENT tick 116 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1207(on 1207/dis 0/svc 20) inflight=57 div=57 queue=[retry 0 robot 0 dropped 0] 1162ms
+22:32:39 EVENT tick 117 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1207(on 1207/dis 0/svc 20) inflight=57 div=57 queue=[retry 0 robot 0 dropped 0] 1116ms
+22:32:49 EVENT tick 118 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1207(on 1207/dis 0/svc 20) inflight=57 div=57 queue=[retry 0 robot 0 dropped 0] 1046ms
+22:32:59 EVENT tick 119 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1207(on 1207/dis 0/svc 20) inflight=57 div=57 queue=[retry 0 robot 0 dropped 0] 1293ms
+22:33:09 EVENT tick 120 CONSISTENT src=1264(on 1264/unh 0/pend 0/svc 20) rmt=1264(on 1264/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1132ms
+22:33:09 EVENT burst batch-200@75%: UP-converged after 1m5s
+22:33:19 EVENT tick 121 DIVERGENT src=1246(on 1246/unh 0/pend 0/svc 20) rmt=1244(on 1244/dis 0/svc 20) inflight=0 div=2 queue=[retry 0 robot 0 dropped 0] 1128ms
+22:33:29 EVENT tick 122 DIVERGENT src=1196(on 1196/unh 0/pend 0/svc 20) rmt=1194(on 1194/dis 0/svc 20) inflight=0 div=2 queue=[retry 0 robot 0 dropped 0] 1097ms
+22:33:39 EVENT tick 123 DIVERGENT src=1146(on 1146/unh 0/pend 0/svc 20) rmt=1144(on 1144/dis 0/svc 20) inflight=0 div=2 queue=[retry 0 robot 0 dropped 0] 1093ms
+22:33:49 EVENT tick 124 DIVERGENT src=1096(on 1096/unh 0/pend 0/svc 20) rmt=1094(on 1094/dis 0/svc 20) inflight=0 div=2 queue=[retry 0 robot 0 dropped 0] 964ms
+22:33:54 EVENT burst batch-200@75%: 200 pods deleted (ledger delete@2026-09-11T22:33:16+08:00)
+22:33:59 EVENT tick 125 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1110ms
+22:33:59 EVENT burst batch-200@75%: DOWN-converged after 41s
+22:34:09 EVENT tick 126 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 953ms
+22:34:19 EVENT tick 127 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1049ms
+22:34:29 EVENT tick 128 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 997ms
+22:34:39 EVENT tick 129 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1008ms
+22:34:49 EVENT tick 130 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 965ms
+22:34:59 EVENT tick 131 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1186ms
+22:35:09 EVENT tick 132 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 962ms
+22:35:19 EVENT tick 133 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1047ms
+22:35:29 EVENT tick 134 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 936ms
+22:35:39 EVENT tick 135 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1033ms
+22:35:49 EVENT tick 136 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 903ms
+22:35:59 EVENT tick 137 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1148ms
+22:36:09 EVENT tick 138 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 977ms
+22:36:19 EVENT tick 139 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1283ms
+22:36:29 EVENT tick 140 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 980ms
+22:36:39 EVENT tick 141 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1038ms
+22:36:49 EVENT tick 142 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 923ms
+22:36:59 EVENT tick 143 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1091ms
+22:37:09 EVENT tick 144 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 953ms
+22:37:19 EVENT tick 145 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1034ms
+22:37:29 EVENT tick 146 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 926ms
+22:37:39 EVENT tick 147 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1082ms
+22:37:49 EVENT tick 148 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 911ms
+22:37:59 EVENT tick 149 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1033ms
+22:38:09 EVENT tick 150 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 1060ms
+22:38:19 EVENT tick 151 CONSISTENT src=1064(on 1064/unh 0/pend 0/svc 20) rmt=1064(on 1064/dis 0/svc 20) inflight=0 div=0 queue=[retry 0 robot 0 dropped 0] 966ms
