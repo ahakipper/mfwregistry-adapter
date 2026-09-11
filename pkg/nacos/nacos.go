@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"spotter/internal/domain/instance"
 	"spotter/internal/ports"
@@ -17,6 +18,104 @@ import (
 // (not pkg/worker) because the adapter owns its own name; the wiring site
 // is its only consumer.
 const SinkName = "nacos"
+
+// DefaultPushConcurrency is the bounded parallelism of the sink's
+// per-instance pushes (dsca-2 DS-2-1 fix design A: "an errgroup with a
+// semaphore of 16-32 ... start 8-16, tune by the §3 metric"; 8 is the
+// contract's stated starting point — well below the real server's measured
+// parallel-load knee, which the demo's own 50-way probes showed degrading
+// hard and unstably). Nacos v1/v2 have NO batch register endpoint (verified
+// against the 2.1.0 OpenAPI: the only "batch" endpoints are metadata-only
+// Beta), so the parallelism is a worker-group over single-instance calls.
+//
+// The knob is a package-level default, NOT a CLI flag (the contract adds no
+// flag): production tunes it by editing this constant against the
+// event_to_store_e2e_duration_seconds p99 on the target deployment
+// (dsca-2 §4's drift caveat — the knee moves with load, so the default is
+// deliberately conservative); tests override it with SetPushConcurrency.
+//
+// Semantics under parallelism: upserts and deregisters are idempotent, and
+// ordering matters only PER INSTANCE (distinct composite ids are
+// order-independent) — every worker's calls are for instances disjoint
+// from every other worker's, so order-of-completion nondeterminism is
+// acceptable and documented. Errors follow the contract's first-error-wins
+// shape: every instance is still attempted (no short-circuit — a partial
+// failure must stay expressible through the retry-friendly FanoutError),
+// and the FIRST error in INSTANCE ORDER is returned (deterministic despite
+// nondeterministic completion).
+var DefaultPushConcurrency = 8
+
+// SetPushConcurrency overrides the bounded parallelism of the sink's
+// per-instance pushes. It exists for tests (the wall-clock bound tests
+// cannot exercise the default 8 meaningfully against 10ms mocks); call it
+// before the pushes under test and restore the default afterwards.
+// Production must not call it mid-flight: the value is read per Push, so a
+// concurrent change applies to subsequent pushes only — harmless, but the
+// intended tuning path is DefaultPushConcurrency at build time.
+func SetPushConcurrency(n int) {
+	if n < 1 {
+		n = 1
+	}
+	pushConcurrency.Store(int32(n))
+}
+
+// pushConcurrency is the atomic holder of the current bound (initialized to
+// DefaultPushConcurrency's value at package init; the variable stays the
+// single source of truth for tests that swap it).
+var pushConcurrency atomic.Int32
+
+func init() { pushConcurrency.Store(int32(DefaultPushConcurrency)) }
+
+// currentPushConcurrency reads the effective bound (min 1).
+func currentPushConcurrency() int {
+	if n := pushConcurrency.Load(); n > 0 {
+		return int(n)
+	}
+	return 1
+}
+
+// pushInstances pushes instances through pushOne with bounded parallelism:
+// a worker-group of `workers` goroutines over a closed over index channel,
+// first-error-in-instance-order, every instance attempted. The group is
+// sized by currentPushConcurrency() at call time.
+func (s *Sink) pushInstances(instances []*instance.Instance) error {
+	workers := currentPushConcurrency()
+	if workers > len(instances) {
+		workers = len(instances)
+	}
+	if workers <= 0 {
+		return nil
+	}
+	indexes := make(chan int, len(instances))
+	for i := range instances {
+		indexes <- i
+	}
+	close(indexes)
+
+	errs := make([]error, len(instances)) // indexed by instance position: deterministic
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range indexes {
+				if instances[i] == nil {
+					continue // a nil slot is a skip, not an error (Push's contract)
+				}
+				errs[i] = s.pushOne(instances[i])
+			}
+		}()
+	}
+	wg.Wait()
+
+	var firstErr error
+	for _, err := range errs {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
 
 // Sink is the Nacos ports.InstanceSink: it maps domain instances onto the
 // Nacos v1 OpenAPI (plan §7.3) and owns the PushAll prune reconcile
@@ -89,7 +188,12 @@ type Sink struct {
 	// re-applying after a restart (fresh process, empty map) is safe because
 	// the PUT is idempotent, the same survivability contract as remembered.
 	healthCheckDone map[clusterKeyOf]bool
-	// rememberedMu guards remembered and healthCheckDone.
+	// healthCheckClaims records pairs whose UpdateCluster PUT is currently
+	// IN FLIGHT — the check-and-set-before-HTTP claim that keeps the
+	// bounded-parallelism register group from duplicating a pair's PUT (see
+	// ensureClusterHealthCheckDisabled). Guarded by rememberedMu.
+	healthCheckClaims map[clusterKeyOf]bool
+	// rememberedMu guards remembered, healthCheckDone and healthCheckClaims.
 	rememberedMu sync.Mutex
 }
 
@@ -112,10 +216,11 @@ func NewSink(addr string, logger ports.Logger) (*Sink, error) {
 		return nil, err
 	}
 	return &Sink{
-		client:          client,
-		logger:          client.logger,
-		remembered:      map[clusterKeyOf]bool{},
-		healthCheckDone: map[clusterKeyOf]bool{},
+		client:            client,
+		logger:            client.logger,
+		remembered:        map[clusterKeyOf]bool{},
+		healthCheckDone:   map[clusterKeyOf]bool{},
+		healthCheckClaims: map[clusterKeyOf]bool{},
 	}, nil
 }
 
@@ -127,18 +232,17 @@ func NewSink(addr string, logger ports.Logger) (*Sink, error) {
 //   - offline (3)  → deregister, DELETE by composite id
 //   - unknown (0)  → skipped defensively (upstream filters already reject it)
 //
-// Instances are pushed sequentially.
+// The per-instance calls run with BOUNDED PARALLELISM (dsca-2 DS-2-1, fix
+// design A: a worker-group of DefaultPushConcurrency single-instance calls,
+// since the v1 API has no batch endpoint): every instance is attempted, and
+// the first error in INSTANCE order is returned (deterministic despite
+// nondeterministic completion). Completion order across DISTINCT instances
+// is nondeterministic and harmless: the composite ids are distinct, the
+// calls are idempotent upserts/deletes, and per-instance ordering never
+// crosses worker boundaries (each instance is pushed exactly once by
+// exactly one worker).
 func (s *Sink) Push(triggerTime int64, instances []*instance.Instance) error {
-	var firstErr error
-	for _, ins := range instances {
-		if ins == nil {
-			continue
-		}
-		if err := s.pushOne(ins); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
+	return s.pushInstances(instances)
 }
 
 // PushAll upserts every pushed instance and then prunes: for every
@@ -230,7 +334,18 @@ func (s *Sink) prune(instances []*instance.Instance) error {
 	}
 	s.rememberedMu.Unlock()
 
+	// The sweep's deregisters run with the same bounded parallelism as the
+	// registers (DS-2-1: "the same bounded group applies to the
+	// PushAll/Push path AND the deregister path"): distinct remote hosts
+	// have distinct composite ids, so the DELETEs are order-independent and
+	// idempotent, and first-error-in-remote-order keeps the surfaced error
+	// deterministic.
 	var firstErr error
+	type pruneTask struct {
+		key  clusterKey
+		host Host
+	}
+	var tasks []pruneTask
 	for key, wanted := range union {
 		hosts, err := s.client.ListCatalogInstances(key.service, key.cluster)
 		if err != nil {
@@ -257,7 +372,34 @@ func (s *Sink) prune(instances []*instance.Instance) error {
 			if wanted[host.InstanceID] {
 				continue
 			}
-			if err := s.deregister(key.service, host.IP, host.Port, key.cluster); err != nil && firstErr == nil {
+			tasks = append(tasks, pruneTask{key: key, host: host})
+		}
+	}
+	if len(tasks) > 0 {
+		workers := currentPushConcurrency()
+		if workers > len(tasks) {
+			workers = len(tasks)
+		}
+		errs := make([]error, len(tasks))
+		indexes := make(chan int, len(tasks))
+		for i := range tasks {
+			indexes <- i
+		}
+		close(indexes)
+		var wg sync.WaitGroup
+		for w := 0; w < workers; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := range indexes {
+					task := tasks[i]
+					errs[i] = s.deregister(task.key.service, task.host.IP, task.host.Port, task.key.cluster)
+				}
+			}()
+		}
+		wg.Wait()
+		for _, err := range errs {
+			if err != nil && firstErr == nil {
 				firstErr = err
 			}
 		}
@@ -405,29 +547,47 @@ func (s *Sink) register(ins *instance.Instance) error {
 // Failure discipline: a failed PUT logs a warning and does NOT fail the
 // register push — the instance registration itself succeeded, and the
 // cluster configuration is configuration-of-record, not per-instance data —
-// and the pair's marker stays unset, so the next push retries the update
+// and the pair's marker is RELEASED so the next push retries the update
 // (bounded: at most one attempt per pushed instance until it succeeds,
 // self-healing, no retry-queue poisoning). The PUT is idempotent, so a
 // mid-push retry or a restart's fresh-process re-apply is always safe. The
 // mutex is not held across the HTTP call (a 10s-timeout request must not
-// block the prune's remember sweep); pushes are sequential in this sink, and
-// the worst case of concurrent first-registers of one pair is a duplicated
-// idempotent PUT.
+// block the prune's remember sweep).
+//
+// Concurrency discipline (dsca-2 DS-2-1 interplay): the marker is
+// CLAIMED check-and-set under the mutex BEFORE the HTTP call, so under the
+// bounded-parallelism register group at most ONE worker per pair issues the
+// PUT — the old check-after shape (read done, PUT, then set) let every
+// concurrent first-register of a pair race past the read and issue a
+// duplicate idempotent PUT. The claim is released on failure so the retry
+// semantics above survive; the residual duplicate window is a second Push
+// call racing a FAILED first attempt (bounded, idempotent, harmless).
 func (s *Sink) ensureClusterHealthCheckDisabled(service, cluster string) {
 	key := clusterKeyOf{service: service, cluster: cluster}
 	s.rememberedMu.Lock()
-	done := s.healthCheckDone[key]
-	s.rememberedMu.Unlock()
-	if done {
+	if s.healthCheckDone[key] {
+		s.rememberedMu.Unlock()
 		return
+	}
+	// Claim before the HTTP call: exactly one in-flight attempt per pair.
+	claimed := s.healthCheckClaims[key]
+	s.healthCheckClaims[key] = true
+	s.rememberedMu.Unlock()
+	if claimed {
+		return // another worker's PUT for this pair is in flight
 	}
 	if err := s.client.UpdateCluster(service, cluster); err != nil {
 		s.logger.Warnf("nacos: disabling server-side health check for %s/%s failed, will retry on the next push: %v",
 			service, cluster, err)
+		// Release the claim so the next push retries (failure discipline).
+		s.rememberedMu.Lock()
+		delete(s.healthCheckClaims, key)
+		s.rememberedMu.Unlock()
 		return
 	}
 	s.rememberedMu.Lock()
 	s.healthCheckDone[key] = true
+	delete(s.healthCheckClaims, key) // the claim graduates into the done marker
 	s.rememberedMu.Unlock()
 	s.logger.Infof("nacos: disabled server-side health check for %s/%s", service, cluster)
 }

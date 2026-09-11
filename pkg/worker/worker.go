@@ -113,3 +113,5 @@ func (nopMetricsRecorder) MarkSyncOnce() {}
 func (nopMetricsRecorder) ObserveEventToStoreDuration(string, string, time.Duration) {}
 
 func (nopMetricsRecorder) IncEventsDropped(string) {}
+
+func (nopMetricsRecorder) SetK8sQueueDepth(int) {}

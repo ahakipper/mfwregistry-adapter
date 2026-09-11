@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -485,7 +486,7 @@ func TestBlackboxSinkPushNilAndEmptyInstancesNoop(t *testing.T) {
 	}
 }
 
-func TestBlackboxSinkPushSequentialPerInstance(t *testing.T) {
+func TestBlackboxSinkPushAttemptsEveryInstance(t *testing.T) {
 	sink, server := newSinkAt(t)
 
 	instances := []*instance.Instance{
@@ -497,27 +498,37 @@ func TestBlackboxSinkPushSequentialPerInstance(t *testing.T) {
 		t.Fatalf("Push(3 instances) error = %v", err)
 	}
 
-	// Every instance is registered, in order: sequential per-instance pushes
-	// (plan §7.4: Push applies the per-instance policy). The final request is
-	// the cluster update of the last pair's first register (pod-c's
-	// other-app/ecs pair), which follows its register — the order the
-	// register-then-configure discipline produces.
-	registers := 0
-	var lastSeen int = -1
+	// Every instance is registered exactly once (plan §7.4: Push applies the
+	// per-instance policy), each pair is configured exactly once, and each
+	// pair's cluster update FOLLOWS that pair's register — the
+	// register-then-configure discipline. The completion ORDER across
+	// instances is nondeterministic under the bounded-parallelism group
+	// (dsca-2 DS-2-1: distinct composite ids, idempotent upserts — order is
+	// explicitly not part of the contract), so the per-request ordering is
+	// asserted PER PAIR, not globally.
 	requests := server.Requests()
+	lastRegisterIndex := map[string]int{} // "service/cluster" -> last POST index
 	for i, request := range requests {
 		if request.Method == "POST" {
-			registers++
-			lastSeen = i
+			lastRegisterIndex[request.Query.Get("serviceName")+"/"+request.Query.Get("clusterName")] = i
 		}
 	}
-	if registers != 3 {
-		t.Fatalf("register requests = %d, want 3", registers)
+	if len(lastRegisterIndex) != 2 {
+		t.Fatalf("distinct registered pairs = %d, want 2 (pay-user/k8s, other-app/ecs); requests = %v", len(lastRegisterIndex), requests)
 	}
-	last := requests[len(requests)-1]
-	if lastSeen != len(requests)-2 || last.Method != "PUT" || last.Path != "/nacos/v1/ns/cluster" {
-		t.Fatalf("last POST at %d of %d, final request = %s %s, want the last register followed by its pair's cluster update",
-			lastSeen, len(requests), last.Method, last.Path)
+	updatesByPair := map[string]int{}
+	for i, request := range requests {
+		if request.Method == "PUT" && request.Path == "/nacos/v1/ns/cluster" {
+			pair := request.Query.Get("serviceName") + "/" + request.Query.Get("clusterName")
+			updatesByPair[pair]++
+			if registerIndex, ok := lastRegisterIndex[pair]; !ok || i < registerIndex {
+				t.Fatalf("cluster update of %s at request %d does not follow that pair's register (last register at %v); requests = %v",
+					pair, i, registerIndex, requests)
+			}
+		}
+	}
+	if got, want := len(server.Requests()), 5; got != want {
+		t.Fatalf("total requests = %d, want %d (3 registers + 2 pair configurations); requests = %v", got, want, server.Requests())
 	}
 	for _, appCode := range []string{"pay-user", "other-app"} {
 		if got := len(server.Instances(appCode, "k8s")) + len(server.Instances(appCode, "ecs")); got == 0 {
@@ -1325,5 +1336,176 @@ func TestBlackboxSinkPushAllOfflineMarkerPrunesPair(t *testing.T) {
 	if got := len(server.Instances("pay-user", "ecs")); got != 0 {
 		t.Fatalf("ecs instances after the offline-marker push = %d, want 0 (the pair's remote instance pruned); state = %v",
 			got, server.Instances("pay-user", "ecs"))
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Bounded-parallelism pushes (dsca-2 DS-2-1, fix design A)
+// -----------------------------------------------------------------------------
+
+// TestBlackboxSinkPushBoundedParallelismBoundsWallClock pins the throughput
+// fix's core: 100 instances against a 10ms-per-request mock complete in
+// wall-clock bounded by the CONCURRENCY, not the instance count (serial
+// would be 100x10ms = 1s; 8-way bounded is ~13 sequential rounds ≈ 130ms
+// plus overhead). The bound is generous (10x the ideal) to stay CI-stable
+// while still failing the serial shape by an order of magnitude.
+func TestBlackboxSinkPushBoundedParallelismBoundsWallClock(t *testing.T) {
+	sink, server := newSinkAt(t)
+	server.SetDelay(10 * time.Millisecond)
+
+	// 100 online instances of ONE pair: the pair's health-check PUT rides
+	// the first completing register only, so the per-instance cost dominates
+	// uniformly. Same (service, cluster) keeps composite ids distinct by ip.
+	instances := make([]*instance.Instance, 100)
+	for i := range instances {
+		instances[i] = domainInstance(
+			"pod-par-"+strconv.Itoa(i), "pay-user",
+			"10.1."+strconv.Itoa(i/256)+"."+strconv.Itoa(i%256+1), 8080, "k8s", 1)
+	}
+
+	start := time.Now()
+	if err := sink.Push(1, instances); err != nil {
+		t.Fatalf("Push(100 instances) error = %v", err)
+	}
+	elapsed := time.Since(start)
+
+	// Serial floor: 100 registers x 10ms = 1s (plus the pair's one PUT).
+	// The 8-way bound: ~13 rounds x 10ms = 130ms. Assert < 1s / 2 with the
+	// mock's own overhead margin — comfortably above the parallel floor,
+	// comfortably below the serial floor's half.
+	if elapsed >= 500*time.Millisecond {
+		t.Fatalf("Push(100 x 10ms) wall clock = %v, want < 500ms (bounded by the ~8-way concurrency, not the 1s serial floor)", elapsed)
+	}
+	if got := len(server.Instances("pay-user", "k8s")); got != 100 {
+		t.Fatalf("registered instances = %d, want 100 (every instance attempted exactly once)", got)
+	}
+}
+
+// TestBlackboxSinkPushConcurrencyOneIsSerial pins the knob: at
+// concurrency 1 the group degenerates to the sequential loop — the mutation
+// shape the wall-clock test above fails against (and the regression guard
+// that SetPushConcurrency is actually read per push).
+func TestBlackboxSinkPushConcurrencyOneIsSerial(t *testing.T) {
+	nacos.SetPushConcurrency(1)
+	defer nacos.SetPushConcurrency(nacos.DefaultPushConcurrency)
+
+	sink, server := newSinkAt(t)
+	server.SetDelay(5 * time.Millisecond)
+
+	instances := make([]*instance.Instance, 10)
+	for i := range instances {
+		instances[i] = domainInstance(
+			"pod-ser-"+strconv.Itoa(i), "pay-user",
+			"10.2."+strconv.Itoa(i/256)+"."+strconv.Itoa(i%256+1), 8080, "k8s", 1)
+	}
+	start := time.Now()
+	if err := sink.Push(1, instances); err != nil {
+		t.Fatalf("Push() error = %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < 45*time.Millisecond {
+		t.Fatalf("Push(10 x 5ms) at concurrency 1 = %v, want >= 45ms (serial: 10 sequential 5ms round trips)", elapsed)
+	}
+}
+
+// TestBlackboxSinkPushParallelErrorPropagatesDeterministically pins the
+// error semantics under the parallel group: every instance is still
+// attempted (no short-circuit), the returned error is non-nil, and it is
+// the FIRST error in instance order (deterministic despite nondeterministic
+// completion).
+func TestBlackboxSinkPushParallelErrorPropagatesDeterministically(t *testing.T) {
+	sink, server := newSinkAt(t)
+	server.SetStatus(500)
+
+	instances := []*instance.Instance{
+		domainInstance("pod-e1", "pay-user", "10.3.0.1", 8080, "k8s", 1),
+		domainInstance("pod-e2", "pay-user", "10.3.0.2", 8080, "k8s", 1),
+		domainInstance("pod-e3", "pay-user", "10.3.0.3", 8080, "k8s", 1),
+	}
+	err := sink.Push(1, instances)
+	if err == nil {
+		t.Fatal("Push(3 failing instances) error = nil, want the first error")
+	}
+	// Every instance was attempted: 3 POSTs answered 500 (the mock records
+	// them all).
+	registers := 0
+	for _, request := range server.Requests() {
+		if request.Method == "POST" {
+			registers++
+		}
+	}
+	if registers != 3 {
+		t.Fatalf("register attempts = %d, want 3 (a failure never short-circuits the group)", registers)
+	}
+	// The returned error addresses the first instance in slice order.
+	want := "nacos: register pod-e1"
+	if !strings.HasPrefix(err.Error(), want) {
+		t.Fatalf("Push() error = %q, want it to start with %q (the FIRST error in instance order)", err.Error(), want)
+	}
+}
+
+// TestBlackboxSinkConcurrentFirstRegistersIssueOneClusterUpdate pins the
+// marker's atomic claim: under the bounded-parallelism register group, the
+// FIRST registers of one (service, cluster) pair — which now run
+// concurrently — issue exactly ONE UpdateCluster PUT for the pair (the old
+// check-after shape let every worker race past the marker read and
+// duplicate the idempotent PUT; dsca-2's live log showed 5 PUTs for 2
+// pairs). The delay makes the register legs overlap so the race is real.
+func TestBlackboxSinkConcurrentFirstRegistersIssueOneClusterUpdate(t *testing.T) {
+	sink, server := newSinkAt(t)
+	server.SetDelay(5 * time.Millisecond)
+
+	// 20 instances of ONE pair: one concurrent first-register wave.
+	instances := make([]*instance.Instance, 20)
+	for i := range instances {
+		instances[i] = domainInstance(
+			"pod-claim-"+strconv.Itoa(i), "pay-user",
+			"10.4."+strconv.Itoa(i/256)+"."+strconv.Itoa(i%256+1), 8080, "k8s", 1)
+	}
+	if err := sink.Push(1, instances); err != nil {
+		t.Fatalf("Push(20 concurrent first-registers) error = %v", err)
+	}
+	if updates := clusterUpdateRequests(server, "pay-user", "k8s"); len(updates) != 1 {
+		t.Fatalf("cluster updates for the concurrently-registered pair = %d, want exactly 1 (the claim serializes the pair's PUT); requests = %v",
+			len(updates), server.Requests())
+	}
+}
+
+// TestBlackboxSinkPushAllPruneDeregistersBoundedParallel pins the
+// deregister leg of the same fix: the prune sweep's DELETEs run under the
+// bounded group too (DS-2-1: "the same bounded group applies to the
+// PushAll/Push path AND the deregister path"), so pruning a large stale
+// remote set is bounded by the concurrency, not the count.
+func TestBlackboxSinkPushAllPruneDeregistersBoundedParallel(t *testing.T) {
+	sink, server := newSinkAt(t)
+	server.SetDelay(5 * time.Millisecond)
+
+	// 60 stale remote instances of one pair, none in the pushed set.
+	stale := make([]nacosmock.Host, 60)
+	for i := range stale {
+		stale[i] = nacosmock.Host{
+			IP:       "10.5." + strconv.Itoa(i/256) + "." + strconv.Itoa(i%256+1),
+			Port:     8080,
+			Enabled:  true,
+			Metadata: map[string]string{"instanceId": "pod-stale-" + strconv.Itoa(i)},
+		}
+	}
+	server.SetInstances(stale, "DEFAULT_GROUP", "pay-user", "k8s")
+	// The desired set: one survivor instance.
+	pushed := []*instance.Instance{domainInstance("pod-keep", "pay-user", "10.6.0.1", 8080, "k8s", 1)}
+
+	start := time.Now()
+	if err := sink.PushAll(1, pushed); err != nil {
+		t.Fatalf("PushAll() error = %v", err)
+	}
+	elapsed := time.Since(start)
+
+	if got := len(server.Instances("pay-user", "k8s")); got != 1 {
+		t.Fatalf("instances after prune = %d, want 1 (the survivor; 60 stale deleted); state = %v", got, server.Instances("pay-user", "k8s"))
+	}
+	// Serial floor: 1 register + 60 DELETEs + 1 catalog GET ≈ 62 x 5ms =
+	// 310ms. The 8-way bound is ~40ms + the register/catalog serial legs.
+	// Assert < 150ms: far above the mock noise floor, half the serial floor.
+	if elapsed >= 150*time.Millisecond {
+		t.Fatalf("PushAll prune wall clock = %v, want < 150ms (the DELETEs share the bounded group, not the ~310ms serial floor)", elapsed)
 	}
 }

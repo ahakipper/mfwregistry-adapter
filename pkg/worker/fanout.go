@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"spotter/internal/domain/instance"
@@ -243,37 +244,71 @@ func (s *recordingSink) observe(triggerTime int64, err error) {
 	s.metrics.ObserveEventToStoreDuration(s.name, outcome, time.Since(time.Unix(0, triggerTime)))
 }
 
-// Push fans the instances out to every sink sequentially, in declaration
-// order (the first sink — Atlas — is the primary and pushes first). One
-// sink's error never short-circuits the others: every sink is attempted,
-// the failures are aggregated into a FanoutError, and nil is returned only
-// when all sinks succeeded (plan §6.2). Sequential, not parallel: push
-// volume is per-event and small, deterministic ordering keeps logs and
-// tests stable, and a slow secondary must not reorder the primary's pushes
-// relative to today.
+// Push fans the instances out to every sink CONCURRENTLY, one goroutine per
+// sink (dsca-2 DS-2-2, fix design A: the sequential fan-out added the
+// primary's latency 1:1 to every secondary leg — a slow Atlas gRPC call,
+// up to its 10s timeout, delayed every nacos registration while nacos
+// itself was healthy; measured 1:1, zero isolation). One sink's error never
+// short-circuits the others: every sink is attempted, Push returns only
+// after all sinks complete, and the failures are aggregated into a
+// FanoutError whose SLICE ORDER is the sinks' declaration order — each
+// goroutine writes its own result into a fixed-size, position-indexed
+// results slice (never a shared append), so the aggregate is deterministic
+// despite nondeterministic completion (plan §6.2's contract preserved; the
+// retry queue's FailedSinks() keys stay stable).
+//
+// Completion order across sinks is nondeterministic and harmless: each sink
+// receives the pushes of its own serial caller chain in Trigger order
+// (per-sink ordering is the documented invariant the fan-out must keep,
+// and parallel dispatch keeps it — one goroutine per sink, so a sink's
+// pushes stay serialized on that goroutine), and cross-sink ordering was
+// never part of any contract. The sinks are NOT reordered: sinks[0] stays
+// the primary (Atlas) and remains the only sink whose view GetAll returns.
 func (f *FanoutSink) Push(triggerTime int64, instances []*instance.Instance) error {
-	var failures FanoutError
-	for _, named := range f.sinks {
-		if err := named.Sink.Push(triggerTime, instances); err != nil {
-			f.logger.Errorf("fanout push to sink %q failed: %s", named.Name, err)
-			failures = append(failures, SinkFailure{Sink: named.Name, Err: err})
-		}
+	results := make([]error, len(f.sinks))
+	var wg sync.WaitGroup
+	for i, named := range f.sinks {
+		wg.Add(1)
+		go func(i int, named NamedSink) {
+			defer wg.Done()
+			results[i] = named.Sink.Push(triggerTime, instances)
+		}(i, named)
 	}
-	if len(failures) > 0 {
-		return failures
-	}
-	return nil
+	wg.Wait()
+	return f.collectFailures("push", results)
 }
 
-// PushAll fans a full push out exactly like Push, over each sink's own
-// PushAll: the reconcile semantics — including the Nacos prune sweep of
-// plan §7.4, landed with F5 — stay owned by each sink.
+// PushAll fans a full push out exactly like Push (concurrently, one
+// goroutine per sink), over each sink's own PushAll: the reconcile
+// semantics — including the Nacos prune sweep of plan §7.4, landed with F5
+// — stay owned by each sink, and the remembered-pairs state each sink's
+// prune touches is per-sink, so the two PushAll calls running at the same
+// time share nothing (the fan-out's own field set is read-only after
+// construction).
 func (f *FanoutSink) PushAll(triggerTime int64, instances []*instance.Instance) error {
+	results := make([]error, len(f.sinks))
+	var wg sync.WaitGroup
+	for i, named := range f.sinks {
+		wg.Add(1)
+		go func(i int, named NamedSink) {
+			defer wg.Done()
+			results[i] = named.Sink.PushAll(triggerTime, instances)
+		}(i, named)
+	}
+	wg.Wait()
+	return f.collectFailures("pushAll", results)
+}
+
+// collectFailures aggregates the per-sink results into a FanoutError in
+// DECLARATION order (results is position-indexed by the sinks' order), with
+// one log line per failed sink — the per-sink log discipline of the
+// sequential fan-out, preserved.
+func (f *FanoutSink) collectFailures(operation string, results []error) error {
 	var failures FanoutError
-	for _, named := range f.sinks {
-		if err := named.Sink.PushAll(triggerTime, instances); err != nil {
-			f.logger.Errorf("fanout pushAll to sink %q failed: %s", named.Name, err)
-			failures = append(failures, SinkFailure{Sink: named.Name, Err: err})
+	for i, err := range results {
+		if err != nil {
+			f.logger.Errorf("fanout %s to sink %q failed: %s", operation, f.sinks[i].Name, err)
+			failures = append(failures, SinkFailure{Sink: f.sinks[i].Name, Err: err})
 		}
 	}
 	if len(failures) > 0 {

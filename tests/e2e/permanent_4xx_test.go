@@ -248,6 +248,7 @@ func (r *queueDepthRecorder) ObserveSyncOnceDuration(time.Duration)             
 func (r *queueDepthRecorder) ObserveSyncAllDuration(string, time.Duration)              {}
 func (r *queueDepthRecorder) ObserveEventToStoreDuration(string, string, time.Duration) {}
 func (r *queueDepthRecorder) IncEventsDropped(string)                                   {}
+func (r *queueDepthRecorder) SetK8sQueueDepth(int)                                      {}
 func (r *queueDepthRecorder) SetSyncErrorQueueDepth(sink string, depth int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

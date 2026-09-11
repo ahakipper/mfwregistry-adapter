@@ -5,6 +5,7 @@ import (
 	"github.com/panjf2000/ants/v2"
 	v1 "k8s.io/api/core/v1"
 	"spotter/config"
+	"spotter/internal/ports"
 	sv "spotter/pkg/beehive/service/v2"
 	k8srobot "spotter/pkg/k8srobot"
 	"spotter/pkg/log"
@@ -30,7 +31,17 @@ type k8s struct {
 	filters      []providers.InstanceFilter // filters is a collection of functions used to filter invalid instances
 	cache        providers.CacheIterface    // pod cache
 	pool         *ants.Pool                 // goroutine pool
+	// queueDepthMetrics publishes the robot's coalescing-queue depth on the
+	// k8s_queue_depth gauge (dsca-1 DS-1-1 fix item 1: "plus a queueDepth
+	// gauge"). Nil disables publication — the in-package tests construct the
+	// provider without a recorder and must keep compiling.
+	queueDepthMetrics ports.MetricsRecorder
 }
+
+// queueDepthReportInterval is the gauge's publication cadence: short enough
+// to catch a burst's rise and fall between full-push ticks, cheap enough
+// (one mutex-guarded map-length read) to run forever.
+const queueDepthReportInterval = 5 * time.Second
 
 // NewK8SProvider Init k8s provider
 func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int, configPath []string) (provider providers.Provider, err error) {
@@ -71,6 +82,41 @@ func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int,
 	return
 }
 
+// QueueDepthReporter is the wiring seam of the queueDepth gauge: the
+// exported interface internal/server.go asserts the constructed k8s
+// provider against, so the provider's concrete (unexported) type never has
+// to be exported for one setter. NewK8SProvider's returned value satisfies
+// it (the *k8s receiver implements SetQueueDepthReporter).
+type QueueDepthReporter interface {
+	SetQueueDepthReporter(metrics ports.MetricsRecorder)
+}
+
+// SetQueueDepthReporter installs the recorder the provider publishes the
+// robot's coalescing-queue depth on (the k8s_queue_depth gauge, dsca-1
+// DS-1-1 fix item 1). The provider package stays free of a metrics
+// dependency at construction: NewK8SProvider's signature (the providers'
+// shared seam, internal/server.go's InitializeProviders) is unchanged, and
+// the wiring that owns the recorder (internal/server.go, which already
+// closes over it for the drop observer) calls this setter after
+// construction, before Run. A nil recorder disables publication.
+func (k *k8s) SetQueueDepthReporter(metrics ports.MetricsRecorder) {
+	k.Lock()
+	k.queueDepthMetrics = metrics
+	k.Unlock()
+}
+
+// reportQueueDepth publishes the current depth once. Called from the
+// provider's own ticker goroutine (monitor below).
+func (k *k8s) reportQueueDepth() {
+	k.Lock()
+	recorder := k.queueDepthMetrics
+	k.Unlock()
+	if recorder == nil {
+		return
+	}
+	recorder.SetK8sQueueDepth(k.robot.QueueDepth())
+}
+
 // Run starts to monitor k8s cluster pod changes
 func (k *k8s) Run() (err error) {
 	log.Logger.Infof("start to run k8s provider")
@@ -97,6 +143,13 @@ func (k *k8s) monitor() {
 	}
 	log.Logger.Infof("the robot has finished synced of all the k8s data, start to compare and sync instanes")
 	go k.ProcessIntervalFullPush()
+	// The queueDepth gauge's publication ticker (dsca-1 DS-1-1 fix item 1):
+	// every queueDepthReportInterval the provider reads the robot's
+	// coalescing-queue depth (a read-only distinct-key count, race-safe by
+	// the queue's mutex) and hands it to the recorder installed through
+	// SetQueueDepthReporter. Runs even when no recorder is installed (the
+	// per-tick call is a nil check and a map-length read).
+	go k.reportQueueDepthLoop()
 	// start with full update(CompareAndFlush()),then do incremental update,and every 6 hours to full push(ProcessIntervalFullPush())
 	k.CompareAndFlush()
 	defer k.robot.Stop()
@@ -494,6 +547,22 @@ func (k *k8s) emitSyncAll() {
 		Data:    all,
 		Operate: worker.OperateTypeSyncAll,
 	})
+}
+
+// reportQueueDepthLoop publishes the robot's coalescing-queue depth on the
+// k8s_queue_depth gauge until the provider's context ends (see
+// queueDepthReportInterval for the cadence choice).
+func (k *k8s) reportQueueDepthLoop() {
+	ticker := time.NewTicker(queueDepthReportInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			k.reportQueueDepth()
+		case <-k.ctx.Done():
+			return
+		}
+	}
 }
 
 // withExpiryDuration sets up the interval time of cleaning up goroutines.

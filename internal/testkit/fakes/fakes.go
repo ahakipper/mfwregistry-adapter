@@ -534,6 +534,12 @@ type EventsDroppedObservation struct {
 	Cluster string
 }
 
+// K8sQueueDepthObservation is one captured SetK8sQueueDepth call: the k8s
+// robot's coalescing event-queue depth at the moment of the observation.
+type K8sQueueDepthObservation struct {
+	Depth int
+}
+
 // FakeMetricsRecorder captures application metrics in memory.
 type FakeMetricsRecorder struct {
 	mu sync.Mutex
@@ -544,6 +550,7 @@ type FakeMetricsRecorder struct {
 	syncOnceCount         int
 	eventToStoreObserved  []EventToStoreObservation
 	eventsDroppedObserved []EventsDroppedObservation
+	k8sQueueDepths        []K8sQueueDepthObservation
 }
 
 // NewFakeMetricsRecorder creates an initialized metrics recorder.
@@ -588,6 +595,12 @@ func (r *FakeMetricsRecorder) IncEventsDropped(cluster string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.eventsDroppedObserved = append(r.eventsDroppedObserved, EventsDroppedObservation{Cluster: cluster})
+}
+
+func (r *FakeMetricsRecorder) SetK8sQueueDepth(depth int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.k8sQueueDepths = append(r.k8sQueueDepths, K8sQueueDepthObservation{Depth: depth})
 }
 
 // SyncOnceDurations returns an independent snapshot of recorded durations.
@@ -640,6 +653,15 @@ func (r *FakeMetricsRecorder) EventsDroppedObservations() []EventsDroppedObserva
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]EventsDroppedObservation(nil), r.eventsDroppedObserved...)
+}
+
+// K8sQueueDepthObservations returns an independent snapshot of the recorded
+// k8s robot queue-depth publications, in order (the queueDepth gauge's
+// capture seam of dsca-1 DS-1-1 fix item 1).
+func (r *FakeMetricsRecorder) K8sQueueDepthObservations() []K8sQueueDepthObservation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]K8sQueueDepthObservation(nil), r.k8sQueueDepths...)
 }
 
 // FakeEventQueue is an in-memory highest-Reversion-wins retry queue.

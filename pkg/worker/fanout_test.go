@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -208,9 +209,14 @@ func TestNewFanoutSinkRejectsEmptyAndDuplicateNames(t *testing.T) {
 	}
 }
 
-// TestFanoutPushAllSinksInOrder: Push and PushAll reach the sinks in
-// declaration order — atlas (the primary) first, then nacos.
-func TestFanoutPushAllSinksInOrder(t *testing.T) {
+// TestFanoutPushReachesEverySinkConcurrently pins the parallel dispatch
+// (dsca-2 DS-2-2, fix design A): Push and PushAll reach EVERY sink (the
+// set of calls is the declaration set), the calls run CONCURRENTLY (a slow
+// primary no longer serializes the secondary — the wall-clock bound below
+// is the isolation assertion: 50ms atlas + ~0ms nacos complete in ~50ms,
+// not 50ms + the nacos leg), and the error aggregation order (the part
+// that must stay deterministic) is pinned by the aggregation tests below.
+func TestFanoutPushReachesEverySinkConcurrently(t *testing.T) {
 	var mu sync.Mutex
 	var calls []string
 	atlas := &orderRecordingSink{name: stubSinkAtlas, mu: &mu, log: &calls}
@@ -220,12 +226,108 @@ func TestFanoutPushAllSinksInOrder(t *testing.T) {
 	_ = fanout.Push(1, nil)
 	_ = fanout.PushAll(1, nil)
 
+	// Set semantics: every sink saw both the Push and the PushAll.
+	got := make(map[string]bool)
+	for _, call := range calls {
+		got[call] = true
+	}
 	want := []string{
 		"push:" + stubSinkAtlas, "push:" + stubSinkNacos,
 		"pushAll:" + stubSinkAtlas, "pushAll:" + stubSinkNacos,
 	}
-	if got := calls; !reflect.DeepEqual(got, want) {
-		t.Fatalf("sink call order = %v, want %v (declaration order, sequential)", got, want)
+	for _, wantCall := range want {
+		if !got[wantCall] {
+			t.Fatalf("sink call %q missing; calls = %v", wantCall, calls)
+		}
+	}
+	if len(calls) != 4 {
+		t.Fatalf("sink calls = %v, want exactly the 4 (one Push and one PushAll per sink)", calls)
+	}
+}
+
+// TestFanoutPushParallelSinksBoundWallClock pins the DS-2-2 core: a slow
+// FIRST sink (atlas, 100ms) does not delay the second's push — the fan-out
+// completes in ~the slow sink's duration, not the SUM of both legs. The
+// sequential fan-out added the primary's latency 1:1 to every secondary
+// (measured 1:1 by dsca-2 §4-c; the worst case was the Atlas 10s gRPC
+// timeout gating a healthy nacos). The bound is generous (200ms = 2x the
+// slow leg) to stay CI-stable while still failing the sequential shape
+// (100ms + 50ms + margin > 200ms is asserted by the nacos leg's delay
+// being half the atlas delay).
+func TestFanoutPushParallelSinksBoundWallClock(t *testing.T) {
+	atlas := &delaySink{delay: 100 * time.Millisecond}
+	nacos := &delaySink{delay: 50 * time.Millisecond}
+	fanout := newTestFanout(t, atlas, nacos)
+
+	start := time.Now()
+	if err := fanout.Push(1, nil); err != nil {
+		t.Fatalf("Push() error = %v, want nil", err)
+	}
+	elapsed := time.Since(start)
+
+	// Parallel: max(100ms, 50ms) + scheduling overhead. Sequential:
+	// 150ms + overhead. The bound sits between, closer to the slow leg.
+	if elapsed >= 150*time.Millisecond {
+		t.Fatalf("Push() wall clock = %v, want < 150ms (the slow leg's 100ms dominates, not the 150ms sum — the sequential shape)", elapsed)
+	}
+	if !atlas.pushed() || !nacos.pushed() {
+		t.Fatal("a sink did not receive the push (the parallel dispatch must attempt every sink)")
+	}
+}
+
+// delaySink sleeps its delay on every Push/PushAll and records that it ran.
+type delaySink struct {
+	delay   time.Duration
+	ran     atomic.Bool
+	pushErr error
+}
+
+func (s *delaySink) Push(int64, []*instance.Instance) error {
+	time.Sleep(s.delay)
+	s.ran.Store(true)
+	return s.pushErr
+}
+
+func (s *delaySink) PushAll(int64, []*instance.Instance) error {
+	time.Sleep(s.delay)
+	s.ran.Store(true)
+	return s.pushErr
+}
+
+func (s *delaySink) GetAll([]int32, string) (*instance.InstanceList, error) {
+	return nil, nil
+}
+
+func (s *delaySink) pushed() bool { return s.ran.Load() }
+
+// TestFanoutPushErrorAggregationStaysInDeclarationOrder pins the
+// deterministic slice under parallel dispatch: both sinks fail, and the
+// FanoutError's failures list the sinks in DECLARATION order (atlas first,
+// nacos second) regardless of which sink's goroutine completed first —
+// each goroutine writes into its own slot of the position-indexed results
+// slice, never a shared append. The retry queue's per-sink keys and the
+// FailedSinks() consumers depend on this order staying stable.
+func TestFanoutPushErrorAggregationStaysInDeclarationOrder(t *testing.T) {
+	// atlas fails fast, nacos fails SLOW: if the aggregation were
+	// completion-ordered, nacos would land first; declaration order must
+	// win anyway.
+	atlasErr := errors.New("atlas down")
+	nacosErr := errors.New("nacos down")
+	atlas := &delaySink{delay: 0, pushErr: atlasErr}
+	nacos := &delaySink{delay: 30 * time.Millisecond, pushErr: nacosErr}
+	fanout := newTestFanout(t, atlas, nacos)
+
+	err := fanout.Push(1, []*instance.Instance{{InstanceId: "instance-1"}})
+
+	var fanoutErr FanoutError
+	if !errors.As(err, &fanoutErr) {
+		t.Fatalf("Push() error = %v, want a FanoutError", err)
+	}
+	if got, want := fanoutErr.FailedSinks(), []string{stubSinkAtlas, stubSinkNacos}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("FailedSinks() = %v, want %v (declaration order, not completion order)", got, want)
+	}
+	if fanoutErr[0].Err != atlasErr || fanoutErr[1].Err != nacosErr {
+		t.Fatalf("failures = %#v, want each sink's own error in declaration order", fanoutErr)
 	}
 }
 

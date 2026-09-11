@@ -106,6 +106,15 @@ func (r *Recorder) IncEventsDropped(cluster string) {
 	metrics.EventsDroppedTotal.WithLabelValues(cluster).Inc()
 }
 
+// SetK8sQueueDepth records the k8s robot's coalescing event-queue depth on
+// the k8s_queue_depth collector (dsca-1 DS-1-1 fix item 1's queueDepth
+// gauge — the depth in DISTINCT pod keys, since the coalescing queue holds
+// one entry per key no matter how many superseded events collapsed into
+// it).
+func (r *Recorder) SetK8sQueueDepth(depth int) {
+	metrics.K8sQueueDepthGauge.Set(float64(depth))
+}
+
 // httpServer serves promhttp and pprof endpoints and stops idempotently.
 type httpServer struct {
 	srv  *http.Server

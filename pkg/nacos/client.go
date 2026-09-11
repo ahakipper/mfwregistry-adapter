@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -119,10 +120,51 @@ type Client struct {
 	logger  ports.Logger
 }
 
+// Transport tuning constants (dsca-2 DS-2-4, fix design: "construct the
+// Transport explicitly in NewClient ... with <concurrency>/<cap> tied to
+// the DS-2-1 semaphore"). The values are the LOAD-BEARING pair: a transport
+// that allows fewer connections than the sink's push concurrency starves
+// the worker group (requests queue on the dial), one that allows far more
+// wastes connections against the server's accept queue. Both numbers track
+// the sink's DefaultPushConcurrency (8): MaxIdleConnsPerHost keeps 8 idle
+// keep-alive connections per host (vs the DEFAULT transport's effective 2 —
+// the measured churn: 1000 concurrent registers opened 425-624 TCP
+// connections, then kept 2), and MaxConnsPerHost caps the in-flight total
+// at the same 8 — the circuit breaker that bounds a wedged nacos to 8 held
+// workers instead of the ants pool's 100.
+const (
+	// transportMaxIdleConnsPerHost matches the sink's push concurrency so a
+	// full worker group finds a warm connection each.
+	transportMaxIdleConnsPerHost = 8
+	// transportMaxConnsPerHost is the per-host ceiling: the breaker.
+	transportMaxConnsPerHost = 8
+	// transportMaxIdleConns is the process-wide idle pool (one host in
+	// practice; a small multiple covers the readiness probe's client).
+	transportMaxIdleConns = 32
+	// transportIdleConnTimeout retires idle keep-alives (the default
+	// transport's 90s, kept).
+	transportIdleConnTimeout = 90 * time.Second
+	// transportDialTimeout bounds connection setup (the contract's 2s).
+	transportDialTimeout = 2 * time.Second
+	// transportTLSHandshakeTimeout bounds TLS setup (the contract's 5s).
+	transportTLSHandshakeTimeout = 5 * time.Second
+)
+
 // NewClient creates a v1 OpenAPI client bound to addr (the Nacos base
 // address, e.g. http://127.0.0.1:18848 or 127.0.0.1:18848 — an address
 // without a scheme defaults to http://, matching the flag help and the
 // plan §8.4 soak invocation). A nil logger is defaulted.
+//
+// The http.Client uses an EXPLICIT tuned Transport (dsca-2 DS-2-4): the
+// zero-Transport client inherited http.DefaultTransport, whose effective
+// MaxIdleConnsPerHost is 2 — serial pushes reused one connection fine, but
+// the moment DS-2-1's bounded worker group runs, every worker past the
+// second dials fresh (the measured 425-624 connections for 1000 concurrent
+// registers) and only 2 survive afterwards: connection churn on every
+// burst, re-paid on the next. The explicit transport sizes the idle pool
+// to the push concurrency and caps the total at the same number; the outer
+// RequestTimeout (10s) is preserved unchanged (it covers the body read,
+// which the per-request context does not).
 func NewClient(addr string, logger ports.Logger) (*Client, error) {
 	if addr == "" {
 		return nil, errors.New("nacos: address is required")
@@ -140,9 +182,18 @@ func NewClient(addr string, logger ports.Logger) (*Client, error) {
 	if logger == nil {
 		logger = ports.NopLogger{}
 	}
+	transport := &http.Transport{
+		MaxIdleConns:          transportMaxIdleConns,
+		MaxIdleConnsPerHost:   transportMaxIdleConnsPerHost,
+		MaxConnsPerHost:       transportMaxConnsPerHost,
+		IdleConnTimeout:       transportIdleConnTimeout,
+		DialContext:           (&net.Dialer{Timeout: transportDialTimeout}).DialContext,
+		TLSHandshakeTimeout:   transportTLSHandshakeTimeout,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 	return &Client{
 		baseURL: parsed,
-		http:    &http.Client{Timeout: RequestTimeout},
+		http:    &http.Client{Timeout: RequestTimeout, Transport: transport},
 		logger:  logger,
 	}, nil
 }

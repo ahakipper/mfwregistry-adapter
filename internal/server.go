@@ -360,6 +360,19 @@ func (s *Server) startProviders() error {
 		return err
 	}
 
+	// The queueDepth gauge wiring (dsca-1 DS-1-1 fix item 1, the second
+	// observable of the same item): the k8s provider publishes the robot's
+	// coalescing-queue depth on k8s_queue_depth from its own 5s ticker
+	// (SetQueueDepthReporter + the robot's read-only QueueDepth — the
+	// minimal plumbing that keeps NewK8SProvider's shared signature
+	// unchanged). The recorder is the same one the drop observer closes
+	// over, so both series of the queue's health land on one recorder.
+	for _, provider := range prs {
+		if reporter, ok := provider.(k8s.QueueDepthReporter); ok {
+			reporter.SetQueueDepthReporter(s.metrics)
+		}
+	}
+
 	s.Lock()
 	if s.startupGeneration != generation || !s.isLeader || s.stopped || wctx.Err() != nil {
 		s.Unlock()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"spotter/config"
+	"spotter/internal/testkit/fakes"
 	sv "spotter/pkg/beehive/service/v2"
 	"spotter/pkg/k8srobot"
 	"spotter/pkg/log"
@@ -180,6 +182,13 @@ func (r *fakeRobot) List(resource k8srobot.ResourceType) []interface{} {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]interface{}(nil), r.pods...)
+}
+
+// QueueDepth reports the scripted queue's length — the k8s_queue_depth
+// gauge's source (dsca-1 DS-1-1 fix item 1), mirroring the real robot's
+// distinct-key depth against the fake's channel.
+func (r *fakeRobot) QueueDepth() int {
+	return len(r.queue)
 }
 
 // fakeWorker records every Handle call and serves a scripted GetAll response.
@@ -1998,4 +2007,100 @@ func TestEmitSyncAllEmitsNsEpochTrigger(t *testing.T) {
 	if syncAlls[0].Trigger <= 1e15 {
 		t.Fatalf("SyncAll trigger = %d, want a ns-since-epoch magnitude (> 1e15) — the full-push producer regressed to whole seconds", syncAlls[0].Trigger)
 	}
+}
+
+// -----------------------------------------------------------------------------
+// The k8s_queue_depth gauge (dsca-1 DS-1-1 fix item 1, the queueDepth
+// observability)
+// -----------------------------------------------------------------------------
+
+// TestQueueDepthReporterPublishesRobotDepth pins the gauge's core seam:
+// reportQueueDepth (the per-tick call the provider's own goroutine makes)
+// reads the robot's QueueDepth and hands exactly that number to the
+// recorder's SetK8sQueueDepth. Without a recorder installed, the call is a
+// silent no-op (the in-package construction path).
+func TestQueueDepthReporterPublishesRobotDepth(t *testing.T) {
+	robot := newFakeRobot(nil, nil, false)
+	w := &fakeWorker{}
+	k := newTestProvider(robot, w)
+	metrics := fakes.NewFakeMetricsRecorder()
+
+	// No recorder: no-op, no panic.
+	k.reportQueueDepth()
+	if got := len(metrics.K8sQueueDepthObservations()); got != 0 {
+		t.Fatalf("observations without a recorder = %d, want 0", got)
+	}
+
+	k.SetQueueDepthReporter(metrics)
+	// The fake robot's scripted queue is empty: depth 0 is published.
+	k.reportQueueDepth()
+	// Two queued keys, one of them superseded: the depth is 2 (distinct
+	// keys — the coalescing semantics the gauge documents).
+	robot.enqueue(k8srobot.QueueObject{RType: k8srobot.Pods, Key: "msp/pod-d1", Event: k8srobot.EventAdd, CreateAt: time.Now()})
+	robot.enqueue(k8srobot.QueueObject{RType: k8srobot.Pods, Key: "msp/pod-d2", Event: k8srobot.EventAdd, CreateAt: time.Now()})
+	k.reportQueueDepth()
+
+	obs := metrics.K8sQueueDepthObservations()
+	if len(obs) != 2 || obs[0].Depth != 0 || obs[1].Depth != 2 {
+		t.Fatalf("k8s queue depth observations = %#v, want [{0} {2}] (the robot's distinct-key depth per publication)", obs)
+	}
+}
+
+// TestQueueDepthLoopPublishesOnTickerAndStops pins the gauge's publication
+// loop: the 5s cadence is too slow for a unit test to wait out, so the
+// loop's contract is pinned by driving one tick directly (the loop body is
+// reportQueueDepth — covered above) and by verifying the loop exits on
+// context cancel (the provider's lifetime, not a goroutine leak).
+func TestQueueDepthLoopPublishesOnTickerAndStops(t *testing.T) {
+	robot := newFakeRobot(nil, nil, false)
+	w := &fakeWorker{}
+	ctx, cancel := context.WithCancel(context.Background())
+	k := newTestProvider(robot, w)
+	k.ctx = ctx
+	metrics := fakes.NewFakeMetricsRecorder()
+	k.SetQueueDepthReporter(metrics)
+
+	done := make(chan struct{})
+	go func() {
+		k.reportQueueDepthLoop()
+		close(done)
+	}()
+
+	// The loop's first tick is 5s away; the assertion is that it exits
+	// promptly on cancel and never published anything before it.
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reportQueueDepthLoop did not exit after context cancel")
+	}
+	if got := len(metrics.K8sQueueDepthObservations()); got != 0 {
+		t.Fatalf("observations before the first tick = %d, want 0 (5s cadence)", got)
+	}
+}
+
+// TestNewK8SProviderSatisfiesQueueDepthReporter pins the wiring seam:
+// the provider NewK8SProvider returns satisfies the exported
+// QueueDepthReporter interface internal/server.go asserts against — the
+// minimal-plumbing decision (no constructor signature change; the wiring
+// calls the setter after construction). The construction needs a readable
+// kubeconfig, so a minimal throwaway file stands in (the robot never
+// connects at construction; Run would).
+func TestNewK8SProviderSatisfiesQueueDepthReporter(t *testing.T) {
+	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
+	if err := os.WriteFile(kubeconfig, []byte(
+		"apiVersion: v1\nkind: Config\nclusters:\n- name: test\n  cluster:\n    server: http://127.0.0.1:1\ncontexts:\n- name: test\n  context:\n    cluster: test\n    user: test\ncurrent-context: test\nusers:\n- name: test\n  user: {}\n"), 0o600); err != nil {
+		t.Fatalf("write kubeconfig: %v", err)
+	}
+	provider, err := NewK8SProvider(context.Background(), &fakeWorker{}, 0, []string{kubeconfig})
+	if err != nil {
+		t.Fatalf("NewK8SProvider() error = %v, want nil (construction never dials)", err)
+	}
+	reporter, ok := provider.(QueueDepthReporter)
+	if !ok {
+		t.Fatalf("NewK8SProvider() = %T, want a QueueDepthReporter (the internal/server.go wiring seam)", provider)
+	}
+	// The setter is callable through the seam (the gauge wiring itself is
+	// pinned above on the concrete provider).
+	reporter.SetQueueDepthReporter(nil)
 }

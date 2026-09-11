@@ -109,4 +109,10 @@ type MetricsRecorder interface {
 	// DS-1-1 fix item 1 and dsca-2 §6 row 4, the single unified spec both
 	// tracks land).
 	IncEventsDropped(cluster string)
+	// SetK8sQueueDepth records the current depth of the k8s robot's
+	// coalescing event queue — the queueDepth gauge of dsca-1 DS-1-1 fix
+	// item 1 ("plus a queueDepth gauge"). The k8s provider publishes it on
+	// a short ticker, reading the robot's QueueDepth (distinct keys in
+	// flight, one entry per key regardless of coalescing).
+	SetK8sQueueDepth(depth int)
 }
