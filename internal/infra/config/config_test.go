@@ -711,3 +711,32 @@ func TestLoadEtcdEndpointsFlagAcrossEnvironments(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadReconcileSource: the additive --reconcile-source flag of dsca-3
+// §3.1. Empty (the default) keeps the primary (Atlas) as the compare source —
+// the flag-empty resolved config is exactly the pre-dsca-3 shape — and a set
+// value is carried verbatim (validated at server wiring, not here).
+func TestLoadReconcileSource(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags Flags
+		want  string
+	}{
+		{name: "unset flag keeps the primary source", flags: Flags{Providers: []string{"k8s"}}, want: ""},
+		{name: "explicit empty keeps the primary source", flags: Flags{Providers: []string{"k8s"}, ReconcileSource: ""}, want: ""},
+		{name: "nacos is carried verbatim", flags: Flags{Providers: []string{"k8s"}, ReconcileSource: "nacos"}, want: "nacos"},
+		{name: "no default is applied", flags: Flags{Providers: []string{"k8s"}, ReconcileSource: ""}, want: ""},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Load("test", tt.flags)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if got.ReconcileSource != tt.want {
+				t.Errorf("ReconcileSource = %q, want %q", got.ReconcileSource, tt.want)
+			}
+		})
+	}
+}

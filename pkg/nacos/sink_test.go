@@ -1,6 +1,7 @@
 package nacos_test
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -824,6 +825,19 @@ func TestBlackboxSinkPushAllPruneSurfacesNotFoundBodyOn400(t *testing.T) {
 	}
 }
 
+// writeJSON writes a JSON payload with the given status (the stub-server
+// helper for the catalog-view tests; mirrors the nacosmock's own writer).
+func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(encoded)
+}
+
 // writeStubOK answers a register/deregister request with the Nacos success
 // text.
 func writeStubOK(w http.ResponseWriter) {
@@ -894,18 +908,29 @@ func TestBlackboxSinkPortlessInstanceUsesPortZero(t *testing.T) {
 }
 
 func TestBlackboxSinkGetAllReconstructsInstances(t *testing.T) {
-	sink, _ := newSinkAt(t)
+	sink, server := newSinkAt(t)
 
 	// Push a fully populated instance, then reconstruct it through GetAll:
-	// the metadata round-trip restores the domain fields (plan §7.3).
+	// the metadata round-trip restores the domain fields (plan §7.3). This
+	// is the dsca-3 §3.5 re-pin for the CATALOG source: GetAll reads the
+	// catalog view (the instance list would hide the disabled hosts the
+	// unhealthy policy writes), so the reconstruction this test asserts is
+	// the one the nacos-source compare consumes.
 	ins := domainInstance("pod-a", "pay-user", "10.0.0.1", 8080, "k8s", 1)
 	if err := sink.Push(1, []*instance.Instance{ins}); err != nil {
 		t.Fatalf("Push() error = %v", err)
 	}
 
-	list, err := sink.GetAll(nil, "")
+	// The schemaVersion marker (dsca-5 §4.2-1): register writes "1"
+	// alongside the field keys.
+	stored := server.Instances("pay-user", "k8s")
+	if len(stored) != 1 || stored[0].Metadata["schemaVersion"] != "1" {
+		t.Fatalf("stored metadata schemaVersion = %q, want 1 (register writes the marker)", stored[0].Metadata["schemaVersion"])
+	}
+
+	list, err := sink.GetAll(nil, "k8s")
 	if err != nil {
-		t.Fatalf("GetAll(nil, \"\") error = %v", err)
+		t.Fatalf("GetAll(nil, k8s) error = %v", err)
 	}
 	if list == nil {
 		t.Fatal("GetAll() list = nil, want a list")
@@ -920,8 +945,15 @@ func TestBlackboxSinkGetAllReconstructsInstances(t *testing.T) {
 	if len(got.Ports) != 1 || got.Ports[0].Port != 8080 {
 		t.Fatalf("reconstructed ports = %+v, want one port 8080", got.Ports)
 	}
-	if got.Provider != "k8s" || got.Cluster != "k8s" {
-		t.Fatalf("reconstructed provider/cluster = %s/%s, want k8s/k8s", got.Provider, got.Cluster)
+	if got.Provider != "k8s" {
+		t.Fatalf("reconstructed provider = %q, want k8s (clusterName lands in Provider)", got.Provider)
+	}
+	// The dsca-3 §3.2 fidelity correction (DS-3-4/DS-5-3): Cluster stays
+	// EMPTY — the metadata never carried it, and synthesizing it from
+	// clusterName would false-positive the consul compare every cycle.
+	// This is the assertion flip the §3.5 test contract pins.
+	if got.Cluster != "" {
+		t.Fatalf("reconstructed cluster = %q, want \"\" (never synthesized from clusterName)", got.Cluster)
 	}
 	if got.EnvType != "test" || got.EnvGroup != "7" {
 		t.Fatalf("reconstructed env = %s/%s, want test/7", got.EnvType, got.EnvGroup)
@@ -952,6 +984,11 @@ func TestBlackboxSinkGetAllFiltersProviderCluster(t *testing.T) {
 		t.Fatalf("Push() error = %v", err)
 	}
 
+	// provider "k8s": the walk reads only the (service, "k8s") catalog
+	// pairs — the per-provider/cluster scoping of dsca-3 §3.2 (clusterName
+	// == provider on the catalog endpoint, stricter than the old
+	// post-filter over instance/list: the diff-level twin of the prune's
+	// cluster scoping).
 	list, err := sink.GetAll(nil, "k8s")
 	if err != nil {
 		t.Fatalf("GetAll(nil, k8s) error = %v", err)
@@ -978,27 +1015,29 @@ func TestBlackboxSinkGetAllFiltersStatuses(t *testing.T) {
 	}
 
 	// Provider "" with statuses [online]: the online k8s instance survives.
-	list, err := sink.GetAll([]int32{1}, "")
+	list, err := sink.GetAll([]int32{1}, "k8s")
 	if err != nil {
-		t.Fatalf("GetAll([1], \"\") error = %v", err)
+		t.Fatalf("GetAll([1], k8s) error = %v", err)
 	}
 	if len(list.Instance) != 1 || list.Instance[0].InstanceId != "pod-a" {
 		t.Fatalf("GetAll([1]) = %v, want the single online instance pod-a", list.Instance)
 	}
 
-	// Statuses [unhealthy]: NOTHING comes back. The unhealthy push wrote the
-	// ecs instance with enabled=false (the §7.3 policy), and the instance
-	// list view hides disabled hosts — GetAll is built on that view, so an
-	// instance spotter itself marked unhealthy is invisible to spotter's own
-	// read side too. This documents AUDIT-B-1's GetAll blind spot: the
-	// filter would select the instance, but the listing never serves it.
-	// (The PushAll prune uses the catalog view precisely to escape this.)
-	list, err = sink.GetAll([]int32{2}, "")
+	// Statuses [unhealthy]: the ecs instance comes back — the CATALOG view
+	// of dsca-3 §3.2 serves enabled=false hosts too (the instance list
+	// view hides them, the F8 blind spot the catalog exists to escape).
+	// An instance spotter itself marked unhealthy (status 2 → registered
+	// enabled=false) is therefore visible to spotter's own read side:
+	// the precondition for the status-2 steady-state compare pins.
+	list, err = sink.GetAll([]int32{2}, "ecs")
 	if err != nil {
-		t.Fatalf("GetAll([2], \"\") error = %v", err)
+		t.Fatalf("GetAll([2], ecs) error = %v", err)
 	}
-	if len(list.Instance) != 0 {
-		t.Fatalf("GetAll([2]) = %v, want 0 (the disabled instance is hidden from instance/list)", list.Instance)
+	if len(list.Instance) != 1 || list.Instance[0].InstanceId != "srv-a" {
+		t.Fatalf("GetAll([2]) = %v, want srv-a (the catalog view serves the disabled instance)", list.Instance)
+	}
+	if list.Instance[0].Status != 2 {
+		t.Fatalf("GetAll([2]) status = %d, want 2 (metadata status preferred over enabled)", list.Instance[0].Status)
 	}
 }
 
@@ -1027,7 +1066,9 @@ func TestBlackboxSinkGetAllManyServices(t *testing.T) {
 	sink, _ := newSinkAt(t)
 
 	// Instances across three services; GetAll must visit each service the
-	// pagination reports and reconstruct all of them.
+	// pagination reports and reconstruct all of them. The k8s provider
+	// scopes its catalog walk to clusterName "k8s" (dsca-3 §3.2), so every
+	// instance here is a k8s instance.
 	var instances []*instance.Instance
 	for i, appCode := range []string{"app-a", "app-b", "app-c"} {
 		instances = append(instances, domainInstance(
@@ -1037,7 +1078,7 @@ func TestBlackboxSinkGetAllManyServices(t *testing.T) {
 		t.Fatalf("Push() error = %v", err)
 	}
 
-	list, err := sink.GetAll(nil, "")
+	list, err := sink.GetAll(nil, "k8s")
 	if err != nil {
 		t.Fatalf("GetAll() error = %v", err)
 	}
@@ -1507,5 +1548,261 @@ func TestBlackboxSinkPushAllPruneDeregistersBoundedParallel(t *testing.T) {
 	// Assert < 150ms: far above the mock noise floor, half the serial floor.
 	if elapsed >= 150*time.Millisecond {
 		t.Fatalf("PushAll prune wall clock = %v, want < 150ms (the DELETEs share the bounded group, not the ~310ms serial floor)", elapsed)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// The nacos-authoritative reconcile source (dsca-3 §3.2 / §3.5)
+// -----------------------------------------------------------------------------
+
+// TestBlackboxSinkGetAllReadsCatalogViewIncludesDisabled: GetAll reads the
+// CATALOG view (dsca-3 §3.2, DS-3-3) — a remote host with enabled=false is
+// served, where the instance/list view hides it (the nacosmock implements
+// the same visibility split as the real server: instance/list skips
+// Enabled==false, catalog/instances includes it). The catalog-served
+// reconstruction carries its metadata status ("1"), so a console-disabled
+// HEALTHY instance reconstructs Status=1/Enabled=false — the shape the
+// k8s-source diff must see to heal the disable.
+func TestBlackboxSinkGetAllReadsCatalogViewIncludesDisabled(t *testing.T) {
+	sink, server := newSinkAt(t)
+
+	// Out-of-band drift: a console-disabled healthy instance the sink never
+	// pushed (metadata status "1", wire enabled=false).
+	server.SetInstances([]nacosmock.Host{
+		{IP: "10.9.0.1", Port: 8080, Enabled: false,
+			Metadata: map[string]string{
+				"instanceId": "pod-drained", "envType": "test", "envGroup": "7",
+				"reversion": "42", "status": "1", "state": "running",
+				"idc": "kraken", "cpu": "2", "version": "v1", "schemaVersion": "1",
+			}},
+	}, "DEFAULT_GROUP", "pay-user", "k8s")
+
+	list, err := sink.GetAll([]int32{1, 2}, "k8s")
+	if err != nil {
+		t.Fatalf("GetAll([1,2], k8s) error = %v", err)
+	}
+	if len(list.Instance) != 1 {
+		t.Fatalf("GetAll = %d instances, want 1 (the catalog serves the disabled host)", len(list.Instance))
+	}
+	got := list.Instance[0]
+	if got.Status != 1 || got.Enabled {
+		t.Fatalf("reconstructed status/enabled = %d/%v, want 1/false (metadata status preferred, wire enabled honored)", got.Status, got.Enabled)
+	}
+	if got.InstanceId != "pod-drained" {
+		t.Fatalf("reconstructed instanceId = %q, want pod-drained", got.InstanceId)
+	}
+}
+
+// TestBlackboxSinkGetAllCatalogNotFoundToleratedPerService: a (service,
+// cluster) pair with no catalog entry is the real server's steady state
+// (HTTP 500 with an "is not found" body). GetAll must treat it as an empty
+// pair and keep walking — exactly the prune's tolerance — so a fully pruned
+// service never fails the diff view. The mock cannot produce a selective
+// 500-with-body answer, so the tolerance is driven through a stub HTTP
+// server answering the real-server body on the catalog path (the same
+// technique as the prune's tolerance test).
+func TestBlackboxSinkGetAllCatalogNotFoundToleratedPerService(t *testing.T) {
+	const notFoundBody = `{"status":500,"message":"service pay-user is not found!","data":null,"code":500,"serverIp":"127.0.0.1"}`
+	var catalogCalls int
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/nacos/v1/ns/catalog/instances":
+			catalogCalls++
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, notFoundBody)
+			return
+		case "/nacos/v1/ns/service/list":
+			writeJSON(w, http.StatusOK, map[string]interface{}{"count": 1, "doms": []string{"pay-user"}})
+		default:
+			writeStubOK(w)
+		}
+	}))
+	defer stub.Close()
+	sink, err := nacos.NewSink(stub.URL, &fakes.FakeLogger{})
+	if err != nil {
+		t.Fatalf("NewSink(stub) error = %v", err)
+	}
+
+	list, err := sink.GetAll(nil, "k8s")
+	if err != nil {
+		t.Fatalf("GetAll(catalog not-found 500) error = %v, want nil (tolerated as an empty pair)", err)
+	}
+	if list == nil || len(list.Instance) != 0 {
+		t.Fatalf("GetAll(catalog not-found 500) = %#v, want an empty list", list)
+	}
+	if catalogCalls != 1 {
+		t.Fatalf("catalog calls = %d, want 1 (one per service)", catalogCalls)
+	}
+}
+
+// TestBlackboxSinkGetAllSurfacesOtherCatalogErrors: the not-found tolerance
+// is narrow — any other catalog error aborts the view (a partial diff input
+// must never be mistaken for a complete one), and a ListServices error
+// aborts too.
+func TestBlackboxSinkGetAllSurfacesOtherCatalogErrors(t *testing.T) {
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/nacos/v1/ns/catalog/instances":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, "injected status 500")
+			return
+		case "/nacos/v1/ns/service/list":
+			writeJSON(w, http.StatusOK, map[string]interface{}{"count": 1, "doms": []string{"pay-user"}})
+		default:
+			writeStubOK(w)
+		}
+	}))
+	defer stub.Close()
+	sink, err := nacos.NewSink(stub.URL, &fakes.FakeLogger{})
+	if err != nil {
+		t.Fatalf("NewSink(stub) error = %v", err)
+	}
+
+	if _, err := sink.GetAll(nil, "k8s"); err == nil {
+		t.Fatal("GetAll(unrelated catalog 500) error = nil, want the surfaced error")
+	}
+
+	// The 400-with-marker shape is a rejected request, not the absent-pair
+	// answer (the same narrow-tolerance pin the prune carries).
+	const notFoundBody400 = `{"status":400,"message":"service pay-user is not found!","data":null,"code":400,"serverIp":"127.0.0.1"}`
+	stub2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/nacos/v1/ns/catalog/instances":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, notFoundBody400)
+			return
+		case "/nacos/v1/ns/service/list":
+			writeJSON(w, http.StatusOK, map[string]interface{}{"count": 1, "doms": []string{"pay-user"}})
+		default:
+			writeStubOK(w)
+		}
+	}))
+	defer stub2.Close()
+	sink2, err := nacos.NewSink(stub2.URL, &fakes.FakeLogger{})
+	if err != nil {
+		t.Fatalf("NewSink(stub2) error = %v", err)
+	}
+	if _, err := sink2.GetAll(nil, "k8s"); err == nil {
+		t.Fatal("GetAll(catalog 400 with not-found body) error = nil, want the surfaced error (tolerance is 500-only)")
+	}
+}
+
+// TestBlackboxSinkGetAllRequestsProviderScopedCatalogPairs: the walk asks
+// the catalog endpoint for clusterName == provider — the per-provider
+// scoping of dsca-3 §3.2. The recorded requests are the observable: every
+// catalog query the sink issued for provider "k8s" must carry
+// clusterName=k8s, and none may address another cluster.
+func TestBlackboxSinkGetAllRequestsProviderScopedCatalogPairs(t *testing.T) {
+	sink, server := newSinkAt(t)
+
+	instances := []*instance.Instance{
+		domainInstance("pod-a", "pay-user", "10.0.0.1", 8080, "k8s", 1),
+		domainInstance("srv-a", "other-app", "10.0.0.2", 8081, "ecs", 1),
+	}
+	if err := sink.Push(1, instances); err != nil {
+		t.Fatalf("Push() error = %v", err)
+	}
+
+	if _, err := sink.GetAll(nil, "k8s"); err != nil {
+		t.Fatalf("GetAll(nil, k8s) error = %v", err)
+	}
+
+	catalogQueries := 0
+	for _, request := range server.Requests() {
+		if request.Path != "/nacos/v1/ns/catalog/instances" {
+			continue
+		}
+		catalogQueries++
+		if got := request.Query.Get("clusterName"); got != "k8s" {
+			t.Fatalf("catalog query clusterName = %q, want k8s (provider scoping on the wire)", got)
+		}
+	}
+	if catalogQueries == 0 {
+		t.Fatalf("no catalog queries issued; requests = %v", server.Requests())
+	}
+}
+
+// TestBlackboxSinkGetAllUnhealthyRoundTripSteady: the spotter-written
+// unhealthy shape round-trips stably (the §1 round-trip demonstration's
+// unhealthy row): a status-2 push registers with wire enabled=false and
+// metadata status "2"; the catalog-based GetAll reconstructs Status=2 /
+// Enabled=false / State=probing — the exact mirror a local status-2 k8s
+// instance (locally enabled=false by readiness) compares equal against.
+// This is the precondition the k8s steady pin in pkg/providers/k8s builds
+// on (§3.5: "the k8s status-2 steady pin").
+func TestBlackboxSinkGetAllUnhealthyRoundTripSteady(t *testing.T) {
+	sink, _ := newSinkAt(t)
+
+	unhealthy := domainInstance("srv-uh", "pay-user", "10.0.0.2", 8081, "ecs", 2)
+	unhealthy.State = "probing"
+	if err := sink.Push(1, []*instance.Instance{unhealthy}); err != nil {
+		t.Fatalf("Push(unhealthy) error = %v", err)
+	}
+
+	list, err := sink.GetAll([]int32{2}, "ecs")
+	if err != nil {
+		t.Fatalf("GetAll([2], ecs) error = %v", err)
+	}
+	if len(list.Instance) != 1 {
+		t.Fatalf("GetAll([2], ecs) = %d instances, want 1 (the catalog serves the disabled host)", len(list.Instance))
+	}
+	got := list.Instance[0]
+	if got.Status != 2 || got.Enabled || got.State != "probing" {
+		t.Fatalf("reconstructed status/enabled/state = %d/%v/%q, want 2/false/probing (the pushed unhealthy shape)", got.Status, got.Enabled, got.State)
+	}
+	if got.Reversion != 42 {
+		t.Fatalf("reconstructed reversion = %d, want 42 (the current-schema entry keeps its written reversion)", got.Reversion)
+	}
+}
+
+// TestBlackboxSinkReconstructSchemaVersionDegradation: the schemaVersion
+// rule of dsca-5 §4.2-1 as reconstruct applies it — a missing or unknown
+// schemaVersion degrades the reconstruction's diff-participation by ZEROING
+// its reversion (the parseInt64-garbage discipline: the compare then heals
+// by re-pushing the full metadata at the current schema), while a
+// current-schema entry keeps the written reversion.
+func TestBlackboxSinkReconstructSchemaVersionDegradation(t *testing.T) {
+	sink, server := newSinkAt(t)
+
+	// Three remote hosts: one current-schema, one missing the marker, one
+	// claiming an unknown future schema. All carry reversion 42 in their
+	// metadata.
+	hostMetadata := func() map[string]string {
+		return map[string]string{
+			"instanceId": "pod-x", "envType": "test", "envGroup": "7",
+			"reversion": "42", "status": "1", "state": "running",
+			"idc": "kraken", "cpu": "2", "version": "v1",
+		}
+	}
+	current := hostMetadata()
+	current["instanceId"] = "pod-current"
+	current["schemaVersion"] = "1"
+	missing := hostMetadata()
+	missing["instanceId"] = "pod-missing"
+	unknown := hostMetadata()
+	unknown["instanceId"] = "pod-unknown"
+	unknown["schemaVersion"] = "99"
+	server.SetInstances([]nacosmock.Host{
+		{IP: "10.9.0.1", Port: 8080, Enabled: true, Metadata: current},
+		{IP: "10.9.0.2", Port: 8080, Enabled: true, Metadata: missing},
+		{IP: "10.9.0.3", Port: 8080, Enabled: true, Metadata: unknown},
+	}, "DEFAULT_GROUP", "pay-user", "k8s")
+
+	list, err := sink.GetAll(nil, "k8s")
+	if err != nil {
+		t.Fatalf("GetAll(nil, k8s) error = %v", err)
+	}
+	reversions := map[string]int64{}
+	for _, got := range list.Instance {
+		reversions[got.InstanceId] = got.Reversion
+	}
+	if reversions["pod-current"] != 42 {
+		t.Fatalf("current-schema reversion = %d, want 42 (kept)", reversions["pod-current"])
+	}
+	if reversions["pod-missing"] != 0 {
+		t.Fatalf("missing-schema reversion = %d, want 0 (degraded diff-participation)", reversions["pod-missing"])
+	}
+	if reversions["pod-unknown"] != 0 {
+		t.Fatalf("unknown-schema reversion = %d, want 0 (degraded diff-participation)", reversions["pod-unknown"])
 	}
 }

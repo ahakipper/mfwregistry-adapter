@@ -2104,3 +2104,353 @@ func TestNewK8SProviderSatisfiesQueueDepthReporter(t *testing.T) {
 	// pinned above on the concrete provider).
 	reporter.SetQueueDepthReporter(nil)
 }
+
+// -----------------------------------------------------------------------------
+// The nacos-authoritative reconcile (dsca-3 §3.3 R2 / DS-3-6 / §3.5)
+// -----------------------------------------------------------------------------
+
+// newUnhealthyPod builds a Running pod whose containers are NOT ready: the
+// conversion yields Status=2, Enabled=false, State=probing — the local
+// mirror image of what the nacos wire holds for a spotter-pushed unhealthy
+// instance (register forces enabled=false; the metadata carries status "2"
+// and state probing).
+func newUnhealthyPod(namespace, name string) *corev1.Pod {
+	pod := newValidPod(namespace, name)
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{
+		{
+			Ready:        false,
+			State:        corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+			RestartCount: 0,
+		},
+	}
+	return pod
+}
+
+// nacosViewInstance builds the NACOS-SHAPED remote view entry for a local
+// instance: the reconstruction of what the sink registered — metadata
+// reversion/status/state equal to the local values, Enabled mirroring the
+// wire projection (register forces enabled=false for every status-2
+// instance), Provider carrying the cluster, Cluster empty (the dsca-3 §3.2
+// fidelity correction), ports beyond the first dropped.
+func nacosViewInstance(local *sv.Instance) *sv.Instance {
+	remote := *local
+	remote.Cluster = ""
+	remote.Enabled = local.Enabled && local.Status != providers.InstanceStatusUnhealthy
+	remote.Provider = local.Provider
+	return &remote
+}
+
+// TestCompareAndFlushNacosReconcileEqualSteadyStateNoPush: the steady-state
+// pin of the nacos-source compare — a local instance against its own
+// nacos-shaped reconstruction (every compared field equal, reversion equal,
+// wire-projected Enabled equal) produces NO diff and NO push. This is the
+// every-cycle-loop guard: the round-trip asymmetries the compare used to
+// trip over (Cluster, raw Enabled) are neutralized by the §3.2/§3.3 fixes,
+// and a regression back to any of them re-arms the user's "every cycle has
+// changes" loop against this pin.
+func TestCompareAndFlushNacosReconcileEqualSteadyStateNoPush(t *testing.T) {
+	pod := newValidPod("msp", "pod-a")
+	pod.ResourceVersion = "100"
+
+	local := instanceFromPod(t, pod)
+	remote := nacosViewInstance(local)
+
+	robot := newFakeRobot(nil, []interface{}{pod}, false)
+	w := &fakeWorker{getAllResponse: &sv.InstanceList{Instance: []*sv.Instance{remote}}}
+	k := newTestProvider(robot, w)
+	k.SetNacosReconcileSource(true)
+
+	k.CompareAndFlush()
+
+	// No diff: nothing must be pushed for pod-a.
+	time.Sleep(150 * time.Millisecond)
+	if events := w.handleSnapshot(); len(events) != 0 {
+		t.Fatalf("pushed events = %d, want 0 (the steady nacos view matches the local instance; the every-cycle loop guard)", len(events))
+	}
+}
+
+// TestCompareAndFlushNacosReconcileUnhealthySteadyNoPush: the §3.5 k8s
+// status-2 steady pin — a local UNHEALTHY pod (Status=2, locally
+// Enabled=false by readiness, State=probing) against its own reconstruction
+// (Status=2, wire Enabled=false, State=probing) compares Enabled
+// false-vs-false and produces no diff, no push. Pins the §3.3 k8s-leg
+// symmetry (local Enabled derives from the same pod readiness that drives
+// status) so a future conversion change cannot silently re-arm DS-5-2 on
+// this leg: if the conversion ever made a status-2 pod locally
+// enabled=true, the wire projection of this compare would start diffing.
+func TestCompareAndFlushNacosReconcileUnhealthySteadyNoPush(t *testing.T) {
+	pod := newUnhealthyPod("msp", "pod-uh")
+	pod.ResourceVersion = "100"
+
+	local := instanceFromPod(t, pod)
+	if local.Status != providers.InstanceStatusUnhealthy || local.Enabled {
+		t.Fatalf("fixture: local status/enabled = %d/%v, want 2/false (the unhealthy mirror precondition)", local.Status, local.Enabled)
+	}
+	remote := nacosViewInstance(local)
+
+	robot := newFakeRobot(nil, []interface{}{pod}, false)
+	w := &fakeWorker{getAllResponse: &sv.InstanceList{Instance: []*sv.Instance{remote}}}
+	k := newTestProvider(robot, w)
+	k.SetNacosReconcileSource(true)
+
+	k.CompareAndFlush()
+
+	time.Sleep(150 * time.Millisecond)
+	if events := w.handleSnapshot(); len(events) != 0 {
+		t.Fatalf("pushed events = %d, want 0 (the status-2 pair compares enabled false-vs-false — the k8s-leg symmetry pin)", len(events))
+	}
+}
+
+// TestCompareAndFlushNacosReconcileReversionMismatchEitherDirectionPushes:
+// rule R2 of dsca-3 §3.3 — in the nacos-source compare, ANY reversion
+// mismatch counts as drift and the local value wins. Two shapes:
+//   - the nacos reversion BELOW the local one (the ordinary local-newer
+//     drift): previously caught by the strictly-higher gate, still a push;
+//   - the nacos reversion ABOVE the local one (the forged/edited revision,
+//     reachable only out-of-band): the strictly-higher gate called it
+//     "no push" — R2 calls it drift, and the push heals it by overwriting
+//     the remote value with the local one.
+func TestCompareAndFlushNacosReconcileReversionMismatchEitherDirectionPushes(t *testing.T) {
+	t.Run("remote lower pushes local", func(t *testing.T) {
+		pod := newValidPod("msp", "pod-a")
+		pod.ResourceVersion = "100"
+		remote := nacosViewInstance(instanceFromPod(t, pod))
+		remote.Reversion = 50 // the ordinary local-newer drift
+
+		robot := newFakeRobot(nil, []interface{}{pod}, false)
+		w := &fakeWorker{getAllResponse: &sv.InstanceList{Instance: []*sv.Instance{remote}}}
+		k := newTestProvider(robot, w)
+		k.SetNacosReconcileSource(true)
+
+		k.CompareAndFlush()
+
+		events := w.waitForHandles(t, 1)
+		if e := findEvent(t, events, "pod-a"); e == nil {
+			t.Fatalf("no push for pod-a; events = %#v", events)
+		} else if e.Data[0].Reversion != 100 {
+			t.Fatalf("pushed reversion = %d, want 100 (local wins)", e.Data[0].Reversion)
+		}
+	})
+
+	t.Run("remote higher pushes local (R2, the forged-revision heal)", func(t *testing.T) {
+		pod := newValidPod("msp", "pod-a")
+		pod.ResourceVersion = "100"
+		remote := nacosViewInstance(instanceFromPod(t, pod))
+		remote.Reversion = 999999 // forged/edited above the local ceiling
+
+		robot := newFakeRobot(nil, []interface{}{pod}, false)
+		w := &fakeWorker{getAllResponse: &sv.InstanceList{Instance: []*sv.Instance{remote}}}
+		k := newTestProvider(robot, w)
+		k.SetNacosReconcileSource(true)
+
+		k.CompareAndFlush()
+
+		events := w.waitForHandles(t, 1)
+		e := findEvent(t, events, "pod-a")
+		if e == nil {
+			t.Fatalf("no push for the forged-revision instance; events = %#v (R2: any mismatch either direction is drift)", events)
+		}
+		if e.Data[0].Reversion != 100 {
+			t.Fatalf("pushed reversion = %d, want 100 (the local value overwrites the forged remote one)", e.Data[0].Reversion)
+		}
+	})
+}
+
+// TestCompareAndFlushNacosReconcileFieldDiffUpdatePushesLocal: the UPDATE
+// case the nacos-source design exists to provide — a same-id, field-level
+// drift on the remote side (a manual nacos metadata edit, an enabled flip)
+// produces a diff and the push carries the LOCAL instance (R1: local is the
+// source of truth; the re-register rewrites the metadata).
+func TestCompareAndFlushNacosReconcileFieldDiffUpdatePushesLocal(t *testing.T) {
+	pod := newValidPod("msp", "pod-a")
+	pod.ResourceVersion = "100"
+
+	remote := nacosViewInstance(instanceFromPod(t, pod))
+	remote.EnvType = "beta" // the manual console edit
+
+	robot := newFakeRobot(nil, []interface{}{pod}, false)
+	w := &fakeWorker{getAllResponse: &sv.InstanceList{Instance: []*sv.Instance{remote}}}
+	k := newTestProvider(robot, w)
+	k.SetNacosReconcileSource(true)
+
+	k.CompareAndFlush()
+
+	events := w.waitForHandles(t, 1)
+	e := findEvent(t, events, "pod-a")
+	if e == nil {
+		t.Fatalf("no push for the field-drifted instance; events = %#v", events)
+	}
+	if e.Data[0].EnvType != "test" {
+		t.Fatalf("pushed envType = %q, want test (local wins the field diff)", e.Data[0].EnvType)
+	}
+}
+
+// TestCompareAndFlushNacosReconcileAddLocalOnlyPushes: the ADD case — local
+// has an instance the nacos view lacks (an API-side delete, a first
+// registration): case 2 as-is, the push carries the local online instance.
+func TestCompareAndFlushNacosReconcileAddLocalOnlyPushes(t *testing.T) {
+	pod := newValidPod("msp", "pod-new")
+	robot := newFakeRobot(nil, []interface{}{pod}, false)
+	// The remote view holds nothing of this provider.
+	w := &fakeWorker{getAllResponse: &sv.InstanceList{Instance: []*sv.Instance{
+		remoteInstance("srv-foreign", providers.InstanceStatusOnline, 5),
+	}}}
+	k := newTestProvider(robot, w)
+	k.SetNacosReconcileSource(true)
+
+	k.CompareAndFlush()
+
+	events := w.waitForHandles(t, 2)
+	if e := findEvent(t, events, "pod-new"); e == nil {
+		t.Fatalf("no push for the local-only instance pod-new; events = %#v", events)
+	} else if e.Data[0].Status != providers.InstanceStatusOnline {
+		t.Fatalf("pushed status = %d, want online (the local truth)", e.Data[0].Status)
+	}
+}
+
+// TestCompareAndFlushNacosReconcileDeleteRemoteOnlyDeregisters: the DELETE
+// case — the nacos view has an instance the local list lacks (deleted while
+// spotter was down, or a mid-flight delete lost): case 3 pushes the
+// remote-sourced instance with Status=3/State=terminated/Enabled=false, and
+// the push carries the reconstruction's own ip so the nacos sink's
+// deregister by composite id is well-formed.
+func TestCompareAndFlushNacosReconcileDeleteRemoteOnlyDeregisters(t *testing.T) {
+	pod := newValidPod("msp", "pod-a")
+	ghost := remoteInstance("pod-ghost", providers.InstanceStatusOnline, 9)
+	ghost.Ip = "10.42.0.99" // the reconstruction's own host ip
+	robot := newFakeRobot(nil, []interface{}{pod}, false)
+	w := &fakeWorker{getAllResponse: &sv.InstanceList{Instance: []*sv.Instance{ghost}}}
+	k := newTestProvider(robot, w)
+	k.SetNacosReconcileSource(true)
+
+	k.CompareAndFlush()
+
+	events := w.waitForHandles(t, 2)
+	e := findEvent(t, events, "pod-ghost")
+	if e == nil {
+		t.Fatalf("no push for the remote-only ghost; events = %#v", events)
+	}
+	got := e.Data[0]
+	if got.Status != providers.InstanceStatusOffline {
+		t.Fatalf("remote-only instance status = %d, want %d (deregister)", got.Status, providers.InstanceStatusOffline)
+	}
+	if got.State != providers.InstanceStateTerminated {
+		t.Fatalf("remote-only instance state = %q, want %q", got.State, providers.InstanceStateTerminated)
+	}
+	if got.Enabled {
+		t.Fatal("remote-only instance enabled = true, want false")
+	}
+	if got.Ip != "10.42.0.99" {
+		t.Fatalf("remote-only instance ip = %q, want the reconstruction's own ip (a well-formed composite id)", got.Ip)
+	}
+}
+
+// TestCompareAndFlushNacosReconcileGetAllErrorSkipsTick: the DS-3-6 repin —
+// in nacos-reconcile mode a source error SKIPS the tick (consul's shape)
+// instead of degrading to push-everything: with nacos as the source at
+// scale, one transient 5xx would otherwise trigger a full re-push burst to
+// both sinks precisely when the system is degraded. The cache refill still
+// happened (the local source was read); only the pushes are skipped.
+func TestCompareAndFlushNacosReconcileGetAllErrorSkipsTick(t *testing.T) {
+	pod := newValidPod("msp", "pod-a")
+	robot := newFakeRobot(nil, []interface{}{pod}, false)
+	w := &fakeWorker{getAllErr: errFakeGetAll}
+	k := newTestProvider(robot, w)
+	k.SetNacosReconcileSource(true)
+
+	k.CompareAndFlush()
+
+	time.Sleep(150 * time.Millisecond)
+	if events := w.handleSnapshot(); len(events) != 0 {
+		t.Fatalf("pushed events = %d, want 0 (a source error skips the nacos-reconcile tick, never push-everything)", len(events))
+	}
+	// The local cache was still refilled: the skip is of the compare, not
+	// of the local source read.
+	if k.cache.Get("pod-a") == nil {
+		t.Fatal("cache does not contain pod-a after the skipped tick (the local source read still ran)")
+	}
+}
+
+// TestCompareAndFlushAtlasModeGetAllErrorStillPushesAll: the Atlas-primary
+// world keeps its historical semantics — an unreachable Atlas was a "resync
+// everything" trigger, and that world's behavior stays untouched by the
+// dsca-3 changes (the mode gate, not the call site, carries the switch).
+func TestCompareAndFlushAtlasModeGetAllErrorStillPushesAll(t *testing.T) {
+	pod := newValidPod("msp", "pod-a")
+	robot := newFakeRobot(nil, []interface{}{pod}, false)
+	w := &fakeWorker{getAllErr: errFakeGetAll}
+	k := newTestProvider(robot, w) // nacosReconcile stays false (the default)
+
+	k.CompareAndFlush()
+
+	events := w.waitForHandles(t, 1)
+	if findEvent(t, events, "pod-a") == nil {
+		t.Fatalf("no push for pod-a when the Atlas GetAll fails; events = %#v (the Atlas-world behavior is unchanged)", events)
+	}
+}
+
+// TestCompareAndFlushNacosBootHealsDowntimeDrift: the boot-reconcile proof
+// of dsca-3 §4.2 — with the nacos view as the diff source, the boot
+// CompareAndFlush heals downtime drift with NO code change beyond the
+// source routing: nacos state holds a ghost (a pod deleted while spotter
+// was down — the remembered map died with the process, the catalog did
+// not), the freshly synced local list lacks it, and the provider's own
+// existing case-3 path deregisters it. The catalog replaces the in-memory
+// remembered memory as the boot-time ownership record. Driven through
+// exactly the boot path's shape: robot synced (GetAll non-empty), one
+// synchronous CompareAndFlush, no interval tick.
+func TestCompareAndFlushNacosBootHealsDowntimeDrift(t *testing.T) {
+	// The local list after HasSynced: one live pod of pay-user.
+	live := newValidPod("msp", "pod-live")
+	live.ResourceVersion = "100"
+
+	// The nacos view: the live pod's registration PLUS a ghost of a service
+	// that vanished entirely while spotter was down (a whole service — the
+	// 416e62a remembered-map residual the catalog-as-ownership-record
+	// closes). The ghost reconstruction carries its own host fields, so the
+	// deregister is well-formed by construction.
+	liveRemote := nacosViewInstance(instanceFromPod(t, live))
+	vanished := &sv.Instance{
+		InstanceId: "pod-gone", AppCode: "pay-gone", Ip: "10.42.0.50",
+		Ports: []*sv.PortInfo{{Port: 7096}}, Provider: "k8s", Cluster: "",
+		EnvType: "test", State: "running", Status: providers.InstanceStatusOnline,
+		Enabled: true, Reversion: 7,
+	}
+
+	robot := newFakeRobot(nil, []interface{}{live}, false)
+	w := &fakeWorker{getAllResponse: &sv.InstanceList{Instance: []*sv.Instance{liveRemote, vanished}}}
+	k := newTestProvider(robot, w)
+	k.SetNacosReconcileSource(true)
+
+	// The boot path: one synchronous CompareAndFlush after HasSynced. The
+	// pushes ride the provider's ants pool (buildAndSendEvent submits
+	// asynchronously), so wait a bounded time for the ghost's deregister.
+	k.CompareAndFlush()
+
+	deadline := time.Now().Add(3 * time.Second)
+	var events []*worker.Event
+	for time.Now().Before(deadline) {
+		events = w.handleSnapshot()
+		if findEvent(t, events, "pod-gone") != nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// The ghost is deregistered (case 3): the boot heal.
+	e := findEvent(t, events, "pod-gone")
+	if e == nil {
+		t.Fatalf("no deregister push for the vanished-while-down ghost; events = %#v (the boot-time heal)", events)
+	} else if e.Data[0].Status != providers.InstanceStatusOffline {
+		t.Fatalf("ghost push status = %d, want %d (deregister)", e.Data[0].Status, providers.InstanceStatusOffline)
+	}
+	// The live pod is steady against its own reconstruction: no push for
+	// it — the ONLY event of this compare is the ghost's deregister (the
+	// degenerate push-all of the empty-Atlas world is gone with the
+	// nacos-source routing).
+	if e := findEvent(t, events, "pod-live"); e != nil {
+		t.Fatalf("unexpected push for the steady live pod; events = %#v", events)
+	}
+	if len(events) != 1 {
+		t.Fatalf("pushed events = %d, want exactly 1 (the ghost's deregister; the live pod is steady)", len(events))
+	}
+}

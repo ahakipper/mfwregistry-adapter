@@ -330,6 +330,31 @@ func (s *Server) startProviders() error {
 		return errors.WithMessage(err, "new fanout sink")
 	}
 
+	// The reconcile-source designation (dsca-3 §3.1): with
+	// --reconcile-source nacos, the fanout's GetAll — the view both
+	// providers' periodic CompareAndFlush reads — comes from the nacos
+	// sink instead of the primary, making nacos the authoritative external
+	// store the reconcile converges against. Pushes fan out to every sink
+	// either way; only the read view flips. Any other non-empty value
+	// fails startup fast (the name must resolve to a registered sink, the
+	// same fail-fast discipline as the fanout's own name validation), and
+	// "nacos" additionally requires the nacos sink to exist
+	// (--nacos-addr). Empty keeps the primary (Atlas) — the default,
+	// production-unchanged configuration.
+	if source := s.cfg.ReconcileSource; source != "" {
+		if source == nacos.SinkName && nacosSink == nil {
+			cleanup()
+			s.clearStartup(generation, nil)
+			return errors.New("--reconcile-source nacos requires --nacos-addr: the nacos sink is not registered")
+		}
+		if err := fanout.SetReconcileSource(source); err != nil {
+			cleanup()
+			s.clearStartup(generation, nil)
+			return errors.WithMessage(err, "designate reconcile source")
+		}
+		s.logger.Infof("reconcile source designated: %s (the periodic compare reads this sink's view)", source)
+	}
+
 	w, err := worker.NewResourceWorker(wctx, fanout, s.logger, s.metrics)
 	if err != nil {
 		cleanup()
@@ -500,6 +525,11 @@ func InitializeProviders(ctx context.Context, w worker.Worker, cfg infraconfig.C
 		err = errors.New("empty provider names for initializing")
 		return nil, err
 	}
+	// The nacos-reconcile mode the providers' compares run in (dsca-3
+	// §3.3): true exactly when the reconcile source designates the nacos
+	// sink — the same config the fanout designation above reads, so the
+	// read routing and the diff semantics always agree on the mode.
+	reconcileNacos := cfg.ReconcileSource == nacos.SinkName
 	prs = []providers.Provider{}
 	for _, pname := range cfg.Providers {
 		switch pname {
@@ -510,6 +540,11 @@ func InitializeProviders(ctx context.Context, w worker.Worker, cfg infraconfig.C
 			if err != nil {
 				err = errors.WithMessagef(err, "new k8s provider")
 				return nil, err
+			}
+			if reconcileNacos {
+				if sw, ok := k8sProvider.(k8s.NacosReconcileSwitch); ok {
+					sw.SetNacosReconcileSource(true)
+				}
 			}
 			prs = append(prs, k8sProvider)
 		case providers.ProviderEcs:
@@ -522,6 +557,11 @@ func InitializeProviders(ctx context.Context, w worker.Worker, cfg infraconfig.C
 			if err != nil {
 				err = errors.WithMessagef(err, "new consul provider")
 				return nil, err
+			}
+			if reconcileNacos {
+				if sw, ok := consulProvider.(consul2.NacosReconcileSwitch); ok {
+					sw.SetNacosReconcileSource(true)
+				}
 			}
 			prs = append(prs, consulProvider)
 		default:

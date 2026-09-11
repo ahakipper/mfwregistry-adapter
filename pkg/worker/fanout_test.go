@@ -1167,3 +1167,146 @@ func TestFanoutSinkWithoutRecorderKeepsWorking(t *testing.T) {
 		t.Fatalf("fanout.Push() without recorder error = %v, want nil", err)
 	}
 }
+
+// -----------------------------------------------------------------------------
+// The reconcile-source designation (dsca-3 §3.1 / §3.5)
+// -----------------------------------------------------------------------------
+
+// TestFanoutSetReconcileSourceRoutesGetAllToDesignatedSink: the designated
+// sink's view is what GetAll returns — forwarded with the original
+// arguments, the primary's GetAll never called, the designation changing
+// only the READ role (the designated sink and the primary both keep
+// receiving every push, pinned by the assertions on PushCalls below).
+func TestFanoutSetReconcileSourceRoutesGetAllToDesignatedSink(t *testing.T) {
+	atlas := &fakes.FakeInstanceSink{}
+	atlas.SetRemoteList(&instance.InstanceList{Instance: []*instance.Instance{{InstanceId: "atlas-view"}}})
+	nacos := &fakes.FakeInstanceSink{}
+	nacos.SetRemoteList(&instance.InstanceList{Instance: []*instance.Instance{{InstanceId: "nacos-view"}}})
+	fanout := newTestFanout(t, atlas, nacos)
+
+	if err := fanout.SetReconcileSource(stubSinkNacos); err != nil {
+		t.Fatalf("SetReconcileSource(nacos) error = %v, want nil", err)
+	}
+
+	list, err := fanout.GetAll([]int32{1, 2}, "k8s")
+	if err != nil {
+		t.Fatalf("GetAll() error = %v, want nil", err)
+	}
+	if len(list.Instance) != 1 || list.Instance[0].InstanceId != "nacos-view" {
+		t.Fatalf("GetAll() list = %#v, want the designated (nacos) view verbatim", list)
+	}
+	nacosCalls := nacos.GetAllCalls()
+	if len(nacosCalls) != 1 || !reflect.DeepEqual(nacosCalls[0].Statuses, []int32{1, 2}) || nacosCalls[0].Provider != "k8s" {
+		t.Fatalf("designated GetAll calls = %#v, want the query forwarded verbatim", nacosCalls)
+	}
+	if got := len(atlas.GetAllCalls()); got != 0 {
+		t.Fatalf("primary GetAll calls = %d, want 0 (the designation replaces the read source)", got)
+	}
+
+	// The designation changes only the read: a push still reaches BOTH
+	// sinks (the primary keeps its write role, the designated sink gains
+	// nothing it did not already have).
+	if err := fanout.Push(1, []*instance.Instance{{InstanceId: "instance-1"}}); err != nil {
+		t.Fatalf("Push() error = %v, want nil", err)
+	}
+	if got := len(atlas.PushCalls()); got != 1 {
+		t.Fatalf("atlas Push calls after designation = %d, want 1 (pushes still fan out)", got)
+	}
+	if got := len(nacos.PushCalls()); got != 1 {
+		t.Fatalf("nacos Push calls after designation = %d, want 1 (pushes still fan out)", got)
+	}
+}
+
+// TestFanoutReconcileSourceEmptyKeepsPrimaryView: the default — no
+// designation — keeps the v1 primary semantics exactly: the primary's view
+// verbatim, the secondary never consulted (the production-unchanged
+// guarantee of dsca-3 §3.1's migration path). Resetting an existing
+// designation with an empty name restores the same default.
+func TestFanoutReconcileSourceEmptyKeepsPrimaryView(t *testing.T) {
+	atlas := &fakes.FakeInstanceSink{}
+	atlas.SetRemoteList(&instance.InstanceList{Instance: []*instance.Instance{{InstanceId: "atlas-view"}}})
+	nacos := &fakes.FakeInstanceSink{}
+	nacos.SetRemoteList(&instance.InstanceList{Instance: []*instance.Instance{{InstanceId: "nacos-view"}}})
+	fanout := newTestFanout(t, atlas, nacos)
+
+	list, err := fanout.GetAll(nil, "")
+	if err != nil {
+		t.Fatalf("GetAll() error = %v, want nil", err)
+	}
+	if len(list.Instance) != 1 || list.Instance[0].InstanceId != "atlas-view" {
+		t.Fatalf("GetAll() default = %#v, want the primary's view", list)
+	}
+	if got := len(nacos.GetAllCalls()); got != 0 {
+		t.Fatalf("secondary GetAll calls = %d, want 0 (nil designation = primary)", got)
+	}
+
+	// Designate, then reset with the empty name: the primary semantics come
+	// back.
+	if err := fanout.SetReconcileSource(stubSinkNacos); err != nil {
+		t.Fatalf("SetReconcileSource(nacos) error = %v, want nil", err)
+	}
+	if err := fanout.SetReconcileSource(""); err != nil {
+		t.Fatalf("SetReconcileSource(\"\") error = %v, want nil (reset to primary)", err)
+	}
+	list, err = fanout.GetAll(nil, "")
+	if err != nil {
+		t.Fatalf("GetAll() after reset error = %v, want nil", err)
+	}
+	if len(list.Instance) != 1 || list.Instance[0].InstanceId != "atlas-view" {
+		t.Fatalf("GetAll() after reset = %#v, want the primary's view again", list)
+	}
+}
+
+// TestFanoutSetReconcileSourceUnknownNameErrors: a name that matches no
+// registered sink is an error — the designation is resolved by name exactly
+// like PushTo, so an unknown name must fail fast instead of silently
+// designating nothing. The failed call leaves the previous designation
+// untouched.
+func TestFanoutSetReconcileSourceUnknownNameErrors(t *testing.T) {
+	atlas := &fakes.FakeInstanceSink{}
+	atlas.SetRemoteList(&instance.InstanceList{Instance: []*instance.Instance{{InstanceId: "atlas-view"}}})
+	fanout := newTestFanout(t, atlas, &fakes.FakeInstanceSink{})
+
+	err := fanout.SetReconcileSource("bogus")
+	if err == nil {
+		t.Fatal("SetReconcileSource(bogus) error = nil, want an error")
+	}
+	if !strings.Contains(err.Error(), "bogus") {
+		t.Fatalf("SetReconcileSource(bogus) error = %v, want it to name the unknown sink", err)
+	}
+
+	// The failed designation changed nothing: the primary view still served.
+	list, getErr := fanout.GetAll(nil, "")
+	if getErr != nil {
+		t.Fatalf("GetAll() after failed designation error = %v, want nil", getErr)
+	}
+	if len(list.Instance) != 1 || list.Instance[0].InstanceId != "atlas-view" {
+		t.Fatalf("GetAll() after failed designation = %#v, want the primary's view (untouched)", list)
+	}
+}
+
+// TestFanoutReconcileSourceErrorPropagatesUnchanged: the designated sink's
+// GetAll error surfaces unchanged — no wrapping, no fallback to the primary
+// (the compare must see a source error as an error, never silently as a
+// different store's view).
+func TestFanoutReconcileSourceErrorPropagatesUnchanged(t *testing.T) {
+	getAllErr := errors.New("nacos query failed")
+	atlas := &fakes.FakeInstanceSink{}
+	atlas.SetRemoteList(&instance.InstanceList{Instance: []*instance.Instance{{InstanceId: "atlas-view"}}})
+	nacos := &fakes.FakeInstanceSink{GetAllErr: getAllErr}
+	fanout := newTestFanout(t, atlas, nacos)
+	if err := fanout.SetReconcileSource(stubSinkNacos); err != nil {
+		t.Fatalf("SetReconcileSource(nacos) error = %v, want nil", err)
+	}
+
+	list, err := fanout.GetAll([]int32{1}, "ecs")
+	if err != getAllErr {
+		t.Fatalf("GetAll() error = %v, want the designated sink's error unchanged", err)
+	}
+	if list != nil {
+		t.Fatalf("GetAll() list = %#v, want nil alongside the error", list)
+	}
+	if got := len(atlas.GetAllCalls()); got != 0 {
+		t.Fatalf("primary GetAll calls = %d, want 0 (a designated error does not fall back)", got)
+	}
+}

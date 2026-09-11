@@ -124,6 +124,13 @@ func init() {
 	// empty disables the Nacos sink, so the flag-empty binary behavior is
 	// exactly the pre-F5 one. Every flag above is untouched.
 	adapterCmd.Flags().StringP("nacos-addr", "", "", "the Nacos OpenAPI address, e.g. 127.0.0.1:18848; empty disables the Nacos sink")
+	// --reconcile-source is the additive dsca-3 §3.1 flag: it designates
+	// which registered fanout sink the periodic compare READS (the nacos
+	// sink under "nacos" — the nacos-authoritative reconcile). Empty keeps
+	// the primary (Atlas) as the compare source, so the flag-empty binary
+	// behavior is exactly the pre-dsca-3 one; pushes fan out to every sink
+	// either way. "nacos" requires --nacos-addr.
+	adapterCmd.Flags().StringP("reconcile-source", "", "", "the fanout sink whose view the periodic compare reads, e.g. nacos; empty keeps the primary (Atlas)")
 	// The three additive local-source flags of docs/nacos-sink-plan.md §8.4
 	// exist for the local full-stack soak, where the env presets point at
 	// unreachable network addresses: they override the preset endpoints for
@@ -157,6 +164,7 @@ func adapterFlags(cmd *cobra.Command) infraconfig.Flags {
 		PushAppCodes:       flagStringSlice(cmd, "appcodes"),
 		MetricsAddr:        flagString(cmd, "metrics-addr"),
 		NacosAddr:          flagString(cmd, "nacos-addr"),
+		ReconcileSource:    flagString(cmd, "reconcile-source"),
 		KubeConfigPathFlag: flagStringSlice(cmd, "kubeconfig"),
 		ConsulAddrFlag:     flagStringSlice(cmd, "consul-addr"),
 		EtcdEndpointsFlag:  flagStringSlice(cmd, "etcd-endpoints"),

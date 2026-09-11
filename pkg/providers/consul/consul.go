@@ -2,6 +2,7 @@ package consul
 
 import (
 	"context"
+	"fmt"
 	"github.com/hashicorp/consul/api"
 	"github.com/panjf2000/ants/v2"
 	"github.com/pkg/errors"
@@ -41,6 +42,50 @@ type consul struct {
 	// must lock just like the handler paths (syncInstance, CompareAndFlush)
 	// already do. See GetAll's comment for the caller contract.
 	sourceErr error
+
+	// nacosReconcile records that the periodic CompareAndFlush's remote view
+	// is the nacos sink (dsca-3 §3.1, --reconcile-source nacos). It switches
+	// the compare onto the dsca-3 §3.3 rule set:
+	//   - the wire projection wireEnabled(local) = local.Enabled &&
+	//     local.Status != 2 is compared against remote.Enabled instead of
+	//     the raw field (DS-5-2: the consul converter hardcodes local
+	//     Enabled=true while the nacos register forces wire enabled=false
+	//     for every status-2 instance — a raw compare would diff every
+	//     cycle forever);
+	//   - Provider replaces Cluster in the compared set (DS-5-3/DS-3-4: the
+	//     reconstruction leaves Cluster empty, clusterName lands in
+	//     Provider, which round-trips exactly);
+	//   - R2: any reversion mismatch, either direction, is drift (local
+	//     wins; a remote reversion above the local one additionally logs
+	//     the forged-revision companion signal);
+	//   - case 3 pushes Status=3 (deregister) instead of Status=2 — the
+	//     Atlas "old instance, mark not-ready" semantics would heal
+	//     remote-only ecs instances into permanent disabled zombies against
+	//     nacos (DS-3-5).
+	// The [online] status request and the case-2 Status==1 gate stay as-is:
+	// both are REQUIRED invariants in their own right (pinned by tests), and
+	// the wire projection makes the compare correct regardless of them.
+	nacosReconcile bool
+}
+
+// NacosReconcileSwitch is the consul leg's wiring seam for the nacos
+// reconcile mode (dsca-3 §3.3): internal/server.go asserts the constructed
+// provider against it and calls SetNacosReconcileSource(true) exactly when
+// the resolved config designates the nacos sink as the reconcile source
+// (--reconcile-source nacos), before Run. The switch exists so the compare
+// semantics can follow the read routing without changing
+// NewConsulProvider's shared signature.
+type NacosReconcileSwitch interface {
+	SetNacosReconcileSource(enabled bool)
+}
+
+// SetNacosReconcileSource turns the nacos-reconcile compare semantics on or
+// off (see the nacosReconcile field). Call before Run — mid-flight flips
+// are not part of any contract.
+func (c *consul) SetNacosReconcileSource(enabled bool) {
+	c.Lock()
+	c.nacosReconcile = enabled
+	c.Unlock()
 }
 
 // NewConsulProvider creates consul provider
@@ -445,10 +490,61 @@ func (c *consul) CompareAndFlush() {
 			// For these instances in both Provider and the discovery center, if the information in Provider is newer, push is performed.
 			if servIns, exist := remoteInstances[consulKey]; exist {
 				diff := false
-				// If K8s instance Version > Finder instance version
-				if consulIns.Reversion > servIns.Reversion {
+				// The R2 rule of dsca-3 §3.3, applied in nacos-reconcile
+				// mode: reversion is provider-owned monotonic state, not an
+				// authority token (the strictly-higher/equal gates were
+				// Atlas's database guard; nacos v1 register is an
+				// unconditional upsert with no server-side rejection to
+				// respect). ANY reversion mismatch — either direction — is
+				// drift and the local value wins: a remote reversion above
+				// the local ceiling is reachable only out-of-band (a forged
+				// console edit — spotter is the single writer under leader
+				// election), and the old equal-revision field gate would
+				// have suppressed the heal forever (DS-5-4's complete
+				// suppression on the consul leg).
+				if c.nacosReconcile && consulIns.Reversion != servIns.Reversion {
+					diff = true
+					// The R2 companion signal (dsca-5 DS-5-4, adopted per
+					// dsca-3's lead ruling): a remote reversion ABOVE the
+					// local one witnesses an out-of-band write — R2's push
+					// silently normalizes the value, so the event deserves
+					// its own log line. A notice on top of the push, never
+					// instead of it.
+					if servIns.Reversion > consulIns.Reversion {
+						log.Logger.Warnf("the instance: %s of appcode: %s carries a nacos reversion %d above the local %d (out-of-band edit suspected); the reconcile push overwrites it with the local value", consulIns.InstanceId, consulIns.AppCode, servIns.Reversion, consulIns.Reversion)
+						notice.Notice("Forged remote reversion", fmt.Sprintf("The ecs instance %s of appcode %s holds nacos reversion %d above the local %d (out-of-band edit suspected); the reconcile overwrites the remote value with the local one", consulIns.InstanceId, consulIns.AppCode, servIns.Reversion, consulIns.Reversion))
+					}
+				} else if consulIns.Reversion > servIns.Reversion {
 					diff = true
 				} else if consulIns.Reversion == servIns.Reversion {
+					// The wire projection of Enabled (dsca-3 §3.3 / dsca-5
+					// DS-5-2), nacos-reconcile mode only: compare
+					// wireEnabled(local) = local.Enabled && local.Status !=
+					// InstanceStatusUnhealthy against remote.Enabled —
+					// exactly the derivation the nacos register applies
+					// before writing (register forces enabled=false for
+					// every status-2 instance) — so the compare asserts
+					// precisely "would the next push write a different
+					// enabled than the remote holds". The raw compare is
+					// asymmetric on the consul leg (the converter hardcodes
+					// local Enabled=true, convertion.go) and would diff
+					// every status-2 pair every cycle forever.
+					//
+					// Provider replaces Cluster (dsca-5 §4.2-3, DS-3-4):
+					// the nacos reconstruction leaves Cluster empty (the
+					// metadata never carried it; clusterName lands in
+					// Provider, which round-trips exactly — clusterOf <->
+					// clusterName), so comparing the reconstructed Cluster
+					// against a local Cluster that both converters leave
+					// "" would false-positive every instance every cycle.
+					// In Atlas-primary mode the remote view round-trips the
+					// model verbatim, so the original Cluster compare stays.
+					consulEnabled := consulIns.Enabled
+					remoteCluster := servIns.Cluster
+					if c.nacosReconcile {
+						consulEnabled = consulIns.Enabled && consulIns.Status != providers.InstanceStatusUnhealthy
+						remoteCluster = servIns.Provider
+					}
 					// If env-type not equal
 					if consulIns.EnvType != servIns.EnvType ||
 						consulIns.EnvGroup != servIns.EnvGroup ||
@@ -456,8 +552,8 @@ func (c *consul) CompareAndFlush() {
 						consulIns.State != servIns.State ||
 						consulIns.Ip != servIns.Ip ||
 						consulIns.Idc != servIns.Idc ||
-						consulIns.Cluster != servIns.Cluster ||
-						consulIns.Enabled != servIns.Enabled ||
+						remoteCluster != consulClusterOf(c.nacosReconcile, consulIns) ||
+						consulEnabled != servIns.Enabled ||
 						consulIns.AppCode != servIns.AppCode ||
 						consulIns.Cpu != servIns.Cpu {
 						diff = true
@@ -489,12 +585,28 @@ func (c *consul) CompareAndFlush() {
 			notice.Notice("Instance data inconsistency", "Data inconsistency between the discovery center and the ecs cluster: the instances differ between the discovery center and the ecs cluster, some instances exist in the ecs cluster but not in the discovery center")
 		}
 		// The instances remaining in the the discovery center variable (remoteInstances) are either old or not in the Provider instance list.
-		// In this case, we should delete it from the discovery center (that is, set it to Status=2 and push it).
+		// In this case, we should delete it from the discovery center.
 		if len(remoteInstances) > 0 {
 			log.Logger.Infof("process discovery center instance deleting. instance size: %d", len(remoteInstances))
 			for _, servIns := range remoteInstances {
-				servIns.Status = 2
-				log.Logger.Infof("the discovery center has the old instance, set its Status filed as 2, and trigger a push. instance: %v", servIns)
+				if c.nacosReconcile {
+					// dsca-3 §3.3 / DS-3-5, nacos-reconcile mode: push
+					// Status=3 (deregister). The Atlas-primary world's
+					// Status=2 ("old instance, mark not-ready") heals a
+					// remote-only ecs instance against nacos into a
+					// permanent disabled zombie instead — an upsert with
+					// enabled=false, hidden from consumers, present in the
+					// catalog forever. Status 3 makes the nacos sink
+					// deregister by composite id; the reconstructed instance
+					// carries the host's own ip/port/cluster, so the
+					// deregister is well-formed by construction.
+					servIns.Status = providers.InstanceStatusOffline
+					servIns.Enabled = false
+					servIns.State = providers.InstanceStateTerminated
+				} else {
+					servIns.Status = providers.InstanceStatusUnhealthy
+				}
+				log.Logger.Infof("the discovery center has the old instance, set its Status filed as %d, and trigger a push. instance: %v", servIns.Status, servIns)
 				registryExist = true
 				c.buildAndSendEvent(servIns)
 			}
@@ -506,8 +618,21 @@ func (c *consul) CompareAndFlush() {
 	}
 }
 
-func (c *consul) buildAndSendEvent(instance *sv.Instance) {
-	// if instance status is 0 , don't send event
+// consulClusterOf resolves the local side of the Cluster comparison:
+// the local instance's Cluster in Atlas-primary mode (the remote view
+// round-trips the model verbatim there), and the local instance's
+// Provider in nacos-reconcile mode — the symmetric replacement for the
+// Cluster field the nacos reconstruction never carries (dsca-5 §4.2-3:
+// clusterOf <-> clusterName round-trips Provider exactly; Cluster
+// round-trips as "" against a local "" from both converters).
+func consulClusterOf(nacosReconcile bool, ins *sv.Instance) string {
+	if nacosReconcile {
+		return ins.Provider
+	}
+	return ins.Cluster
+}
+
+func (c *consul) buildAndSendEvent(instance *sv.Instance) { // if instance status is 0 , don't send event
 	c.pool.Submit(func() {
 		if instance.Status == 0 {
 			return

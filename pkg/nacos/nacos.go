@@ -419,15 +419,28 @@ func isCatalogNotFound(err error) bool {
 	return strings.Contains(apiErr.Body, "is not found")
 }
 
-// GetAll reconstructs domain instances from Nacos: list all services of the
-// group (paginated), list each service's instances, keep the ones whose
-// clusterName matches the requested provider, and rebuild the instance from
-// the composite fields plus the metadata map. Status filtering uses the
-// status metadata with an enabled→1/else→2 fallback (plan §7.3).
+// GetAll reconstructs domain instances from Nacos's CATALOG view (dsca-3
+// §3.2): list all services of the group (paginated), read each service's
+// hosts of the requested provider's CLUSTER (clusterName == provider — the
+// per-provider/cluster scoping; a real Nacos requires clusterName on the
+// catalog endpoint and answers HTTP 500 "… is not found" for an absent
+// (service, cluster) pair, tolerated as an empty list exactly like the
+// prune's walk), and rebuild the instances from the composite fields plus
+// the metadata map. Status filtering uses the status metadata with an
+// enabled→1/else→2 fallback (plan §7.3).
 //
-// Fidelity limits, documented as acceptable: ports beyond the first, labels
-// and images are not recoverable; v1 comparisons never run against the
-// Nacos view (plan §3.3).
+// Why the catalog and not instance/list: the instance list HIDES
+// enabled=false hosts (client.go's ListInstances, the F8 blind spot) — the
+// exact state spotter's own unhealthy pushes write and the exact state a
+// console-disable heal needs to see. A diff built on the hiding view would
+// misread every pushed-unhealthy instance as "absent" (a spurious ADD push
+// every cycle) and could never heal a console-disabled one. The prune
+// already walks this same catalog view; the diff shares the discipline.
+//
+// Fidelity limits, documented as acceptable (dsca-3 §3.2): ports beyond the
+// first, labels and images are not recoverable, and every field the k8s
+// diff compares survives the round trip; the compared sets deliberately
+// stay inside that round-trippable intersection.
 func (s *Sink) GetAll(statuses []int32, provider string) (*instance.InstanceList, error) {
 	services, err := s.client.ListServices(100)
 	if err != nil {
@@ -435,14 +448,19 @@ func (s *Sink) GetAll(statuses []int32, provider string) (*instance.InstanceList
 	}
 	instances := []*instance.Instance{}
 	for _, service := range services {
-		hosts, err := s.client.ListInstances(service)
+		// clusterName == provider: the per-provider/cluster scoping. A pair
+		// with no catalog entry is the real server's steady state and is
+		// skipped (empty), exactly like the prune (nacos.go's prune walk);
+		// any other error aborts the view — a partial diff input must never
+		// be mistaken for a complete one.
+		hosts, err := s.client.ListCatalogInstances(service, provider)
 		if err != nil {
+			if isCatalogNotFound(err) {
+				continue
+			}
 			return nil, err
 		}
 		for _, host := range hosts {
-			if provider != "" && host.ClusterName != provider {
-				continue
-			}
 			ins := reconstruct(service, host)
 			if !statusAllowed(statuses, ins.Status) {
 				continue
@@ -635,19 +653,32 @@ func compositeID(ins *instance.Instance) string {
 	return fmt.Sprintf("%s#%d#%s#%s@@%s", ins.Ip, firstPort(ins), clusterOf(ins), DefaultGroup, ins.AppCode)
 }
 
+// metadataSchemaVersion is the metadata schema marker of dsca-5 §4.1
+// (Option C, adopted by §4.2-1): register writes "1" alongside the field
+// keys, and reconstruct reads it to know the writer's shape. A missing key
+// is treated as v1 — backward compatible with the live entries on the demo
+// server and any older binary's writes — so the marker only needs to be
+// checked, never enforced.
+const metadataSchemaVersion = "1"
+
 // metadataOf renders the metadata map carried for the GetAll round-trip
-// (plan §7.3): identity and every compared field, as strings.
+// (plan §7.3): identity and every compared field, as strings, plus the
+// schemaVersion marker of dsca-5 §4.2-1 (the vehicle that makes any future
+// metadata extension safely evolvable: a mixed fleet is detectable and a
+// compare can later assert "entry at schema < required → re-push once to
+// upgrade").
 func metadataOf(ins *instance.Instance) map[string]string {
 	metadata := map[string]string{
-		"instanceId": ins.InstanceId,
-		"envType":    ins.EnvType,
-		"envGroup":   ins.EnvGroup,
-		"reversion":  strconv.FormatInt(ins.Reversion, 10),
-		"status":     strconv.FormatInt(int64(ins.Status), 10),
-		"state":      ins.State,
-		"idc":        ins.Idc,
-		"cpu":        strconv.FormatFloat(float64(ins.Cpu), 'f', -1, 32),
-		"version":    ins.Version,
+		"instanceId":    ins.InstanceId,
+		"envType":       ins.EnvType,
+		"envGroup":      ins.EnvGroup,
+		"reversion":     strconv.FormatInt(ins.Reversion, 10),
+		"status":        strconv.FormatInt(int64(ins.Status), 10),
+		"state":         ins.State,
+		"idc":           ins.Idc,
+		"cpu":           strconv.FormatFloat(float64(ins.Cpu), 'f', -1, 32),
+		"version":       ins.Version,
+		"schemaVersion": metadataSchemaVersion,
 	}
 	return metadata
 }
@@ -655,23 +686,46 @@ func metadataOf(ins *instance.Instance) map[string]string {
 // reconstruct rebuilds a domain instance from one remote host. The status
 // comes from the metadata with the enabled→online/else→unhealthy fallback
 // (plan §7.3), so unmetadataed state still classifies.
+//
+// Cluster is deliberately left EMPTY (dsca-3 §3.2, the DS-3-4/DS-5-3
+// fidelity correction): the metadata never carried it — both providers'
+// conversions write Cluster "" (k8s's formatCluster reads a label/env the
+// pods do not set; consul hardcodes "") — while clusterName already lands
+// in Provider (the scoping key the wire round-trips exactly). Synthesizing
+// Cluster from clusterName here would false-positive every consul compare
+// every cycle.
+//
+// A mismatched or missing schemaVersion (dsca-5 §4.2-1) is a degraded
+// writer, not an error: the reconstruction still participates in the diff,
+// degraded exactly like the parseInt64-garbage case — its reversion is
+// zeroed so R2's reversion-in-the-compared-set (or the strictly-higher
+// gate) fires once and the re-push rewrites the full metadata at the
+// current schema. One-shot, self-healing, never a loop.
 func reconstruct(service string, host Host) *instance.Instance {
 	cluster := host.ClusterName
 	status := parseStatus(host.Metadata["status"], host.Enabled)
+	reversion := parseInt64(host.Metadata["reversion"])
+	if v, ok := host.Metadata["schemaVersion"]; !ok || v != metadataSchemaVersion {
+		// Unknown/missing schema: the entry predates the marker or comes
+		// from a different writer. Degrade the reconstruction's
+		// diff-participation (reversion 0) instead of trusting a shape this
+		// binary may not know how to read; the compare heals by re-pushing.
+		reversion = 0
+	}
 	ins := &instance.Instance{
 		InstanceId: host.Metadata["instanceId"],
 		AppCode:    service,
 		Ip:         host.IP,
 		Ports:      []*instance.PortInfo{{Port: int32(host.Port)}},
 		Provider:   cluster,
-		Cluster:    cluster,
+		Cluster:    "", // never synthesized from clusterName (see the doc comment)
 		Enabled:    host.Enabled,
 		EnvType:    host.Metadata["envType"],
 		EnvGroup:   host.Metadata["envGroup"],
 		State:      host.Metadata["state"],
 		Idc:        host.Metadata["idc"],
 		Version:    host.Metadata["version"],
-		Reversion:  parseInt64(host.Metadata["reversion"]),
+		Reversion:  reversion,
 		Status:     status,
 	}
 	if cpu, err := strconv.ParseFloat(host.Metadata["cpu"], 32); err == nil {

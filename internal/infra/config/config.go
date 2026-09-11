@@ -175,6 +175,14 @@ type Flags struct {
 	// A plain string: the empty default IS the legal "disabled" value, so
 	// no tri-state distinction is needed.
 	NacosAddr string
+	// ReconcileSource is the --reconcile-source flag (dsca-3 §3.1): the
+	// fanout sink NAME whose view the periodic compare reads ("nacos"
+	// designates the nacos sink). A plain string mirroring NacosAddr's
+	// pattern: the empty default IS the legal value — it keeps the primary
+	// (Atlas) as the compare source, so the flag-empty binary behavior is
+	// exactly the pre-dsca-3 one. The value is validated at server wiring
+	// (it must name a registered sink), not here.
+	ReconcileSource string
 	// KubeConfigPathFlag is the --kubeconfig flag: a comma list that
 	// overrides the preset's KubeConfigPath for local full-stack runs
 	// (plan §8.4). Empty keeps the preset value verbatim.
@@ -251,6 +259,13 @@ type Config struct {
 	// Nacos sink, which keeps the pre-F5 behavior exactly (plan §7.6:
 	// --nacos-addr empty = a one-sink fanout, identical error surface).
 	NacosAddr string
+
+	// ReconcileSource is the fanout sink name whose view the periodic
+	// compare reads (dsca-3 §3.1); empty keeps the primary (Atlas) — the
+	// default, production-unchanged configuration. "nacos" designates the
+	// nacos sink and requires NacosAddr to be set; the server wiring
+	// validates both and fails startup otherwise.
+	ReconcileSource string
 }
 
 // Default flag values applied by Load when a flag is not set (zero). They
@@ -361,6 +376,13 @@ func Load(env string, flags Flags) (Config, error) {
 	// default, no preset involvement), so the flag-empty path is exactly
 	// the pre-F5 configuration.
 	cfg.NacosAddr = strOrDefault(flags.NacosAddr, "")
+
+	// Reconcile source: additive flag of dsca-3 §3.1 — empty means the
+	// primary (Atlas) stays the compare source (no default, no preset
+	// involvement), so the flag-empty path is exactly the pre-dsca-3
+	// configuration. The name is resolved against the fanout's registered
+	// sinks at server wiring, which owns the fail-fast validation.
+	cfg.ReconcileSource = strOrDefault(flags.ReconcileSource, "")
 
 	// Local-source flags of plan §8.4 (kubeconfig / consul / etcd): each
 	// comma list overrides its preset counterpart when non-empty, and an

@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"fmt"
 	"github.com/panjf2000/ants/v2"
 	v1 "k8s.io/api/core/v1"
 	"spotter/config"
@@ -36,6 +37,20 @@ type k8s struct {
 	// gauge"). Nil disables publication — the in-package tests construct the
 	// provider without a recorder and must keep compiling.
 	queueDepthMetrics ports.MetricsRecorder
+	// nacosReconcile records that the periodic CompareAndFlush's remote view
+	// is the nacos sink (dsca-3 §3.1, --reconcile-source nacos). It switches
+	// the reconcile semantics onto the R1-R4 rule set of dsca-3 §3.3:
+	//   - R2: any reversion mismatch — either direction — counts as drift
+	//     (reversion joins the compared set at the compare call site, local
+	//     wins; a remote reversion above the local one heals by overwriting
+	//     and additionally logs the forged-revision companion signal).
+	//   - DS-3-6: a GetAll error skips the tick instead of degrading to
+	//     push-everything (a remote store that blips must not trigger a full
+	//     re-push burst at scale).
+	// The event-path cache diff (pod2Instance -> hasInstanceDiff) compares
+	// two local conversion outputs and is NOT affected: local reversion
+	// monotonicity keeps the old strictly-higher shape there.
+	nacosReconcile bool
 }
 
 // queueDepthReportInterval is the gauge's publication cadence: short enough
@@ -102,6 +117,26 @@ type QueueDepthReporter interface {
 func (k *k8s) SetQueueDepthReporter(metrics ports.MetricsRecorder) {
 	k.Lock()
 	k.queueDepthMetrics = metrics
+	k.Unlock()
+}
+
+// NacosReconcileSwitch is the k8s leg's wiring seam for the nacos
+// reconcile mode (dsca-3 §3.3): internal/server.go asserts the constructed
+// provider against it and calls SetNacosReconcileSource(true) exactly when
+// the resolved config designates the nacos sink as the reconcile source
+// (--reconcile-source nacos), before Run. The switch exists so the
+// provider's compare semantics can follow the read routing without
+// changing NewK8SProvider's shared signature.
+type NacosReconcileSwitch interface {
+	SetNacosReconcileSource(enabled bool)
+}
+
+// SetNacosReconcileSource turns the nacos-reconcile compare semantics on or
+// off (see the nacosReconcile field). Call before Run — mid-flight flips
+// are not part of any contract.
+func (k *k8s) SetNacosReconcileSource(enabled bool) {
+	k.Lock()
+	k.nacosReconcile = enabled
 	k.Unlock()
 }
 
@@ -372,6 +407,21 @@ func (k *k8s) CompareAndFlush() {
 		// the worker is exactly what communicates with Atlas (fetch from the discovery center, push data)
 		list, err := k.worker.GetAll([]int32{providers.InstanceStatusOnline, providers.InstanceStatusUnhealthy}, providers.ProviderK8s)
 		if err != nil {
+			// DS-3-6 (dsca-3 §3.3 error-path alignment): in nacos-reconcile
+			// mode the source is a remote store that can blip — a transient
+			// 5xx or a slow catalog page — and treating the error as
+			// "remote empty → push everything" would fire a full re-push
+			// burst to both sinks precisely when the system is degraded
+			// (the thundering herd the scale/latency tracks drive out). The
+			// tick is skipped instead; the next interval retries the heal.
+			// In the Atlas-primary world the historical push-everything
+			// behavior is kept: an unreachable Atlas was a "resync
+			// everything" trigger, and that world's semantics stay
+			// untouched.
+			if k.nacosReconcile {
+				log.Logger.Errorf("get all instances from the reconcile source failed, skipping this compare tick: %s", err.Error())
+				return
+			}
 			log.Logger.Errorf("get all instances from atlas failed")
 		}
 		if list == nil || list.Instance == nil || len(list.Instance) == 0 {
@@ -403,6 +453,31 @@ func (k *k8s) CompareAndFlush() {
 			// Instance data information to be pushed, subject to the data in K8s
 			if servIns, exist := servMap[k8sKey]; exist {
 				diff := k.hasInstanceDiff(servIns, k8sIns)
+				// R2 (dsca-3 §3.3), nacos-reconcile mode only: reversion is
+				// provider-owned monotonic state, not an authority token —
+				// the "strictly-higher wins" gate was Atlas's database guard
+				// (a receiver-side protection against out-of-order pushes;
+				// nacos v1 register is an unconditional upsert with no
+				// server-side rejection to respect). ANY reversion mismatch,
+				// either direction, is drift, and the local value wins: a
+				// remote reversion above the local ceiling is reachable only
+				// out-of-band (a forged/edited metadata reversion — spotter
+				// is the single writer under leader election), and adopting
+				// Atlas's "remote higher wins" here would let one forged
+				// bump permanently blind the reconcile.
+				if !diff && k.nacosReconcile && servIns.Reversion != k8sIns.Reversion {
+					diff = true
+					// The R2 companion signal (dsca-5 DS-5-4, adopted per
+					// dsca-3's lead ruling): a remote reversion ABOVE the
+					// local one witnesses an out-of-band write — R2's push
+					// silently normalizes the value, so the event deserves
+					// its own log line. A notice on top of the push, never
+					// instead of it.
+					if servIns.Reversion > k8sIns.Reversion {
+						log.Logger.Warnf("the instance: %s of appcode: %s carries a nacos reversion %d above the local %d (out-of-band edit suspected); the reconcile push overwrites it with the local value", k8sIns.InstanceId, k8sIns.AppCode, servIns.Reversion, k8sIns.Reversion)
+						notice.Notice("Forged remote reversion", fmt.Sprintf("The k8s instance %s of appcode %s holds nacos reversion %d above the local %d (out-of-band edit suspected); the reconcile overwrites the remote value with the local one", k8sIns.InstanceId, k8sIns.AppCode, servIns.Reversion, k8sIns.Reversion))
+					}
+				}
 				if diff {
 					log.Logger.Infof("the instance: %s of appcode: %s is newer, trigger a push.", k8sIns.InstanceId, k8sIns.AppCode)
 					bothExist = true

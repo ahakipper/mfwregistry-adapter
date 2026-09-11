@@ -875,3 +875,198 @@ func formatNacosRequests(requests []nacosmock.Request) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+// -----------------------------------------------------------------------------
+// The reconcile-source designation wiring (dsca-3 §3.1)
+// -----------------------------------------------------------------------------
+
+// startProvidersWithReconcileSource runs startProviders on an offline
+// server with the given NacosAddr and reconcile-source value and returns
+// the worker the fanout was built around (the same harness as
+// startProvidersWithNacosAddr, plus the designation config).
+func startProvidersWithReconcileSource(t *testing.T, nacosAddr, reconcileSource string) (worker.Worker, *Server, chan error) {
+	t.Helper()
+	logger := zap.NewNop().Sugar()
+
+	var captured worker.Worker
+	providerStarted := make(chan struct{})
+	s := &Server{
+		isLeader: true,
+		stop:     make(chan struct{}),
+		logger:   logger,
+		notifier: recordingNotifier{},
+		localIP:  func() (string, error) { return "127.0.0.1", nil },
+		cfg: infraconfig.Config{
+			EnableLeaderElection: true,
+			MetricsAddr:          "127.0.0.1:0",
+			NacosAddr:            nacosAddr,
+			ReconcileSource:      reconcileSource,
+		},
+		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
+			return discoverycenter.NewClient(noopDiscoveryService{}, nil, nil)
+		},
+		initializeProviders: func(ctx context.Context, w worker.Worker) ([]providers.Provider, error) {
+			captured = w
+			return []providers.Provider{&capturedWorkerProvider{ctx: ctx, started: providerStarted}}, nil
+		},
+	}
+
+	result := make(chan error, 1)
+	go func() { result <- s.startProviders() }()
+	<-providerStarted
+	return captured, s, result
+}
+
+// TestStartProvidersDesignatesNacosReconcileSource: with
+// --reconcile-source nacos (and --nacos-addr set), the worker's GetAll —
+// the view the providers' compares read — returns the NACOS sink's view,
+// not the primary's. Proven through the worker's public GetAll seam against
+// a nacosmock seeded with out-of-band state: the primary (the noop
+// discovery service) serves an empty view, so a non-empty answer can only
+// come from the designated sink.
+func TestStartProvidersDesignatesNacosReconcileSource(t *testing.T) {
+	server := nacosmock.Start()
+	defer server.Close()
+
+	// Out-of-band nacos state: one host under the k8s cluster.
+	server.SetInstances([]nacosmock.Host{
+		{IP: "10.0.0.7", Port: 8080, Enabled: true, Ephemeral: false,
+			Metadata: map[string]string{
+				"instanceId": "pod-seeded", "envType": "test", "envGroup": "7",
+				"reversion": "42", "status": "1", "state": "running",
+				"idc": "", "cpu": "0", "version": "", "schemaVersion": "1",
+			}},
+	}, "DEFAULT_GROUP", "pay-user", "k8s")
+
+	captured, s, result := startProvidersWithReconcileSource(t, server.URL(), "nacos")
+	if captured == nil {
+		t.Fatal("initializeProviders received a nil worker")
+	}
+
+	list, err := captured.GetAll([]int32{1}, "k8s")
+	if err != nil {
+		t.Fatalf("worker.GetAll([1], k8s) error = %v, want nil", err)
+	}
+	if len(list.Instance) != 1 || list.Instance[0].InstanceId != "pod-seeded" {
+		t.Fatalf("worker.GetAll() = %d instances, want the designated nacos sink's view (pod-seeded); got %#v", len(list.Instance), list.Instance)
+	}
+
+	s.Stop()
+	select {
+	case <-result:
+	case <-time.After(3 * time.Second):
+		t.Fatal("startProviders() did not return after Stop")
+	}
+}
+
+// TestStartProvidersReconcileSourceDefaultKeepsPrimary: without the flag,
+// the worker's GetAll keeps the primary (Atlas) view — the
+// production-unchanged default. The nacos sink is registered (--nacos-addr
+// set), so the designated path exists but is not taken: the primary's empty
+// view is what the compare sees.
+func TestStartProvidersReconcileSourceDefaultKeepsPrimary(t *testing.T) {
+	server := nacosmock.Start()
+	defer server.Close()
+
+	server.SetInstances([]nacosmock.Host{
+		{IP: "10.0.0.7", Port: 8080, Enabled: true, Ephemeral: false,
+			Metadata: map[string]string{"instanceId": "pod-seeded"}},
+	}, "DEFAULT_GROUP", "pay-user", "k8s")
+
+	captured, s, result := startProvidersWithReconcileSource(t, server.URL(), "")
+	if captured == nil {
+		t.Fatal("initializeProviders received a nil worker")
+	}
+
+	list, err := captured.GetAll([]int32{1}, "k8s")
+	if err != nil {
+		t.Fatalf("worker.GetAll([1], k8s) error = %v, want nil", err)
+	}
+	if len(list.Instance) != 0 {
+		t.Fatalf("worker.GetAll() = %d instances, want 0 (the primary's view — the nacos sink is registered but not designated); got %#v", len(list.Instance), list.Instance)
+	}
+
+	s.Stop()
+	select {
+	case <-result:
+	case <-time.After(3 * time.Second):
+		t.Fatal("startProviders() did not return after Stop")
+	}
+}
+
+// TestStartProvidersReconcileSourceNacosWithoutNacosAddrFails: the
+// fail-fast wiring guard — --reconcile-source nacos without --nacos-addr
+// (no nacos sink registered) fails the provider startup before any provider
+// runs.
+func TestStartProvidersReconcileSourceNacosWithoutNacosAddrFails(t *testing.T) {
+	logger := zap.NewNop().Sugar()
+	initializeCalls := 0
+	s := &Server{
+		isLeader: true,
+		stop:     make(chan struct{}),
+		logger:   logger,
+		notifier: recordingNotifier{},
+		localIP:  func() (string, error) { return "127.0.0.1", nil },
+		cfg: infraconfig.Config{
+			EnableLeaderElection: true,
+			MetricsAddr:          "127.0.0.1:0",
+			ReconcileSource:      "nacos", // no NacosAddr: the sink is absent
+		},
+		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
+			return discoverycenter.NewClient(noopDiscoveryService{}, nil, nil)
+		},
+		initializeProviders: func(context.Context, worker.Worker) ([]providers.Provider, error) {
+			initializeCalls++
+			return nil, nil
+		},
+	}
+
+	err := s.startProviders()
+	if err == nil {
+		t.Fatal("startProviders() error = nil, want the nacos-without-nacos-addr failure")
+	}
+	if !strings.Contains(err.Error(), "reconcile-source") && !strings.Contains(err.Error(), "nacos-addr") {
+		t.Fatalf("startProviders() error = %q, want it to name the designation requirement", err)
+	}
+	if initializeCalls != 0 {
+		t.Fatalf("InitializeProviders calls = %d, want 0 (startup failed at the designation guard)", initializeCalls)
+	}
+}
+
+// TestStartProvidersReconcileSourceUnknownNameFails: a reconcile-source
+// value that names no registered sink fails the provider startup (the
+// fail-fast discipline of the fanout's name resolution).
+func TestStartProvidersReconcileSourceUnknownNameFails(t *testing.T) {
+	logger := zap.NewNop().Sugar()
+	initializeCalls := 0
+	s := &Server{
+		isLeader: true,
+		stop:     make(chan struct{}),
+		logger:   logger,
+		notifier: recordingNotifier{},
+		localIP:  func() (string, error) { return "127.0.0.1", nil },
+		cfg: infraconfig.Config{
+			EnableLeaderElection: true,
+			MetricsAddr:          "127.0.0.1:0",
+			ReconcileSource:      "bogus",
+		},
+		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
+			return discoverycenter.NewClient(noopDiscoveryService{}, nil, nil)
+		},
+		initializeProviders: func(context.Context, worker.Worker) ([]providers.Provider, error) {
+			initializeCalls++
+			return nil, nil
+		},
+	}
+
+	err := s.startProviders()
+	if err == nil {
+		t.Fatal("startProviders() error = nil, want the unknown-reconcile-source failure")
+	}
+	if !strings.Contains(err.Error(), "bogus") {
+		t.Fatalf("startProviders() error = %q, want it to name the unknown sink", err)
+	}
+	if initializeCalls != 0 {
+		t.Fatalf("InitializeProviders calls = %d, want 0 (startup failed at the designation guard)", initializeCalls)
+	}
+}

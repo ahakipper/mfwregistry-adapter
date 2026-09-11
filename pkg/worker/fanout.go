@@ -109,8 +109,11 @@ const AtlasSinkName = "atlas"
 // splitting them across packages would export that contract anyway.
 //
 // The first registered sink is the primary (Atlas): it pushes first and is
-// the only sink whose view GetAll returns (§6.3). Construct with
-// NewFanoutSink; the zero value is not usable.
+// the sink whose view GetAll returns by default (§6.3). The reconcile
+// designation (reconcile, below — dsca-3 §3.1) can hand that READ role to
+// another sink (the nacos sink under --reconcile-source nacos) without
+// touching the push fan-out at all. Construct with NewFanoutSink; the zero
+// value is not usable.
 type FanoutSink struct {
 	sinks  []NamedSink
 	logger ports.Logger
@@ -118,6 +121,22 @@ type FanoutSink struct {
 	// (recordingSink tolerates it), so callers that construct the fanout
 	// without a recorder keep compiling and working.
 	metrics ports.MetricsRecorder
+	// reconcile is the DESIGNATED reconcile sink of dsca-3 §3.1: the sink
+	// whose view GetAll returns, looked up by name through
+	// SetReconcileSource. nil keeps the v1 primary semantics (sinks[0],
+	// Atlas) — the default, production-unchanged configuration. The
+	// designation changes ONLY the read view: every push (Push, PushAll,
+	// PushTo) still fans out to every sink exactly as before, so the
+	// designated sink gains a read role, never loses its write role, and
+	// the primary keeps receiving every push.
+	//
+	// Set once, before Run: the wiring calls SetReconcileSource during
+	// provider startup (internal/server.go, before any provider goroutine
+	// exists), matching the set-before-Run discipline of the k8s
+	// provider's SetQueueDepthReporter. Later reads are therefore
+	// unsynchronized-by-design; call SetReconcileSource mid-flight at your
+	// own risk (it is not part of any contract).
+	reconcile *NamedSink
 }
 
 // FanoutSink satisfies the sink port (it is a sink itself, nestable). It
@@ -263,7 +282,9 @@ func (s *recordingSink) observe(triggerTime int64, err error) {
 // and parallel dispatch keeps it — one goroutine per sink, so a sink's
 // pushes stay serialized on that goroutine), and cross-sink ordering was
 // never part of any contract. The sinks are NOT reordered: sinks[0] stays
-// the primary (Atlas) and remains the only sink whose view GetAll returns.
+// the primary (Atlas) and remains the sink whose view GetAll returns by
+// default (the reconcile designation can hand the read role to another
+// sink; the primary keeps every push either way).
 func (f *FanoutSink) Push(triggerTime int64, instances []*instance.Instance) error {
 	results := make([]error, len(f.sinks))
 	var wg sync.WaitGroup
@@ -317,23 +338,58 @@ func (f *FanoutSink) collectFailures(operation string, results []error) error {
 	return nil
 }
 
-// GetAll returns the primary (first, Atlas-positioned) sink's view — the
-// v1 semantics of plan §6.3. Only the primary is consulted: secondary sinks'
-// GetAll is never called, and a primary error propagates unchanged,
-// matching the pre-fanout behavior where a failing Atlas GetAll aborts or
-// logs per provider. The primary view also feeds the worker's GetAll, which
-// the providers' comparisons consume.
+// GetAll returns the view the reconcile designation selects: the DESIGNATED
+// sink's view when one is set (dsca-3 §3.1, --reconcile-source nacos), else
+// the primary (first, Atlas-positioned) sink's — the v1 semantics of plan
+// §6.3, byte-identical to the pre-designation behavior when no sink is
+// designated (the production default). Only the designated (or primary) sink
+// is consulted: the other sinks' GetAll is never called, and an error from
+// the consulted sink propagates unchanged — no fallback, matching the
+// pre-fanout behavior where a failing Atlas GetAll aborts or logs per
+// provider. The returned view also feeds the worker's GetAll, which the
+// providers' comparisons consume.
 //
-// Failure window, stated honestly (plan §3.3): in v1 only the primary's
-// view feeds the comparisons, so secondary-sink drift that involves no
-// local instance change (e.g. an out-of-band Nacos deletion) is invisible
-// here. It heals at the next full-push tick: ProcessIntervalFullPush runs
-// CompareAndFlush and, once plan §7.4's SyncAll trigger lands with F5, also
-// emits the OperateTypeSyncAll event whose fan-out runs the secondary
-// sink's PushAll prune sweep. Per-sink comparison is an explicit follow-up
-// (plan §10).
+// Failure window, stated honestly (plan §3.3): without a designation only
+// the primary's view feeds the comparisons, so secondary-sink drift that
+// involves no local instance change (e.g. an out-of-band Nacos deletion) is
+// invisible there. The designation exists precisely to close that window
+// for one named sink: with --reconcile-source nacos the periodic
+// CompareAndFlush of both providers reads the nacos catalog view, making
+// nacos the authoritative external store the reconcile converges against
+// (heals manual metadata edits, enabled flips and API-side deletes within
+// one push interval). The heal still rides the next CompareAndFlush tick
+// for drift that involves no local change; per-sink comparison for the
+// remaining sinks is an explicit follow-up (plan §10).
 func (f *FanoutSink) GetAll(statuses []int32, provider string) (*instance.InstanceList, error) {
+	if f.reconcile != nil {
+		return f.reconcile.Sink.GetAll(statuses, provider)
+	}
 	return f.sinks[0].Sink.GetAll(statuses, provider)
+}
+
+// SetReconcileSource designates the sink whose view GetAll returns
+// (dsca-3 §3.1). An empty name resets the designation to the primary (the
+// default v1 semantics). A name that matches no registered sink is an
+// error — the designation is resolved by name exactly like PushTo, so an
+// unknown name must fail fast instead of silently designating nothing
+// (the same discipline as NewFanoutSink's name validation). Designating
+// the primary by its own name is legal and equivalent to the default.
+//
+// The designation changes only the READ view; see the reconcile field's
+// comment for the set-before-Run discipline.
+func (f *FanoutSink) SetReconcileSource(name string) error {
+	if name == "" {
+		f.reconcile = nil
+		return nil
+	}
+	for i := range f.sinks {
+		if f.sinks[i].Name == name {
+			f.reconcile = &f.sinks[i]
+			return nil
+		}
+	}
+	return fmt.Errorf("worker: fanout reconcile source %q is not a registered sink (known sinks: %s)",
+		name, strings.Join(f.Sinks(), ", "))
 }
 
 // PushTo pushes to exactly one named sink — the retry seam
