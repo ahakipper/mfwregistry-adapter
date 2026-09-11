@@ -18,8 +18,10 @@ package k8srobot
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"k8s.io/client-go/informers"
@@ -94,6 +96,57 @@ type Robot interface {
 
 // queueSize is the buffer of the internal event channel.
 const queueSize = 4096
+
+// dropLogEvery is the rate limit of the drop warning: the FIRST drop of a
+// burst logs at Warn, then one line every 10k drops (dsca-1 DS-1-1 fix item
+// 1: "log at rate (first drop per burst at Warn, then every 10k)") — a
+// 20k-events/s burst must not spend the informer's producer goroutine
+// formatting 20k warnings per second.
+const dropLogEvery = 10000
+
+// dropObserver is the process-wide observer notified on every queue-full
+// drop, set through SetDropObserver (the injection seam of dsca-2 §6 row 8
+// and dsca-1 DS-1-1 fix item 1). Package-level, not a Robot method,
+// because the seam is deliberately minimal: k8srobot takes no metrics
+// dependency, the provider wiring closes over the recorder.
+//
+// CONTRACT: set once, before Run. The atomic read path is race-safe for
+// any later SetDropObserver call (so tests can swap observers), but the
+// intended production pattern is a single set during wiring.
+var dropObserver atomic.Value // func(cluster string)
+
+// SetDropObserver installs the drop observer notified with the dropping
+// cluster's identifier (the watcher's kubeconfig path) on every queue-full
+// drop. Set it before Run; a nil observer disables notification (the drop
+// counter simply does not count).
+func SetDropObserver(observer func(cluster string)) {
+	if observer == nil {
+		dropObserver.Store((func(string))(nil))
+		return
+	}
+	dropObserver.Store(observer)
+}
+
+// notifyDrop invokes the installed observer (if any) for one dropped event.
+func notifyDrop(cluster string) {
+	if observer, ok := dropObserver.Load().(func(string)); ok && observer != nil {
+		observer(cluster)
+	}
+}
+
+// droppedTotal counts drops since process start for the rate-limited
+// warning (see dropLogEvery). It counts ALL clusters' drops — the
+// per-cluster count is the metrics label's job, this one only decides when
+// the next warning line is worth printing.
+var droppedTotal uint64
+
+// dropWarningRate returns whether this drop's ordinal warrants a warning
+// line: the first drop, then every dropLogEvery-th. Call it exactly once
+// per drop so the counter advances per event.
+func dropWarningRate() bool {
+	n := atomic.AddUint64(&droppedTotal, 1)
+	return n == 1 || n%dropLogEvery == 0
+}
 
 // clusterWatcher bundles everything needed to watch one cluster.
 type clusterWatcher struct {
@@ -196,6 +249,19 @@ func (w *clusterWatcher) enqueue(event EventType, obj interface{}, queue chan Qu
 	case queue <- item:
 	default:
 		// The queue is full: drop the event instead of blocking the informer.
+		// The drop is OBSERVABLE now (dsca-1 DS-1-1 fix item 1, the unified
+		// spec with dsca-2 §6 row 8): the installed drop observer counts it
+		// on the events_dropped_total series (per-cluster label = this
+		// watcher's kubeconfig path, the only identity Cluster carries
+		// today), and the warning is rate-limited (first drop per burst,
+		// then every 10k) so a burst cannot turn the informer's producer
+		// goroutine into a log formatter. Backpressure and drop-recovery
+		// remain DS-1-1 items 2-3; this arm's job is to make the loss
+		// visible.
+		notifyDrop(w.cluster.ConfigPath)
+		if dropWarningRate() {
+			log.Printf("[WARN] k8srobot: queue full (capacity %d), dropped one event of cluster %s; the next full-push tick is the healer", queueSize, w.cluster.ConfigPath)
+		}
 	}
 }
 

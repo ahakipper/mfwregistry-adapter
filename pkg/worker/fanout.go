@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"spotter/internal/domain/instance"
 	"spotter/internal/ports"
@@ -112,6 +113,10 @@ const AtlasSinkName = "atlas"
 type FanoutSink struct {
 	sinks  []NamedSink
 	logger ports.Logger
+	// metrics observes the per-sink e2e decorator below. Nil is a no-op
+	// (recordingSink tolerates it), so callers that construct the fanout
+	// without a recorder keep compiling and working.
+	metrics ports.MetricsRecorder
 }
 
 // FanoutSink satisfies the sink port (it is a sink itself, nestable). It
@@ -131,9 +136,37 @@ var (
 // depth-total metrics label (unsynced_service.go), so a sink claiming it
 // would collide with that series and is rejected too. The sinks are
 // copied; the caller's slice is not retained.
+//
+// dsca-2 §6 row 7: every sink is wrapped in the per-sink recording
+// decorator (recordingSink below) before being stored, so Push, PushAll
+// AND PushTo — the retry path, whose PushTo dispatches to the wrapped
+// named.Sink.Push — all produce one e2e observation each, with the origin
+// preserved from the (ns-epoch) trigger parameter.
 func NewFanoutSink(logger ports.Logger, sinks ...NamedSink) (*FanoutSink, error) {
+	return newFanoutSink(logger, nil, sinks...)
+}
+
+// NewFanoutSinkWithMetrics is NewFanoutSink plus the metrics recorder the
+// per-sink e2e decorator observes on. The production wiring
+// (internal/server.go) passes the real recorder; the nil-default call
+// sites keep NewFanoutSink.
+func NewFanoutSinkWithMetrics(logger ports.Logger, metrics ports.MetricsRecorder, sinks ...NamedSink) (*FanoutSink, error) {
+	return newFanoutSink(logger, metrics, sinks...)
+}
+
+func newFanoutSink(logger ports.Logger, metrics ports.MetricsRecorder, sinks ...NamedSink) (*FanoutSink, error) {
 	if len(sinks) == 0 {
 		return nil, errors.New("worker: fanout requires at least one sink")
+	}
+	if logger == nil {
+		logger = ports.NopLogger{}
+	}
+	if metrics == nil {
+		// Substitute BEFORE the wrap below: the decorator stores the
+		// recorder by value at wrap time, so a nil passed in must never
+		// reach a recordingSink (its observe call would panic). The
+		// nopMetricsRecorder turns the decorator into a pass-through.
+		metrics = nopMetricsRecorder{}
 	}
 	seen := make(map[string]struct{}, len(sinks))
 	owned := make([]NamedSink, len(sinks))
@@ -151,12 +184,63 @@ func NewFanoutSink(logger ports.Logger, sinks ...NamedSink) (*FanoutSink, error)
 			return nil, fmt.Errorf("worker: fanout sink %q is registered twice", named.Name)
 		}
 		seen[named.Name] = struct{}{}
-		owned[i] = named
+		// Wrap BEFORE storing: every later dispatch (Push, PushAll, PushTo,
+		// the nested-fanout GetAll chain) goes through the decorator.
+		owned[i] = NamedSink{
+			Name: named.Name,
+			Sink: &recordingSink{name: named.Name, inner: named.Sink, metrics: metrics},
+		}
 	}
-	if logger == nil {
-		logger = ports.NopLogger{}
+	return &FanoutSink{sinks: owned, logger: logger, metrics: metrics}, nil
+}
+
+// recordingSink is the per-sink e2e timing decorator of dsca-2 §3: it
+// wraps one named sink, observes time.Since(trigger reconstructed as
+// wall-clock) around each Push/PushAll, and labels the observation with
+// the sink's name and the push outcome ("ok" | "error").
+//
+// The origin-reconstruction limitation is documented (dsca-2 §3): the
+// trigger is ns-since-epoch (UnixNano widened at the producers), so
+// time.Unix(0, trigger) reconstructs a wall-clock instant with NO
+// monotonic reading — an NTP step during an in-flight push skews that one
+// observation (rare, accepted price of not widening the type). The
+// full-push paths (PushAll/SyncAll) measure "age of the full push at
+// completion" (tick-time origins), not event age — dsca-2 §6's origin
+// semantics, so dashboards do not misread the SyncAll series.
+type recordingSink struct {
+	name    string
+	inner   ports.InstanceSink
+	metrics ports.MetricsRecorder
+}
+
+var _ ports.InstanceSink = (*recordingSink)(nil)
+
+func (s *recordingSink) Push(triggerTime int64, instances []*instance.Instance) error {
+	err := s.inner.Push(triggerTime, instances)
+	s.observe(triggerTime, err)
+	return err
+}
+
+func (s *recordingSink) PushAll(triggerTime int64, instances []*instance.Instance) error {
+	err := s.inner.PushAll(triggerTime, instances)
+	s.observe(triggerTime, err)
+	return err
+}
+
+func (s *recordingSink) GetAll(statuses []int32, provider string) (*instance.InstanceList, error) {
+	return s.inner.GetAll(statuses, provider)
+}
+
+// observe records one e2e observation for this sink with the outcome
+// derived from the push error. The metrics recorder is never nil (the
+// constructor substitutes the nop), and a nil-safe call here keeps the
+// zero-value fanout from panicking if one is ever constructed directly.
+func (s *recordingSink) observe(triggerTime int64, err error) {
+	outcome := "ok"
+	if err != nil {
+		outcome = "error"
 	}
-	return &FanoutSink{sinks: owned, logger: logger}, nil
+	s.metrics.ObserveEventToStoreDuration(s.name, outcome, time.Since(time.Unix(0, triggerTime)))
 }
 
 // Push fans the instances out to every sink sequentially, in declaration

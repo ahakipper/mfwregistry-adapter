@@ -86,6 +86,26 @@ func (r *Recorder) MarkSyncOnce() {
 	metrics.SyncOnceGauge.WithLabelValues("sync_once_gauge").Set(1)
 }
 
+// ObserveEventToStoreDuration records one end-to-end observation (event
+// origin -> sink store-visible) on the event_to_store_e2e_duration_seconds
+// collector, per sink and outcome.
+//
+// UNIT DEVIATION, recorded deliberately (dsca-2 §6 row 5): this observes
+// d.Seconds() — seconds — unlike every legacy series above, which observes
+// .Milliseconds(). The _seconds suffix carries the unit per Prometheus
+// convention and the 1 ms -> 10 s bucket span would be illegible as ms
+// buckets. Do not "fix" this back to milliseconds silently.
+func (r *Recorder) ObserveEventToStoreDuration(sink, outcome string, d time.Duration) {
+	metrics.EventToStoreE2EDuration.WithLabelValues(sink, outcome).Observe(d.Seconds())
+}
+
+// IncEventsDropped counts one queue-full event drop on the
+// events_dropped_total collector, per dropping cluster (the unified drop
+// spec co-owned by dsca-2 §6 and dsca-1 DS-1-1 fix item 1).
+func (r *Recorder) IncEventsDropped(cluster string) {
+	metrics.EventsDroppedTotal.WithLabelValues(cluster).Inc()
+}
+
 // httpServer serves promhttp and pprof endpoints and stops idempotently.
 type httpServer struct {
 	srv  *http.Server

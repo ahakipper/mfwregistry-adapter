@@ -734,3 +734,44 @@ func (m *flippingMonitor) failsNow() bool {
 	defer m.mu.Unlock()
 	return m.fails
 }
+
+// -----------------------------------------------------------------------------
+// Trigger unit widening: ns-since-epoch producers (dsca-2 §3 Option b)
+// -----------------------------------------------------------------------------
+
+// TestConsulEventsSyncEmitsNsEpochTrigger pins the unit widening at the
+// consul event path (EventsSync's `time.Now().UnixNano()`): the consul
+// sites are REQUIRED, not optional — the fan-out decorator cannot tell
+// which provider emitted an Event, and a seconds-valued Trigger would
+// make the e2e observation read ~57 years (the mixed-unit hazard dsca-2
+// §6 row 2). The magnitude check is the mutation pin: a regression back
+// to Unix() (seconds) yields ~1.7e9, five orders of magnitude below the
+// ns epoch (~1.7e18).
+func TestConsulEventsSyncEmitsNsEpochTrigger(t *testing.T) {
+	server := consulmock.Start()
+	defer server.Close()
+
+	w := &fakeWorker{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := newBlackboxConsulProvider(t, server, w, 0, ctx)
+
+	// One convertible instance per slice exercises all three EventsSync
+	// arms (add, update, del) of the widened producer.
+	ins := &sv.Instance{InstanceId: "srv-ns-epoch", Status: 1, Reversion: 1}
+	c.EventsSync([]*sv.Instance{ins}, []*sv.Instance{ins}, []*sv.Instance{ins})
+
+	events := w.handleSnapshot()
+	if len(events) != 3 {
+		t.Fatalf("worker.Handle calls = %d, want 3 (add+update+del); events = %#v", len(events), events)
+	}
+	now := time.Now().UnixNano()
+	for i, e := range events {
+		if e.Trigger <= 1e15 {
+			t.Fatalf("event[%d] trigger = %d, want a ns-since-epoch magnitude (> 1e15; a seconds-valued Unix() trigger is ~1.7e9) — the consul producer regressed to whole seconds", i, e.Trigger)
+		}
+		if e.Trigger < now-int64(time.Hour) || e.Trigger > now+int64(time.Hour) {
+			t.Fatalf("event[%d] trigger = %d, want within one hour of now-in-ns %d", i, e.Trigger, now)
+		}
+	}
+}

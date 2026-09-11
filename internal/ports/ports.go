@@ -97,4 +97,16 @@ type MetricsRecorder interface {
 	// per-sink series.
 	SetSyncErrorQueueDepth(sink string, depth int)
 	MarkSyncOnce()
+	// ObserveEventToStoreDuration records one end-to-end observation —
+	// event origin (the ns-epoch Trigger) to the sink's store-visible
+	// completion — for one named sink, with the push outcome ("ok" |
+	// "error"). The unified drop/latency spec of dsca-2 §6 (rows 4-5): the
+	// latency series refuses to ship without its blind-spot detector, so
+	// the e2e histogram and IncEventsDropped land together.
+	ObserveEventToStoreDuration(sink, outcome string, d time.Duration)
+	// IncEventsDropped counts one event dropped by a full queue, labeled by
+	// the dropping cluster (the cluster label rides the argument — dsca-1
+	// DS-1-1 fix item 1 and dsca-2 §6 row 4, the single unified spec both
+	// tracks land).
+	IncEventsDropped(cluster string)
 }

@@ -291,19 +291,25 @@ func (c *consul) VerifyInstance(ins *sv.Instance) error {
 
 // EventsSync sync the event to the finder
 func (c *consul) EventsSync(add, update, del []*sv.Instance) {
+	// time.Now per slice so each event carries its own emission instant.
+	// UnixNano, not Unix: dsca-2 §3 Option (b) widens Trigger to
+	// ns-since-epoch at every producer site (the consul sites are REQUIRED,
+	// not optional: the sink-side e2e decorator cannot tell which provider
+	// emitted an Event, and a seconds-valued Trigger would observe ~57
+	// years — dsca-2 §6 row 2).
 	if len(add) > 0 {
 		for _, ins := range add {
-			c.eventSync(ins, time.Now().Unix())
+			c.eventSync(ins, time.Now().UnixNano())
 		}
 	}
 	if len(update) > 0 {
 		for _, ins := range update {
-			c.eventSync(ins, time.Now().Unix())
+			c.eventSync(ins, time.Now().UnixNano())
 		}
 	}
 	if len(del) > 0 {
 		for _, ins := range del {
-			c.eventSync(ins, time.Now().Unix())
+			c.eventSync(ins, time.Now().UnixNano())
 		}
 	}
 }
@@ -389,8 +395,9 @@ func (c *consul) emitSyncAll() {
 		log.Logger.Warnf("consul source read failed, skipping the SyncAll emission this tick (an error-time empty full-sync would assert a false vanished state to every sink): %s", err.Error())
 		return
 	}
+	// Tick-time origin + ns unit (dsca-2 §3 Option (b), §6 origin semantics).
 	c.worker.Handle(&worker.Event{
-		Trigger: time.Now().Unix(),
+		Trigger: time.Now().UnixNano(),
 		Data:    all,
 		Operate: worker.OperateTypeSyncAll,
 	})
@@ -507,7 +514,9 @@ func (c *consul) buildAndSendEvent(instance *sv.Instance) {
 		}
 		ins := make([]*sv.Instance, 1)
 		ins[0] = instance
-		triggerTime := time.Now().Unix()
+		// Tick-time origin + ns unit (dsca-2 §3 Option (b), §6 origin
+		// semantics): the reconcile push, not a watch event.
+		triggerTime := time.Now().UnixNano()
 		event := &worker.Event{
 			Trigger: triggerTime,
 			Data:    ins,

@@ -1890,3 +1890,112 @@ func TestNoArtifactsInRepository(t *testing.T) {
 		}
 	}
 }
+
+// -----------------------------------------------------------------------------
+// Trigger unit widening: ns-since-epoch producers (dsca-2 §3 Option b)
+// -----------------------------------------------------------------------------
+
+// TestMonitorEmitsNsEpochTriggerOnK8sEventPath pins the unit widening at
+// the event path (k8s.go's `obj.CreateAt.UnixNano()`): the Trigger of an
+// event produced through the REAL monitor loop — Pop -> pod2Instance ->
+// eventSync — must be a ns-since-epoch value. The magnitude check is the
+// mutation pin: a regression back to Unix() (seconds) yields ~1.7e9, five
+// orders of magnitude below the ns epoch (~1.7e18); a mixed-unit producer
+// would make the fan-out's e2e decorator observe ~57 years (the documented
+// hazard dsca-2 §6 row 2 exists to prevent).
+func TestMonitorEmitsNsEpochTriggerOnK8sEventPath(t *testing.T) {
+	// Reversion 8 in the store, 7 in the cache: the update event must pass
+	// the diff and produce a Pop-path push (the event path whose Trigger is
+	// obj.CreateAt — NOT a CompareAndFlush/buildAndSendEvent tick-time
+	// stamp, whose producer site is pinned separately below).
+	pod := newValidPod("msp", "pod-ns-epoch")
+	pod.ResourceVersion = "7"
+	updatedPod := newValidPod("msp", "pod-ns-epoch")
+	updatedPod.ResourceVersion = "8"
+
+	robot := newFakeRobot(map[string][]interface{}{"msp/pod-ns-epoch": {pod}}, []interface{}{pod}, true)
+	w := &fakeWorker{getAllResponse: &sv.InstanceList{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	k := newTestProvider(robot, w)
+	k.ctx = ctx
+
+	done := make(chan struct{})
+	go func() {
+		k.Run()
+		close(done)
+	}()
+
+	// The full push (CompareAndFlush, empty remote list) caches reversion
+	// 7; then the store serves reversion 8 and the update event is
+	// enqueued — the Pop loop consumes it and eventSync emits the event
+	// whose Trigger is the popped object's CreateAt.
+	events := w.waitForHandles(t, 1)
+	if e := findEvent(t, events, "pod-ns-epoch"); e == nil {
+		t.Fatalf("no full push from monitor; events = %#v", events)
+	} else if e.Data[0].Reversion != 7 {
+		t.Fatalf("full push reversion = %d, want 7", e.Data[0].Reversion)
+	}
+	stampNs := time.Now().UnixNano()
+	robot.mu.Lock()
+	robot.byKey["msp/pod-ns-epoch"] = []interface{}{updatedPod}
+	robot.mu.Unlock()
+	robot.enqueue(k8srobot.QueueObject{
+		RType:    k8srobot.Pods,
+		Key:      "msp/pod-ns-epoch",
+		Event:    k8srobot.EventUpdate,
+		CreateAt: time.Now(),
+	})
+
+	// The popped-event push: its Trigger is the QueueObject.CreateAt (the
+	// informer-callback origin), widened to ns-since-epoch.
+	events = w.waitForHandles(t, 2)
+	e := findLastEvent(t, events, "pod-ns-epoch")
+	if e == nil {
+		t.Fatalf("popped update event was not synced; events = %#v", events)
+	}
+	if e.Data[0].Reversion != 8 {
+		t.Fatalf("popped update push reversion = %d, want 8", e.Data[0].Reversion)
+	}
+	if e.Trigger <= 1e15 {
+		t.Fatalf("event trigger = %d, want a ns-since-epoch magnitude (> 1e15; a seconds-valued Unix() trigger is ~1.7e9) — the producer regressed to whole seconds", e.Trigger)
+	}
+	// And it is not merely large but a plausible "now in ns": the enqueued
+	// CreateAt was stamped within this test's window.
+	if e.Trigger < stampNs-int64(time.Hour) || e.Trigger > time.Now().UnixNano()+int64(time.Hour) {
+		t.Fatalf("event trigger = %d, want within one hour of the enqueue-time ns clock", e.Trigger)
+	}
+
+	// Terminate like the existing monitor tests: the context cancel ends
+	// the monitor loop (its deferred robot.Stop makes Pop error out, and
+	// k.stopped is already true at that point so the loop breaks).
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("k.Run() did not return after context cancel")
+	}
+}
+
+// TestEmitSyncAllEmitsNsEpochTrigger pins the same widening at the
+// full-push producer (emitSyncAll's time.Now().UnixNano()): the SyncAll
+// event's Trigger must be ns-epoch too — the fan-out decorator cannot
+// tell which producer emitted an Event, so every producer site must agree
+// on the unit.
+func TestEmitSyncAllEmitsNsEpochTrigger(t *testing.T) {
+	pod := newValidPod("msp", "pod-syncall-ns")
+	robot := newFakeRobot(map[string][]interface{}{"msp/pod-syncall-ns": {pod}}, []interface{}{pod}, true)
+	w := &fakeWorker{}
+	k := newTestProvider(robot, w)
+
+	k.emitSyncAll()
+
+	events := w.handleSnapshot()
+	syncAlls := findSyncAllEvents(events)
+	if len(syncAlls) != 1 {
+		t.Fatalf("SyncAll events = %d, want 1; events = %#v", len(syncAlls), events)
+	}
+	if syncAlls[0].Trigger <= 1e15 {
+		t.Fatalf("SyncAll trigger = %d, want a ns-since-epoch magnitude (> 1e15) — the full-push producer regressed to whole seconds", syncAlls[0].Trigger)
+	}
+}

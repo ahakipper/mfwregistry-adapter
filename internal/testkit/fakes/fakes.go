@@ -519,14 +519,31 @@ type QueueDepthObservation struct {
 	Depth int
 }
 
+// EventToStoreObservation is one captured ObserveEventToStoreDuration call
+// (dsca-2 §6 row 6): the sink, the push outcome ("ok" | "error") and the
+// end-to-end duration.
+type EventToStoreObservation struct {
+	Sink     string
+	Outcome  string
+	Duration time.Duration
+}
+
+// EventsDroppedObservation is one captured IncEventsDropped call: the
+// dropping cluster's identifier.
+type EventsDroppedObservation struct {
+	Cluster string
+}
+
 // FakeMetricsRecorder captures application metrics in memory.
 type FakeMetricsRecorder struct {
 	mu sync.Mutex
 
-	syncOnceDurations []time.Duration
-	syncAllDurations  map[string][]time.Duration
-	queueDepths       []QueueDepthObservation
-	syncOnceCount     int
+	syncOnceDurations     []time.Duration
+	syncAllDurations      map[string][]time.Duration
+	queueDepths           []QueueDepthObservation
+	syncOnceCount         int
+	eventToStoreObserved  []EventToStoreObservation
+	eventsDroppedObserved []EventsDroppedObservation
 }
 
 // NewFakeMetricsRecorder creates an initialized metrics recorder.
@@ -559,6 +576,18 @@ func (r *FakeMetricsRecorder) MarkSyncOnce() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.syncOnceCount++
+}
+
+func (r *FakeMetricsRecorder) ObserveEventToStoreDuration(sink, outcome string, d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.eventToStoreObserved = append(r.eventToStoreObserved, EventToStoreObservation{Sink: sink, Outcome: outcome, Duration: d})
+}
+
+func (r *FakeMetricsRecorder) IncEventsDropped(cluster string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.eventsDroppedObserved = append(r.eventsDroppedObserved, EventsDroppedObservation{Cluster: cluster})
 }
 
 // SyncOnceDurations returns an independent snapshot of recorded durations.
@@ -594,6 +623,23 @@ func (r *FakeMetricsRecorder) SyncOnceCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.syncOnceCount
+}
+
+// EventToStoreObservations returns an independent snapshot of the recorded
+// end-to-end observations, in order (the decorator's capture seam of
+// dsca-2 §6 row 6).
+func (r *FakeMetricsRecorder) EventToStoreObservations() []EventToStoreObservation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]EventToStoreObservation(nil), r.eventToStoreObserved...)
+}
+
+// EventsDroppedObservations returns an independent snapshot of the recorded
+// drop calls, in order.
+func (r *FakeMetricsRecorder) EventsDroppedObservations() []EventsDroppedObservation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]EventsDroppedObservation(nil), r.eventsDroppedObserved...)
 }
 
 // FakeEventQueue is an in-memory highest-Reversion-wins retry queue.

@@ -8,6 +8,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
+
+	"spotter/pkg/metrics"
 )
 
 // TestRecorderCallsDoNotPanic verifies every Recorder method can be called
@@ -24,7 +29,130 @@ func TestRecorderCallsDoNotPanic(t *testing.T) {
 		r.SetSyncErrorQueueDepth("atlas", i)
 		r.SetSyncErrorQueueDepth("nacos", i)
 		r.MarkSyncOnce()
+		// The dsca-2 §6 row 5 pair: the e2e histogram (both outcomes) and
+		// the drop counter (per cluster). Label values are shared with the
+		// dedicated tests below ON PURPOSE: the collectors are
+		// process-global, so this loop's 10 observations seed them and the
+		// dedicated tests assert the DELTAS they create.
+		r.ObserveEventToStoreDuration("nacos", "ok", 500*time.Millisecond)
+		r.ObserveEventToStoreDuration("atlas", "error", time.Second)
+		r.IncEventsDropped("/tmp/kubeconfig-a")
 	}
+}
+
+// TestObserveEventToStoreDurationObservesSeconds pins the unit deviation
+// the contract records (dsca-2 §6 row 5): the e2e histogram observes in
+// SECONDS (d.Seconds()), unlike the legacy ms-valued series above — the
+// _seconds suffix carries the unit and the 1 ms -> 10 s bucket span would
+// be illegible as ms buckets. A 500ms duration must land in the 0.5s
+// bucket, NOT the 500 bucket (the ms mistake) and not bucket 0 (the
+// seconds-truncation mistake). The assertion is a DELTA (the collectors
+// are process-global and TestRecorderCallsDoNotPanic above already
+// observed this series 10 times).
+func TestObserveEventToStoreDurationObservesSeconds(t *testing.T) {
+	r := New()
+	before := testHistogram(t, "nacos", "ok")
+	beforeHalf := cumulativeAtBucket(before, 0.5)
+	beforeCount := before.GetSampleCount()
+
+	r.ObserveEventToStoreDuration("nacos", "ok", 500*time.Millisecond)
+
+	hist := testHistogram(t, "nacos", "ok")
+	if got := hist.GetSampleCount() - beforeCount; got != 1 {
+		t.Fatalf("sample count delta = %d, want 1", got)
+	}
+	// 0.5 observed as seconds: the 0.5s bucket advances by exactly 1;
+	// under the ms mistake the 500 would fall in the +Inf bucket only.
+	if got := cumulativeAtBucket(hist, 0.5) - beforeHalf; got != 1 {
+		t.Fatalf("observations <= 0.5s bucket delta = %d, want 1 (500ms observed as 0.5 SECONDS)", got)
+	}
+	// No sub-0.5s bucket advanced: 0.5s must be the first non-empty bucket
+	// of this observation.
+	for _, bucket := range hist.Bucket {
+		if bucket.GetUpperBound() < 0.5 {
+			var beforeSub uint64
+			for _, old := range before.Bucket {
+				if old.GetUpperBound() == bucket.GetUpperBound() {
+					beforeSub = old.GetCumulativeCount()
+				}
+			}
+			if bucket.GetCumulativeCount() > beforeSub {
+				t.Fatalf("bucket %v advanced by %d, want 0 (0.5s is the first bucket this observation lands in)", bucket.GetUpperBound(), bucket.GetCumulativeCount()-beforeSub)
+			}
+		}
+	}
+}
+
+// TestIncEventsDroppedCountsPerCluster pins the drop counter: two drops of
+// cluster A and one of cluster B advance the per-cluster series by 2 and 1
+// (deltas: the process-global collectors were seeded by
+// TestRecorderCallsDoNotPanic).
+func TestIncEventsDroppedCountsPerCluster(t *testing.T) {
+	r := New()
+	beforeA := testCounter(t, "/tmp/kubeconfig-a")
+	beforeB := testCounter(t, "/tmp/kubeconfig-b")
+
+	r.IncEventsDropped("/tmp/kubeconfig-a")
+	r.IncEventsDropped("/tmp/kubeconfig-a")
+	r.IncEventsDropped("/tmp/kubeconfig-b")
+
+	if got := testCounter(t, "/tmp/kubeconfig-a") - beforeA; got != 2 {
+		t.Fatalf("events_dropped_total{cluster=/tmp/kubeconfig-a} delta = %d, want 2", got)
+	}
+	if got := testCounter(t, "/tmp/kubeconfig-b") - beforeB; got != 1 {
+		t.Fatalf("events_dropped_total{cluster=/tmp/kubeconfig-b} delta = %d, want 1", got)
+	}
+}
+
+// cumulativeAtBucket returns the cumulative count of the bucket whose
+// upper bound is exactly bound (0 when absent).
+func cumulativeAtBucket(hist *dto.Histogram, bound float64) uint64 {
+	if hist == nil {
+		return 0
+	}
+	for _, bucket := range hist.Bucket {
+		if bucket.GetUpperBound() == bound {
+			return bucket.GetCumulativeCount()
+		}
+	}
+	return 0
+}
+
+// testHistogram reads one (sink, outcome) series of the e2e histogram from
+// the package-level collector.
+func testHistogram(t *testing.T, sink, outcome string) *dto.Histogram {
+	t.Helper()
+	metric, err := metrics.EventToStoreE2EDuration.GetMetricWithLabelValues(sink, outcome)
+	if err != nil {
+		t.Fatalf("GetMetricWithLabelValues(%q, %q): %v", sink, outcome, err)
+	}
+	obs, ok := metric.(prometheus.Metric)
+	if !ok {
+		t.Fatalf("histogram observer does not expose prometheus.Metric")
+	}
+	var m dto.Metric
+	if err := obs.Write(&m); err != nil {
+		t.Fatalf("histogram Write: %v", err)
+	}
+	return m.Histogram
+}
+
+// testCounter reads one cluster series of the drop counter.
+func testCounter(t *testing.T, cluster string) uint64 {
+	t.Helper()
+	metric, err := metrics.EventsDroppedTotal.GetMetricWithLabelValues(cluster)
+	if err != nil {
+		t.Fatalf("GetMetricWithLabelValues(%q): %v", cluster, err)
+	}
+	obs, ok := metric.(prometheus.Metric)
+	if !ok {
+		t.Fatalf("counter observer does not expose prometheus.Metric")
+	}
+	var m dto.Metric
+	if err := obs.Write(&m); err != nil {
+		t.Fatalf("counter Write: %v", err)
+	}
+	return uint64(m.Counter.GetValue())
 }
 
 // TestRecorderSatisfiesPort asserts the compile-time interface assertion

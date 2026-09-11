@@ -881,3 +881,187 @@ func TestFailedSinkNamesResolvesFanoutAndLegacyErrors(t *testing.T) {
 		t.Fatalf("failedSinkNames(empty FanoutError) = %v, want %v (conservative fallback)", got, want)
 	}
 }
+
+// -----------------------------------------------------------------------------
+// The per-sink e2e recording decorator (dsca-2 §3 / §6 row 7)
+// -----------------------------------------------------------------------------
+
+// newRecordingFanout builds the canonical two-sink fanout with the metrics
+// recorder the decorator observes on.
+func newRecordingFanout(t *testing.T, atlas, nacos ports.InstanceSink, metrics ports.MetricsRecorder) *FanoutSink {
+	t.Helper()
+	fanout, err := NewFanoutSinkWithMetrics(nil, metrics,
+		NamedSink{Name: stubSinkAtlas, Sink: atlas},
+		NamedSink{Name: stubSinkNacos, Sink: nacos},
+	)
+	if err != nil {
+		t.Fatalf("NewFanoutSinkWithMetrics() error = %v, want nil", err)
+	}
+	return fanout
+}
+
+// TestFanoutDecoratorObservesPerSinkE2E: one Push through the fan-out must
+// produce one e2e observation PER SINK, each labeled with the sink's name,
+// outcome "ok", and a duration measured from the (ns-epoch) trigger — the
+// 500ms-old trigger below must observe ~500ms (not 0, not 1000ms: the
+// pre-widening seconds truncation quantized exactly there). The sink label
+// is the whole point: the sequential fan-out makes the two legs' latencies
+// differ by the other's duration, so per-sink series are how DS-2-2 stays
+// visible in production.
+func TestFanoutDecoratorObservesPerSinkE2E(t *testing.T) {
+	recorder := fakes.NewFakeMetricsRecorder()
+	fanout := newRecordingFanout(t, &fakes.FakeInstanceSink{}, &fakes.FakeInstanceSink{}, recorder)
+
+	trigger := time.Now().Add(-500 * time.Millisecond).UnixNano()
+	ins := []*instance.Instance{{InstanceId: "pod-a"}}
+	if err := fanout.Push(trigger, ins); err != nil {
+		t.Fatalf("fanout.Push() error = %v, want nil", err)
+	}
+
+	obs := recorder.EventToStoreObservations()
+	if len(obs) != 2 {
+		t.Fatalf("e2e observations = %d, want 2 (one per sink); got %#v", len(obs), obs)
+	}
+	bySink := map[string]fakes.EventToStoreObservation{}
+	for _, o := range obs {
+		bySink[o.Sink] = o
+	}
+	for _, sink := range []string{stubSinkAtlas, stubSinkNacos} {
+		o, ok := bySink[sink]
+		if !ok {
+			t.Fatalf("no e2e observation for sink %q; got %#v", sink, obs)
+		}
+		if o.Outcome != "ok" {
+			t.Fatalf("sink %q outcome = %q, want %q", sink, o.Outcome, "ok")
+		}
+		// ~500ms with a generous margin for scheduler noise; the assertion
+		// exists to catch the seconds-truncation regression (which would
+		// observe ~0 or ~1000ms) and the unit mistake.
+		if o.Duration < 400*time.Millisecond || o.Duration > 1500*time.Millisecond {
+			t.Fatalf("sink %q e2e duration = %v, want ~500ms (the trigger is 500ms old)", sink, o.Duration)
+		}
+	}
+}
+
+// TestFanoutDecoratorObservesPushAllAndErrorOutcome: PushAll is covered
+// with its own outcome derivation, and a failing sink labels its
+// observation outcome="error" while the healthy sibling's stays "ok" —
+// the label split that keeps 5s-ticker retry latencies out of the
+// ok-series percentiles.
+func TestFanoutDecoratorObservesPushAllAndErrorOutcome(t *testing.T) {
+	recorder := fakes.NewFakeMetricsRecorder()
+	failing := &fakes.FakeInstanceSink{}
+	// Push fails, PushAll succeeds: the Push assertion below is the error
+	// case; the PushAll call stays the success shape for both sinks.
+	failing.SetErrors(errors.New("store down"), nil, nil)
+	fanout := newRecordingFanout(t, failing, &fakes.FakeInstanceSink{}, recorder)
+
+	trigger := time.Now().UnixNano()
+	if err := fanout.Push(trigger, []*instance.Instance{{InstanceId: "pod-a"}}); err != nil {
+		var fanoutErr FanoutError
+		if !errors.As(err, &fanoutErr) || len(fanoutErr) != 1 {
+			t.Fatalf("fanout.Push() error = %v, want a one-failure FanoutError", err)
+		}
+	}
+
+	obs := recorder.EventToStoreObservations()
+	if len(obs) != 2 {
+		t.Fatalf("e2e observations = %d, want 2 (one per sink); got %#v", len(obs), obs)
+	}
+	bySink := map[string]fakes.EventToStoreObservation{}
+	for _, o := range obs {
+		bySink[o.Sink] = o
+	}
+	if o := bySink[stubSinkAtlas]; o.Outcome != "error" {
+		t.Fatalf("atlas outcome = %q, want %q (the sink failed)", o.Outcome, "error")
+	}
+	if o := bySink[stubSinkNacos]; o.Outcome != "ok" {
+		t.Fatalf("nacos outcome = %q, want %q (the sink succeeded)", o.Outcome, "ok")
+	}
+
+	// PushAll coverage: the same decorator observes the full-push path
+	// (both sinks succeed here), each labeled with its own sink name.
+	before := len(recorder.EventToStoreObservations())
+	if err := fanout.PushAll(trigger, []*instance.Instance{{InstanceId: "pod-a"}}); err != nil {
+		t.Fatalf("fanout.PushAll() error = %v, want nil (both sinks' PushAll succeed)", err)
+	}
+	obs = recorder.EventToStoreObservations()[before:]
+	if len(obs) != 2 {
+		t.Fatalf("PushAll e2e observations = %d, want 2 (one per sink); got %#v", len(obs), obs)
+	}
+	for _, o := range obs {
+		if o.Outcome != "ok" {
+			t.Fatalf("PushAll observation %q outcome = %q, want ok", o.Sink, o.Outcome)
+		}
+	}
+}
+
+// TestFanoutDecoratorCoversRetryPathThroughPushTo pins the retry coverage
+// (dsca-2 §6 row 7): PushTo dispatches to the WRAPPED sink, so one retry
+// push observes through the same decorator — one observation, sink label
+// of the named sink, outcome by error. This is the structural coverage
+// that makes the 5s-ticker retry path's latencies (measuring from the
+// ORIGINAL pendingPush.Trigger) visible without a second seam.
+func TestFanoutDecoratorCoversRetryPathThroughPushTo(t *testing.T) {
+	recorder := fakes.NewFakeMetricsRecorder()
+	fanout := newRecordingFanout(t, &fakes.FakeInstanceSink{}, &fakes.FakeInstanceSink{}, recorder)
+
+	// A trigger 6s old: the retry shape (original trigger + the 5s tick
+	// wait). Any later PushAll/Push observations of the same fan-out would
+	// pollute the assertion, so PushTo is the only call made.
+	trigger := time.Now().Add(-6 * time.Second).UnixNano()
+	if err := fanout.PushTo(stubSinkNacos, trigger, []*instance.Instance{{InstanceId: "pod-retry"}}); err != nil {
+		t.Fatalf("fanout.PushTo() error = %v, want nil", err)
+	}
+
+	obs := recorder.EventToStoreObservations()
+	if len(obs) != 1 {
+		t.Fatalf("e2e observations = %d, want exactly 1 (the PushTo retry leg); got %#v", len(obs), obs)
+	}
+	if obs[0].Sink != stubSinkNacos || obs[0].Outcome != "ok" {
+		t.Fatalf("PushTo observation = %#v, want sink=%q outcome=%q", obs[0], stubSinkNacos, "ok")
+	}
+	if obs[0].Duration < 5*time.Second {
+		t.Fatalf("PushTo e2e duration = %v, want >= 5s (the 6s-old original trigger)", obs[0].Duration)
+	}
+}
+
+// TestFanoutDecoratorPassesTriggerThroughUnchanged pins the pass-through:
+// the decorator must not mangle the trigger the inner sink receives (the
+// retry queue's origin carry and every pass-through pin depends on it).
+func TestFanoutDecoratorPassesTriggerThroughUnchanged(t *testing.T) {
+	recorder := fakes.NewFakeMetricsRecorder()
+	atlas := &fakes.FakeInstanceSink{}
+	nacos := &fakes.FakeInstanceSink{}
+	fanout := newRecordingFanout(t, atlas, nacos, recorder)
+
+	trigger := time.Now().Add(-100 * time.Millisecond).UnixNano()
+	ins := []*instance.Instance{{InstanceId: "pod-pass"}}
+	if err := fanout.Push(trigger, ins); err != nil {
+		t.Fatalf("fanout.Push() error = %v, want nil", err)
+	}
+
+	for _, calls := range [][]fakes.InstanceSinkCall{atlas.PushCalls(), nacos.PushCalls()} {
+		if len(calls) != 1 {
+			t.Fatalf("inner sink Push calls = %d, want 1", len(calls))
+		}
+		if calls[0].TriggerTime != trigger {
+			t.Fatalf("inner sink trigger = %d, want %d (the decorator must pass it through)", calls[0].TriggerTime, trigger)
+		}
+	}
+}
+
+// TestFanoutSinkWithoutRecorderKeepsWorking pins the nil-recorder
+// contract: NewFanoutSink (no metrics argument) substitutes the no-op
+// recorder, so every existing call site keeps compiling and pushing —
+// with zero observations produced.
+func TestFanoutSinkWithoutRecorderKeepsWorking(t *testing.T) {
+	fanout := newTestFanout(t, &fakes.FakeInstanceSink{}, &fakes.FakeInstanceSink{})
+	// Prove the wrap is still in place (the decorator is installed
+	// regardless of the recorder) by observing through a fanout built with
+	// a real fake recorder instead — the no-recorder variant's assertion is
+	// just "push works, nothing panics".
+	if err := fanout.Push(time.Now().UnixNano(), []*instance.Instance{{InstanceId: "pod-nil"}}); err != nil {
+		t.Fatalf("fanout.Push() without recorder error = %v, want nil", err)
+	}
+}

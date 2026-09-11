@@ -197,6 +197,10 @@ func (nopMetricsRecorder) SetSyncErrorQueueDepth(string, int) {}
 
 func (nopMetricsRecorder) MarkSyncOnce() {}
 
+func (nopMetricsRecorder) ObserveEventToStoreDuration(string, string, time.Duration) {}
+
+func (nopMetricsRecorder) IncEventsDropped(string) {}
+
 // jsonCodec is the JSON gRPC codec the zero-option Dial branch forces
 // (plan §8.3). The request and response types of the instance service are
 // the plain mirror structs (now domain aliases), which the default proto

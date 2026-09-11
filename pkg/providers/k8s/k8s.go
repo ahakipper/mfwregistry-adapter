@@ -114,8 +114,12 @@ func (k *k8s) monitor() {
 				continue
 			}
 			log.Logger.Infof("get changes from k8s robot client, resource type: %s, key: %s, event: %s", obj.RType.String(), obj.Key, obj.Event.String())
-			// trigger time
-			triggerTime := obj.CreateAt.Unix()
+			// trigger time. UnixNano, not Unix: dsca-2 §3 Option (b) widens
+			// the Trigger unit to ns-since-epoch at every producer site so the
+			// fan-out's e2e decorator (time.Since(time.Unix(0, trigger))) sees
+			// sub-second latency instead of a seconds-quantized 0-or-1000ms.
+			// Trigger stays int64; no consumer converts it back (audit §3).
+			triggerTime := obj.CreateAt.UnixNano()
 			// instance format
 			var ins *sv.Instance
 			if ins = k.pod2Instance(obj); ins == nil {
@@ -287,9 +291,11 @@ func (k *k8s) flushInstances() {
 			k.cache.ReplaceOrInsert(ins)
 		}
 		log.Logger.Infof("flush k8s cache spend time: %s", unit.RelTime(before, time.Now(), "", ""))
-		// push all
+		// push all. Origin is tick-time (time.Now at Event construction),
+		// not CreateAt — the documented full-push origin semantics of
+		// dsca-2 §6; UnixNano per the same unit widening.
 		event := &worker.Event{
-			Trigger: time.Now().Unix(),
+			Trigger: time.Now().UnixNano(),
 			Data:    all,
 			Operate: worker.OperateTypeSyncAll}
 		k.worker.Handle(event)
@@ -398,7 +404,9 @@ func (k *k8s) buildAndSendEvent(instance *sv.Instance) {
 		}
 		ins := make([]*sv.Instance, 1)
 		ins[0] = instance
-		triggerTime := time.Now().Unix()
+		// Tick-time origin (this builds the reconcile push, not a watch
+		// event) + ns unit: dsca-2 §3 Option (b) / §6 origin semantics.
+		triggerTime := time.Now().UnixNano()
 		event := &worker.Event{
 			Trigger: triggerTime,
 			Data:    ins,
@@ -478,8 +486,11 @@ func (k *k8s) ProcessIntervalFullPush() {
 // vanished services, never another provider's.
 func (k *k8s) emitSyncAll() {
 	all := k.GetAll()
+	// Tick-time origin + ns unit (dsca-2 §3 Option (b), §6 origin semantics):
+	// a PushAll observation measures "age of the full push at completion",
+	// not event age.
 	k.worker.Handle(&worker.Event{
-		Trigger: time.Now().Unix(),
+		Trigger: time.Now().UnixNano(),
 		Data:    all,
 		Operate: worker.OperateTypeSyncAll,
 	})

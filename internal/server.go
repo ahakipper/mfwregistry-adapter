@@ -14,6 +14,7 @@ import (
 	inframetrics "spotter/internal/infra/metrics"
 	"spotter/internal/ports"
 	"spotter/pkg/discoverycenter"
+	"spotter/pkg/k8srobot"
 	"spotter/pkg/nacos"
 	"spotter/pkg/providers"
 	consul2 "spotter/pkg/providers/consul"
@@ -318,7 +319,11 @@ func (s *Server) startProviders() error {
 		sinks = append(sinks, worker.NamedSink{Name: nacos.SinkName, Sink: nacosSink})
 		s.logger.Infof("nacos sink registered at %s (persistent instances, group %s)", s.cfg.NacosAddr, nacos.DefaultGroup)
 	}
-	fanout, err := worker.NewFanoutSink(s.logger, sinks...)
+	// NewFanoutSinkWithMetrics (not NewFanoutSink): the per-sink e2e
+	// decorator of dsca-2 §6 row 7 observes on the real recorder, so every
+	// Push/PushAll/PushTo (including every 5s retry) produces one
+	// event_to_store_e2e_duration_seconds observation in production.
+	fanout, err := worker.NewFanoutSinkWithMetrics(s.logger, s.metrics, sinks...)
 	if err != nil {
 		cleanup()
 		s.clearStartup(generation, nil)
@@ -331,6 +336,19 @@ func (s *Server) startProviders() error {
 		s.clearStartup(generation, nil)
 		return errors.WithMessage(err, "new resource worker")
 	}
+
+	// The queue-full drop observer (dsca-1 DS-1-1 fix item 1 / dsca-2 §6
+	// row 8, the unified drop spec): k8srobot keeps no metrics dependency,
+	// the wiring closes over the recorder. Set BEFORE the providers run
+	// (the observer's contract: set once, before Run — the providers below
+	// start the robots). The cluster label value is the watcher's kubeconfig
+	// path. Covers every k8s provider of this server, including the demo
+	// binary's (the spotter command reaches startProviders through
+	// NewServerFromDeps).
+	k8srobot.SetDropObserver(func(cluster string) {
+		s.metrics.IncEventsDropped(cluster)
+	})
+
 	initialize := s.initializeProviders
 	if initialize == nil {
 		initialize = initializeProvidersFromConfig(s.cfg)
