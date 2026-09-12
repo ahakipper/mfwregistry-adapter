@@ -1,5 +1,18 @@
 # Multi-Sink Plan: Nacos as the Second InstanceSink
 
+> **Current-state addendum (2026-09-13):** This document contains the original F5
+> implementation plan. Its D4 “hand-rolled HTTP client” decision is superseded:
+> all production Nacos operations must now go through the official Nacos SDK or
+> an explicitly versioned SDK facade. The existing HTTP client may remain only
+> as a migration-period compatibility/rollback adapter. See
+> [system-readiness-consistency-remediation-plan-2026-09-12.md](system-readiness-consistency-remediation-plan-2026-09-12.md) §10 for the
+> mandatory migration and complete test gate.
+>
+> The remaining F5/soak descriptions in this document describe the historical
+> local implementation stage; they do not constitute a production PASS.
+> Production readiness is governed by remediation plan B2/B3 and
+> `ID-NACOS-SDK-MANDATE`.
+
 Status: authoritative implementation plan for the multi-sink initiative on
 `refactor/all` (HEAD `b976356` at drafting time). The lead implements it
 phase-by-phase (F2..F6) under agent review; each phase's exit criteria are
@@ -64,7 +77,7 @@ today's behavior). Five key decisions, each justified where marked:
 | D1 | `pkg/beehive/service/v2` becomes thin type aliases over `internal/domain/instance` (not a 13-file import migration) | §4.1 |
 | D2 | `GetAll` stays in the `InstanceSink` port | §3.3 |
 | D3 | `FanoutSink` lives in `pkg/worker` (not `internal/app`) | §6.1 |
-| D4 | Nacos client is hand-rolled HTTP over the v1 OpenAPI (not the Go SDK) | §7.2 |
+| D4 | **Superseded:** production Nacos operations use the official SDK/facade; HTTP is migration-only compatibility | §7.2 and remediation plan §10 |
 | D5 | Soak is a `make test-soak` target: compose stack + tagged Go harness driving the real binary, excluded from `test-all` | §8.1 |
 
 ## 2. Current-State Audit (evidence)
@@ -490,21 +503,28 @@ ddd-architecture.md §4(c)).
   authoritative. The cost — drift persists if spotter dies — is exactly
   what the retry queue and the full-push reconcile (§7.4) bound.
 
-### 7.2 Decision D4 — hand-rolled HTTP client, not the Go SDK
+### 7.2 Decision D4 — official SDK/facade is mandatory; HTTP is compatibility-only
 
-**Decision.** `pkg/nacos/client.go` is a small `net/http` +
-`encoding/json` client for the four v1 endpoints; no new module dependency.
-Rationale: the needed surface is 4 endpoints; the official Go SDK targets
-Nacos 2.x gRPC, drags in config-center machinery and pins us to SDK release
-cycles that may not match a v2.1.0 server; a stdlib client gives full
-control of timeouts (match the discoverycenter precedent
-`readTimeout = 10s`, client.go:17), retries and error classification, and
-is trivially mockable with `httptest` exactly like `consulmock`
-(internal/testkit/consulmock/server.go:47); a second hand-rolled client is
-consistent with the repo's existing pattern (discoverycenter
-client.go:50-93). Trade-offs: no v2 gRPC push performance (irrelevant at
-event volumes), no SDK auth handling (non-goal, §10), manual pagination on
-`service/list` (pageNo loop until short page, pageSize 100).
+**Current decision.** `pkg/nacos` must depend on a `NacosTransport` and an
+official `nacos-sdk-go/v2` facade for naming operations: register,
+deregister, service list, query, subscribe and batch. Admin/Catalog/prune and
+readiness must use an official Admin/Maintainer SDK when the target Nacos
+version provides one, or a separately versioned and audited facade with an
+explicit, time-bounded `ID-NACOS-SDK-MANDATE` exception. Business code must
+not construct Nacos URLs, HTTP methods or query forms directly.
+
+The current `net/http` v1 client is retained only as a migration-period
+compatibility/rollback adapter. It must be isolated behind the transport
+interface, explicitly selected (for example `http-compat`), marked
+`NON_PRODUCTION_COMPAT`, and covered by comparison tests. It is not a valid
+final production implementation and must not be used to claim SDK compliance.
+
+The SDK migration must preserve the F5 persistent-instance contract
+(`ephemeral=false`) unless a separately approved compatibility decision proves
+that changing lifecycle semantics is safe. SDK gRPC support, batch behavior,
+auth/TLS, namespace/group, reconnect/redo/cache, catalog visibility and
+final-state consistency all require the B3 test gate; SDK compilation alone is
+not evidence of server compatibility.
 
 ### 7.3 Field mapping (domain → Nacos)
 
@@ -897,10 +917,14 @@ phase ends green on `make test-unit test-blackbox test-e2e` (F5 adds
 1. **Per-sink comparison** — `CompareAndFlush` compares against the
    primary sink's view only (§3.3); per-sink compare loops are a follow-up
    the `FanoutSink`/`retryKey` shapes are designed to admit.
-2. **Nacos auth** (username/password, OpenAPI tokens) — local v2.1.0 runs
-   unauthenticated; auth is additive config later.
-3. **Non-default Nacos namespaces** (`namespaceId` stays `public`).
-4. **Nacos 2.x gRPC protocol / official Go SDK** — ruled out by D4 (§7.2).
+2. **Nacos auth** (username/password, OpenAPI tokens) — historical F5 local
+   scope only; current B2/B3 requires SDK auth/TLS coverage before production.
+3. **Non-default Nacos namespaces** (`namespaceId` stays `public`) — historical
+   F5 local scope only; current B2/B3 requires namespace/group coverage before
+   production.
+4. **Nacos 2.x gRPC protocol / official Go SDK** — no longer a non-goal;
+   mandatory migration and compatibility gate is defined by D4 (§7.2) and
+   remediation plan §10.
 5. **Production Atlas wire format** — real proto marshaling remains the
    documented follow-up of v2.go:9-16; F2's aliases change nothing about
    it.
