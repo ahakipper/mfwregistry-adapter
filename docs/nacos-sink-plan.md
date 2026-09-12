@@ -13,7 +13,7 @@
 > Production readiness is governed by remediation plan B2/B3 and
 > `ID-NACOS-SDK-MANDATE`.
 
-Current operation ownership (baseline `b1d9e2f` plus the B3 facade) is
+Current operation ownership (baseline `fd1f539`) is
 intentionally explicit:
 
 | Operation | Production adapter | Temporary exception |
@@ -33,7 +33,7 @@ target version” for each of the three compatibility operations. The expiry
 does not waive the release blocker.
 
 Status: authoritative implementation plan for the multi-sink initiative on
-`refactor/all` (current implementation baseline `b1d9e2f`). The lead implements it
+`refactor/all` (current implementation baseline `fd1f539`). The lead implements it
 phase-by-phase (F2..F6) under agent review; each phase's exit criteria are
 the review contract. Companions: [ddd-architecture.md](ddd-architecture.md)
 (target layering, §4 decisions), [architecture.md](architecture.md),
