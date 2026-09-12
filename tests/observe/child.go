@@ -5,10 +5,12 @@ package observe
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -227,18 +229,77 @@ func (c *spotterChild) logSlice(ref time.Time, window time.Duration, needles []s
 // the lumberjack app.log's plain "2026-09-11 16:13:33.126" local lines.
 func logLineTime(line string) (time.Time, bool) {
 	trimmed := strings.TrimSpace(line)
-	for _, layout := range []string{
-		"2006-01-02T15:04:05.999-0700",
-		time.RFC3339,
-		"2006-01-02 15:04:05.999",
-		"2006-01-02 15:04:05",
-	} {
-		if len(trimmed) < len(layout) {
-			continue
+	// zap's JSON encoder places the timestamp under a `ts` field rather than
+	// at the beginning of the line. Decode that field first; older harness
+	// versions only inspected a leading timestamp and silently lost every
+	// forensic log slice from JSON application logs.
+	if strings.HasPrefix(trimmed, "{") {
+		var envelope struct {
+			TS json.RawMessage `json:"ts"`
 		}
-		if ts, err := time.ParseInLocation(layout, trimmed[:len(layout)], time.Local); err == nil {
+		if err := json.Unmarshal([]byte(trimmed), &envelope); err == nil && len(envelope.TS) > 0 {
+			var raw string
+			if json.Unmarshal(envelope.TS, &raw) == nil {
+				if ts, ok := parseLogTimestamp(raw); ok {
+					return ts, true
+				}
+			}
+			// Parse numeric zap timestamps from their decimal text rather than
+			// float64; binary rounding at the nanosecond boundary otherwise
+			// shifts values such as 1789136018.281 by one nanosecond.
+			rawNumber := strings.TrimSpace(string(envelope.TS))
+			parts := strings.SplitN(rawNumber, ".", 2)
+			if whole, parseErr := strconv.ParseInt(parts[0], 10, 64); parseErr == nil {
+				nanos := int64(0)
+				if len(parts) == 2 {
+					fraction := parts[1]
+					if len(fraction) > 9 {
+						fraction = fraction[:9]
+					}
+					fraction += strings.Repeat("0", 9-len(fraction))
+					nanos, parseErr = strconv.ParseInt(fraction, 10, 64)
+				}
+				if parseErr == nil {
+					return time.Unix(whole, nanos), true
+				}
+			}
+		}
+	}
+	// Plain lumberjack lines carry the timestamp at the beginning. Scan a
+	// bounded prefix instead of assuming the line starts with the timestamp;
+	// this also handles a log-level prefix emitted by a wrapper process.
+	for start := 0; start < len(trimmed) && start < 64; start++ {
+		if ts, ok := parseLogTimestampAt(trimmed[start:]); ok {
 			return ts, true
 		}
 	}
 	return time.Time{}, false
+}
+
+func parseLogTimestampAt(value string) (time.Time, bool) {
+	fields := strings.Fields(value)
+	candidates := []string{value}
+	if len(fields) > 0 {
+		candidates = append(candidates, fields[0])
+	}
+	if len(fields) > 1 {
+		candidates = append(candidates, fields[0]+" "+fields[1])
+	}
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		"2006-01-02T15:04:05.999999999-0700",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+	} {
+		for _, candidate := range candidates {
+			if ts, err := time.ParseInLocation(layout, candidate, time.Local); err == nil {
+				return ts, true
+			}
+		}
+	}
+	return time.Time{}, false
+}
+
+func parseLogTimestamp(value string) (time.Time, bool) {
+	return parseLogTimestampAt(strings.TrimSpace(value))
 }
