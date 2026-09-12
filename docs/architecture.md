@@ -543,14 +543,18 @@ binary into `/usr/bin` and uses `/usr/bin/spotter` as the entrypoint.
 6. **Tests require live infrastructure.** Several tests (consul monitor/watch,
    discovery center client) dial real endpoints and *fail* (not skip) when the
    infrastructure is unreachable.
-7. **Pre-existing `go vet` findings.** `go vet ./...` currently reports context
-   leaks (discarded cancel functions in `pkg/etcd`, `pkg/distribute`,
-   `pkg/discoverycenter`, `internal/server.go`), an unkeyed struct literal in
-   `pkg/providers/k8s/k8s.go`, self-assignments in
-   `pkg/discoverycenter/client_test.go` and a formatting issue in
-   `tools/cache/cache.go`.
-8. **Go 1.15 module, mixed formatting.** `go.mod` declares `go 1.15`; parts of
-   the tree use 4-space indentation while the rest is not `gofmt`-formatted.
+7. **`go vet` baseline is cleared.** The two diagnostics called out by the
+   readiness audit (the cache formatting call and the unkeyed K8s resource
+   literal) were fixed in `eb6bf0c`; `go vet ./...` now exits 0. Any future
+   diagnostic is a new regression, not an accepted allowlist entry.
+8. **Go 1.25 module and mixed historical formatting.** `go.mod` declares
+   `go 1.25`; older files retain their original style, but changed files are
+   gofmt-checked.
+9. **Nacos transport boundary.** Naming lifecycle/query/subscribe operations
+   default to the official `nacos-sdk-go/v2` facade. Catalog/prune, cluster
+   health-check update and console readiness remain explicit, owned HTTP
+   compatibility exceptions with an expiry and removal criterion; real Nacos
+   SDK and Admin/Catalog evidence is still required before a production PASS.
 
 ## References
 

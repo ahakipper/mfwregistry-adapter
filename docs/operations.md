@@ -49,6 +49,19 @@ process is normally started from the directory that contains `config/`.
 | `-e, --env` | `test` | Environment preset (etcd, kubeconfigs, consul, campaign key). |
 | `-i, --push-interval` | `21600` | Full-push interval, in seconds (21600 = 6 h). |
 | `-g, --grpc-addr` | `172.16.130.71:50051` | Discovery center (Atlas) gRPC address. |
+
+### Nacos sink transport
+
+When enabled, production naming operations use the official
+`nacos-sdk-go/v2` facade. `--nacos-transport=sdk` is the default; set
+`--nacos-transport=http-compat` only for an explicitly approved migration
+rollback or local mock run, which emits a `NON_PRODUCTION_COMPAT` warning.
+`--nacos-server-list` provides ordered failover addresses; namespace/group,
+username/password, TLS CA/server name, and timeout flags are passed to the
+same client configuration. Catalog/prune, cluster health-check update, and
+console readiness remain audited HTTP compatibility exceptions with an owner
+and expiry; they are not a production SDK PASS until the Admin/Maintainer SDK
+equivalent is verified.
 | `-w, --disable-worker` | `false` | Disable the real push; pushes are logged only. Testing flag. |
 | `--appcodes` | `[]` | Restrict pushes to these appcodes. Testing flag. |
 | `--metrics-addr` | `:8090` | Prometheus metrics listen address. |
