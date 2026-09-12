@@ -120,6 +120,10 @@ func init() {
 	adapterCmd.Flags().BoolP("disable-worker", "w", false, "disable push worker, just for testing")
 	adapterCmd.Flags().StringSliceP("appcodes", "", []string{}, "only push instances of the appcodes, just for testing")
 	adapterCmd.Flags().StringP("metrics-addr", "", ":8090", "the Prometheus metrics address")
+	adapterCmd.Flags().String("appcenter-notice-endpoint", "", "appcenter notice endpoint; empty keeps delivery fail-closed")
+	adapterCmd.Flags().String("appcenter-notice-auth-token", "", "appcenter notice bearer token")
+	adapterCmd.Flags().Int("appcenter-notice-timeout", 0, "appcenter notice timeout seconds; required when endpoint is configured")
+	adapterCmd.Flags().Int("appcenter-notice-retries", 0, "appcenter notice maximum retries")
 	// --nacos-addr is the additive F5 flag (docs/nacos-sink-plan.md §7.6):
 	// empty disables the Nacos sink, so the flag-empty binary behavior is
 	// exactly the pre-F5 one. Every flag above is untouched.
@@ -161,20 +165,24 @@ func init() {
 // command line is honored instead of being coerced to the default.
 func adapterFlags(cmd *cobra.Command) infraconfig.Flags {
 	flags := infraconfig.Flags{
-		LogFilePath:       flagString(cmd, "log-file-path"),
-		LogSize:           flagInt(cmd, "log-maxsize"),
-		LogLevel:          flagInt(cmd, "log-level"),
-		LogBackups:        flagInt(cmd, "log-backup-number"),
-		LogAge:            flagInt(cmd, "log-age"),
-		LogToStd:          flagBool(cmd, "log-to-std"),
-		LogEncoding:       flagString(cmd, "log-encoding"),
-		PushAllInterval:   flagInt(cmd, "push-interval"),
-		GrpcAddr:          flagString(cmd, "grpc-addr"),
-		DisablePushWorker: flagBool(cmd, "disable-worker"),
-		Providers:         flagStringSlice(cmd, "providers"),
-		PushAppCodes:      flagStringSlice(cmd, "appcodes"),
-		MetricsAddr:       flagString(cmd, "metrics-addr"),
-		NacosAddr:         flagString(cmd, "nacos-addr"), NacosServerList: flagStringSlice(cmd, "nacos-server-list"),
+		LogFilePath:              flagString(cmd, "log-file-path"),
+		LogSize:                  flagInt(cmd, "log-maxsize"),
+		LogLevel:                 flagInt(cmd, "log-level"),
+		LogBackups:               flagInt(cmd, "log-backup-number"),
+		LogAge:                   flagInt(cmd, "log-age"),
+		LogToStd:                 flagBool(cmd, "log-to-std"),
+		LogEncoding:              flagString(cmd, "log-encoding"),
+		PushAllInterval:          flagInt(cmd, "push-interval"),
+		GrpcAddr:                 flagString(cmd, "grpc-addr"),
+		DisablePushWorker:        flagBool(cmd, "disable-worker"),
+		Providers:                flagStringSlice(cmd, "providers"),
+		PushAppCodes:             flagStringSlice(cmd, "appcodes"),
+		MetricsAddr:              flagString(cmd, "metrics-addr"),
+		AppCenterNoticeEndpoint:  flagString(cmd, "appcenter-notice-endpoint"),
+		AppCenterNoticeAuthToken: flagString(cmd, "appcenter-notice-auth-token"),
+		AppCenterNoticeTimeout:   flagInt(cmd, "appcenter-notice-timeout"),
+		AppCenterNoticeRetries:   flagInt(cmd, "appcenter-notice-retries"),
+		NacosAddr:                flagString(cmd, "nacos-addr"), NacosServerList: flagStringSlice(cmd, "nacos-server-list"),
 		NacosNamespace: flagString(cmd, "nacos-namespace"), NacosGroup: flagString(cmd, "nacos-group"),
 		NacosUsername: flagString(cmd, "nacos-username"), NacosPassword: flagString(cmd, "nacos-password"),
 		NacosAccessToken: flagString(cmd, "nacos-access-token"), NacosCAFile: flagString(cmd, "nacos-ca-file"),

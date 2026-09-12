@@ -6,11 +6,11 @@ import (
 	"github.com/hashicorp/consul/api"
 	"github.com/panjf2000/ants/v2"
 	"github.com/pkg/errors"
+	"spotter/internal/ports"
 	"spotter/pkg/beehive/service/v2"
 	sv "spotter/pkg/beehive/service/v2"
 	"spotter/pkg/log"
 	"spotter/pkg/metrics"
-	"spotter/pkg/notice"
 	"spotter/pkg/providers"
 	"spotter/pkg/worker"
 	"spotter/tools/unit"
@@ -38,7 +38,11 @@ type consul struct {
 	runWG              sync.WaitGroup
 	done               chan struct{}
 	stopOnce           sync.Once
+	depsOnce           sync.Once
 	initDone           bool
+	logger             ports.Logger
+	notifier           ports.Notifier
+	metricsRecorder    ports.MetricsRecorder
 
 	// sourceErr records the error of the last GetAll when the consul source
 	// could not be read (nil after a successful read, empty or not): the
@@ -75,6 +79,17 @@ type consul struct {
 	nacosReconcile bool
 }
 
+func (c *consul) ensureDeps() {
+	c.depsOnce.Do(func() {
+		if c.logger == nil {
+			c.logger = ports.NopLogger{}
+		}
+		if c.notifier == nil {
+			c.notifier = nopNotifier{}
+		}
+	})
+}
+
 // NacosReconcileSwitch is the consul leg's wiring seam for the nacos
 // reconcile mode (dsca-3 §3.3): internal/server.go asserts the constructed
 // provider against it and calls SetNacosReconcileSource(true) exactly when
@@ -84,6 +99,19 @@ type consul struct {
 // NewConsulProvider's shared signature.
 type NacosReconcileSwitch interface {
 	SetNacosReconcileSource(enabled bool)
+}
+
+// MetricsReporter is the explicit metrics wiring seam. The compatibility
+// constructor leaves it nil and retains package collectors; production
+// composition installs the injected recorder before Run.
+type MetricsReporter interface {
+	SetMetricsRecorder(ports.MetricsRecorder)
+}
+
+func (c *consul) SetMetricsRecorder(recorder ports.MetricsRecorder) {
+	c.Lock()
+	c.metricsRecorder = recorder
+	c.Unlock()
 }
 
 // SetNacosReconcileSource turns the nacos-reconcile compare semantics on or
@@ -97,6 +125,13 @@ func (c *consul) SetNacosReconcileSource(enabled bool) {
 
 // NewConsulProvider creates consul provider
 func NewConsulProvider(ctx context.Context, worker worker.Worker, pushInterval int, addrs []string) (provider providers.Provider, err error) {
+	return NewConsulProviderWithDeps(ctx, worker, pushInterval, addrs, log.Logger, legacyNotifier{})
+}
+
+// NewConsulProviderWithDeps constructs a provider from explicit runtime
+// collaborators. The legacy constructor above is retained only as a
+// compatibility wrapper for old global-based callers.
+func NewConsulProviderWithDeps(ctx context.Context, worker worker.Worker, pushInterval int, addrs []string, logger ports.Logger, notifier ports.Notifier) (provider providers.Provider, err error) {
 	if ctx == nil || len(addrs) == 0 || worker == nil {
 		err = errors.New("params invalid")
 		return nil, err
@@ -106,7 +141,13 @@ func NewConsulProvider(ctx context.Context, worker worker.Worker, pushInterval i
 		return nil, err
 	}
 	var monitor Monitor
-	if monitor, err = NewConsulMonitor(cf, log.Logger, legacyNotifier{}, nil); err != nil {
+	if logger == nil {
+		logger = ports.NopLogger{}
+	}
+	if notifier == nil {
+		notifier = nopNotifier{}
+	}
+	if monitor, err = NewConsulMonitor(cf, logger, notifier, nil); err != nil {
 		return nil, err
 	}
 	consulProvider := &consul{
@@ -123,6 +164,8 @@ func NewConsulProvider(ctx context.Context, worker worker.Worker, pushInterval i
 		interval: pushInterval,
 		cache:    providers.NewCache(8),
 		done:     make(chan struct{}),
+		logger:   logger,
+		notifier: notifier,
 	}
 	// Create pool for sending instance events to the discovery center
 	p, _ := ants.NewPool(providers.PoolBenchSize, withExpiryDuration(time.Second*providers.PoolExpireTime), ants.WithNonblocking(true))
@@ -143,6 +186,7 @@ func NewConsulProvider(ctx context.Context, worker worker.Worker, pushInterval i
 // the pool accepts it; repeated updates for one identity replace the older
 // task, preventing stale bursts after a short Consul callback stall.
 func (c *consul) overflowQueue() *providers.OverflowQueue {
+	c.ensureDeps()
 	c.overflowMu.Lock()
 	defer c.overflowMu.Unlock()
 	if c.overflow != nil {
@@ -158,14 +202,15 @@ func (c *consul) overflowQueue() *providers.OverflowQueue {
 		}
 		return c.pool.Submit(task)
 	}, func(key string) {
-		log.Logger.Warnf("consul event overflow identity %s dropped after bounded requeue filled", key)
+		c.logger.Warnf("consul event overflow identity %s dropped after bounded requeue filled", key)
 	})
 	return c.overflow
 }
 
 func (c *consul) requeueEvent(key string, task func()) {
+	c.ensureDeps()
 	if c.overflowQueue().Offer(key, task) {
-		log.Logger.Warnf("consul worker pool saturated; requeued identity %s", key)
+		c.logger.Warnf("consul worker pool saturated; requeued identity %s", key)
 	}
 }
 
@@ -173,6 +218,7 @@ func (c *consul) requeueEvent(key string, task func()) {
 // dispatcher first waits out its retry timer, so pool.Release cannot race a
 // retry submission and pending identities are explicitly observable.
 func (c *consul) shutdown() {
+	c.ensureDeps()
 	c.stopOnce.Do(func() {
 		if c.done != nil {
 			close(c.done)
@@ -186,7 +232,7 @@ func (c *consul) shutdown() {
 	c.overflowMu.Unlock()
 	if q != nil {
 		if remaining := q.Close(); remaining > 0 {
-			log.Logger.Warnf("consul provider stopped with %d overflow identities pending", remaining)
+			c.logger.Warnf("consul provider stopped with %d overflow identities pending", remaining)
 		}
 	}
 	if c.pool != nil {
@@ -195,8 +241,9 @@ func (c *consul) shutdown() {
 }
 
 func (c *consul) Run() (err error) {
+	c.ensureDeps()
 	defer c.shutdown()
-	log.Logger.Infof("start to run ecs provider")
+	c.logger.Infof("start to run ecs provider")
 	// Perform full instances synchronization periodically
 	c.runWG.Add(2)
 	go func() {
@@ -215,11 +262,11 @@ func (c *consul) Run() (err error) {
 	// returning proves no late callback can submit more work.
 	c.runWG.Wait()
 	if err != nil {
-		notice.Notice("consul stopped working", err.Error())
+		c.notifier.Notify("consul stopped working", err.Error())
 		err = errors.WithMessage(err, "consul provider stopped")
-		log.Logger.Errorf(err.Error())
+		c.logger.Errorf("%s", err.Error())
 	}
-	log.Logger.Info("consul providers worker stopped")
+	c.logger.Info("consul providers worker stopped")
 
 	return err
 }
@@ -239,7 +286,7 @@ func (c *consul) syncInstance() (err error) {
 	// no operation is performed except for return an error.
 	if currentInss == nil || len(currentInss) == 0 {
 		err = errors.New("get empty consul endpoints")
-		log.Logger.Warnf(err.Error())
+		c.logger.Warnf("%s", err.Error())
 		return err
 	}
 	for _, ins := range currentInss {
@@ -263,7 +310,7 @@ func (c *consul) toInstance(endpoints []*api.ServiceEntry) (inss []*sv.Instance)
 	if len(endpoints) > 0 {
 		for _, ep := range endpoints {
 			if ins, err := convertInstance(ep); err != nil {
-				log.Logger.Errorf(err.Error())
+				c.logger.Errorf("%s", err.Error())
 				continue
 			} else {
 				inss = append(inss, ins)
@@ -293,7 +340,7 @@ func (c *consul) GetAll() (result []*v2.Instance) {
 	consulServices, err = c.monitor.GetServices()
 	if err != nil {
 		err = errors.WithMessage(err, "get services from consul")
-		log.Logger.Errorf(err.Error())
+		c.logger.Errorf("%s", err.Error())
 		c.sourceErr = err
 		return nil
 	}
@@ -306,7 +353,7 @@ func (c *consul) GetAll() (result []*v2.Instance) {
 			endpoints, err = c.monitor.GetServiceEntries(serviceName, nil)
 			if err != nil {
 				err = errors.WithMessage(err, "get service endpoints from consul")
-				log.Logger.Errorf(err.Error())
+				c.logger.Errorf("%s", err.Error())
 				c.sourceErr = err
 				return nil
 			}
@@ -318,7 +365,7 @@ func (c *consul) GetAll() (result []*v2.Instance) {
 		}
 	}
 	c.sourceErr = nil
-	log.Logger.Infof("consul getall size: %d", len(result))
+	c.logger.Infof("consul getall size: %d", len(result))
 
 	return result
 }
@@ -365,7 +412,7 @@ func (c *consul) extractDiff(old, new providers.CacheIterface) (add []*v2.Instan
 					if ver := c.VerifyInstance(newIns); ver == nil {
 						update = append(update, newIns)
 					} else {
-						log.Logger.Warnf("invalid instance, instanceid: %s, reason: %s", newIns.InstanceId, ver.Error())
+						c.logger.Warnf("invalid instance, instanceid: %s, reason: %s", newIns.InstanceId, ver.Error())
 					}
 				}
 			} else {
@@ -376,7 +423,7 @@ func (c *consul) extractDiff(old, new providers.CacheIterface) (add []*v2.Instan
 					newIns.State = providers.InstanceStateRunning
 					add = append(add, newIns)
 				} else {
-					log.Logger.Warnf("invalid instance, instanceid: %s, reason: %s", newIns.InstanceId, ver.Error())
+					c.logger.Warnf("invalid instance, instanceid: %s, reason: %s", newIns.InstanceId, ver.Error())
 				}
 			}
 		}
@@ -476,8 +523,15 @@ func (c *consul) ProcessIntervalFullPush() {
 			c.emitSyncAll()
 			after := time.Now()
 			offset := after.Sub(before).Milliseconds()
-			metrics.SyncAllEcsDurationsHistogram.Observe(float64(offset))
-			log.Logger.Infof("the synchronization operation is completed periodically, interval: %d, time spend: %s", interval, unit.RelTime(before, time.Now(), "", ""))
+			c.Lock()
+			recorder := c.metricsRecorder
+			c.Unlock()
+			if recorder != nil {
+				recorder.ObserveSyncAllDuration(providers.ProviderEcs, after.Sub(before))
+			} else {
+				metrics.SyncAllEcsDurationsHistogram.Observe(float64(offset))
+			}
+			c.logger.Infof("the synchronization operation is completed periodically, interval: %d, time spend: %s", interval, unit.RelTime(before, time.Now(), "", ""))
 		case <-c.ctx.Done():
 			ticker.Stop()
 			return
@@ -573,7 +627,7 @@ func (c *consul) snapshotForFullPush() ([]*v2.Instance, uint64, bool, bool) {
 func (c *consul) CompareAndFlush() {
 	c.Lock()
 	defer c.Unlock()
-	log.Logger.Infof("%s: trying to compare and find diff instances then flush", c.providerName)
+	c.logger.Infof("%s: trying to compare and find diff instances then flush", c.providerName)
 	// Here, we assume that the consul data is impossible to be empty. Once it is empty,
 	// no operation is performed.
 	if all := c.GetAll(); all != nil && len(all) > 0 {
@@ -591,7 +645,7 @@ func (c *consul) CompareAndFlush() {
 		registryList, err := c.worker.GetAll([]int32{providers.InstanceStatusOnline}, providers.ProviderEcs)
 		if err != nil {
 			err = errors.WithMessage(err, "get all instances from the discovery center")
-			log.Logger.Errorf(err.Error())
+			c.logger.Errorf("%s", err.Error())
 			return
 		}
 		if registryList == nil || registryList.Instance == nil || len(registryList.Instance) == 0 {
@@ -604,10 +658,10 @@ func (c *consul) CompareAndFlush() {
 		// pp.Println(remoteInstances)
 		currentProviderInstances, providerAmbiguous := providers.StrictListToMap(all)
 		if len(remoteAmbiguous) > 0 || len(providerAmbiguous) > 0 {
-			log.Logger.Errorf("%s: ambiguous instance identities; quarantining compare (remote=%v provider=%v)", c.providerName, remoteAmbiguous, providerAmbiguous)
+			c.logger.Errorf("%s: ambiguous instance identities; quarantining compare (remote=%v provider=%v)", c.providerName, remoteAmbiguous, providerAmbiguous)
 			return
 		}
-		log.Logger.Infof("discovery center online ecs instances size :%d  consul online instance size :%d  total :%d", len(remoteInstances), onlineCount, len(currentProviderInstances))
+		c.logger.Infof("discovery center online ecs instances size :%d  consul online instance size :%d  total :%d", len(remoteInstances), onlineCount, len(currentProviderInstances))
 		//bothExist,k8sExist two flag to notice
 		bothExist := false
 		ecsExist := false
@@ -637,8 +691,8 @@ func (c *consul) CompareAndFlush() {
 					// its own log line. A notice on top of the push, never
 					// instead of it.
 					if servIns.Reversion > consulIns.Reversion {
-						log.Logger.Warnf("the instance: %s of appcode: %s carries a nacos reversion %d above the local %d (out-of-band edit suspected); the reconcile push overwrites it with the local value", consulIns.InstanceId, consulIns.AppCode, servIns.Reversion, consulIns.Reversion)
-						notice.Notice("Forged remote reversion", fmt.Sprintf("The ecs instance %s of appcode %s holds nacos reversion %d above the local %d (out-of-band edit suspected); the reconcile overwrites the remote value with the local one", consulIns.InstanceId, consulIns.AppCode, servIns.Reversion, consulIns.Reversion))
+						c.logger.Warnf("the instance: %s of appcode: %s carries a nacos reversion %d above the local %d (out-of-band edit suspected); the reconcile push overwrites it with the local value", consulIns.InstanceId, consulIns.AppCode, servIns.Reversion, consulIns.Reversion)
+						c.notifier.Notify("Forged remote reversion", fmt.Sprintf("The ecs instance %s of appcode %s holds nacos reversion %d above the local %d (out-of-band edit suspected); the reconcile overwrites the remote value with the local one", consulIns.InstanceId, consulIns.AppCode, servIns.Reversion, consulIns.Reversion))
 					}
 				} else if consulIns.Reversion > servIns.Reversion {
 					diff = true
@@ -686,7 +740,7 @@ func (c *consul) CompareAndFlush() {
 					}
 				}
 				if diff {
-					log.Logger.Infof("the instance: %s of appcode: %s is newer, trigger a push.", consulIns.InstanceId, consulIns.AppCode)
+					c.logger.Infof("the instance: %s of appcode: %s is newer, trigger a push.", consulIns.InstanceId, consulIns.AppCode)
 					c.buildAndSendEvent(consulIns)
 					bothExist = true
 				}
@@ -694,7 +748,7 @@ func (c *consul) CompareAndFlush() {
 				delete(remoteInstances, providers.IdentityKey(servIns))
 			} else {
 				// For these instances in both Provider but not in the discovery center, the instance should be added to the discovery center.
-				log.Logger.Infof("consul match much id : %s, status: %d", consulIns.InstanceId, consulIns.Status)
+				c.logger.Infof("consul match much id : %s, status: %d", consulIns.InstanceId, consulIns.Status)
 				if consulIns.Status == 1 {
 					ecsExist = true
 					c.buildAndSendEvent(consulIns)
@@ -704,16 +758,16 @@ func (c *consul) CompareAndFlush() {
 		}
 		// case 1 notice
 		if bothExist {
-			notice.Notice("Instance data inconsistency", "Data inconsistency between the discovery center and the ecs cluster: the instances are the same in the discovery center and the ecs cluster, but some data fields of the instances differ")
+			c.notifier.Notify("Instance data inconsistency", "Data inconsistency between the discovery center and the ecs cluster: the instances are the same in the discovery center and the ecs cluster, but some data fields of the instances differ")
 		}
 		//case 2 notice
 		if ecsExist {
-			notice.Notice("Instance data inconsistency", "Data inconsistency between the discovery center and the ecs cluster: the instances differ between the discovery center and the ecs cluster, some instances exist in the ecs cluster but not in the discovery center")
+			c.notifier.Notify("Instance data inconsistency", "Data inconsistency between the discovery center and the ecs cluster: the instances differ between the discovery center and the ecs cluster, some instances exist in the ecs cluster but not in the discovery center")
 		}
 		// The instances remaining in the the discovery center variable (remoteInstances) are either old or not in the Provider instance list.
 		// In this case, we should delete it from the discovery center.
 		if len(remoteInstances) > 0 {
-			log.Logger.Infof("process discovery center instance deleting. instance size: %d", len(remoteInstances))
+			c.logger.Infof("process discovery center instance deleting. instance size: %d", len(remoteInstances))
 			for _, servIns := range remoteInstances {
 				if c.nacosReconcile {
 					// dsca-3 §3.3 / DS-3-5, nacos-reconcile mode: push
@@ -732,13 +786,13 @@ func (c *consul) CompareAndFlush() {
 				} else {
 					servIns.Status = providers.InstanceStatusUnhealthy
 				}
-				log.Logger.Infof("the discovery center has the old instance, set its Status filed as %d, and trigger a push. instance: %v", servIns.Status, servIns)
+				c.logger.Infof("the discovery center has the old instance, set its Status filed as %d, and trigger a push. instance: %v", servIns.Status, servIns)
 				registryExist = true
 				c.buildAndSendEvent(servIns)
 			}
 			//case 3 notice
 			if registryExist {
-				notice.Notice("Instance data inconsistency", "Data inconsistency between the discovery center and the ecs cluster: the instances differ between the discovery center and the ecs cluster, some instances exist in the discovery center but not in the ecs cluster")
+				c.notifier.Notify("Instance data inconsistency", "Data inconsistency between the discovery center and the ecs cluster: the instances differ between the discovery center and the ecs cluster, some instances exist in the discovery center but not in the ecs cluster")
 			}
 		}
 	}

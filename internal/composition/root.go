@@ -10,6 +10,7 @@ package composition
 import (
 	"fmt"
 	"io"
+	"time"
 
 	infraconfig "spotter/internal/infra/config"
 	infralogging "spotter/internal/infra/logging"
@@ -40,6 +41,10 @@ type Deps struct {
 	LogCloser io.Closer
 	// Notifier overrides the constructed notice adapter.
 	Notifier ports.Notifier
+	// NoticeRequestBuilder supplies the deployment-owned appcenter payload
+	// contract. It is intentionally required for HTTP delivery; this repo does
+	// not invent the private appcenter request schema.
+	NoticeRequestBuilder infranotice.RequestBuilder
 	// MetricsRecorder overrides the constructed metrics recorder.
 	Metrics ports.MetricsRecorder
 	// Config is the resolved runtime configuration.
@@ -113,10 +118,35 @@ func Build(cfg infraconfig.Config, deps Deps) (*Runtime, error) {
 		}
 	}
 
-	// Notice: send failures are reported through the runtime logger.
+	// Notice: send failures are reported through the runtime logger. HTTP
+	// delivery is enabled only when endpoint, auth, timeout and a deployment
+	// request builder are all supplied; otherwise the result is explicitly
+	// fail-closed rather than pretending logs are appcenter alerts.
 	runtime.Notifier = deps.Notifier
 	if runtime.Notifier == nil {
-		runtime.Notifier = infranotice.NewWithLogger(noticeAppCode, noticeKey, cfg.Env, runtime.Logger)
+		if cfg.AppCenterNoticeEndpoint != "" || cfg.AppCenterNoticeAuthToken != "" || cfg.AppCenterNoticeTimeout != 0 {
+			var timeout time.Duration
+			if cfg.AppCenterNoticeTimeout > 0 {
+				timeout = time.Duration(cfg.AppCenterNoticeTimeout) * time.Second
+			}
+			httpNotifier, err := infranotice.NewHTTP(infranotice.HTTPConfig{
+				Endpoint:     cfg.AppCenterNoticeEndpoint,
+				AppCode:      noticeAppCode,
+				AuthToken:    cfg.AppCenterNoticeAuthToken,
+				Env:          cfg.Env,
+				Timeout:      timeout,
+				MaxRetries:   cfg.AppCenterNoticeRetries,
+				RetryBackoff: 100 * time.Millisecond,
+				BuildRequest: deps.NoticeRequestBuilder,
+			}, runtime.Logger)
+			if err == nil {
+				runtime.Notifier = httpNotifier
+			} else {
+				runtime.Notifier = infranotice.NewFailClosed(err.Error(), runtime.Logger)
+			}
+		} else {
+			runtime.Notifier = infranotice.NewFailClosed("appcenter endpoint/auth/timeout are not configured", runtime.Logger)
+		}
 	}
 
 	// Metrics: the Prometheus recorder observing the package-level
