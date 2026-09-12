@@ -557,6 +557,15 @@ Make target 契约：`make test-observe` 必须等价执行 `go test -tags=obser
 
 ## 13. C2：通知、DDD globals 与生命周期收口（P1/P2）
 
+**执行状态（2026-09-13）：NOT DONE / REMAINING.** 当前 `internal/infra/notice`
+只包装了本地 `pkg/notice/appcenternotice` logger；真实 appcenter HTTP/API、认证、
+重试和失败计数尚未接入，因此通知仍只能判为 log-only。`pkg/providers/k8s`、
+`pkg/providers/consul`、`pkg/providers/k8s/conversion.go`、`pkg/worker/elector.go`
+和 `pkg/metrics/proserver.go` 仍直接引用 legacy `pkg/log`/`pkg/notice` globals，
+`cmd/adapter.go` 的 `assignLegacyGlobals` 仍是生产 bridge；`pkg/providers/aggregate`
+仍为未启用 scaffolding。C2 需要在获得 appcenter endpoint/auth/SLA 后再实施，不能
+用当前离线 notifier 单测或日志证明替代真实告警证据。
+
 ### 13.1 通知
 
 - 把 providers/election/metrics 的 `notice.Notice` 全部改成 `ports.Notifier` 注入；保留 `pkg/notice` 兼容 shim 但生产路径不读取全局。

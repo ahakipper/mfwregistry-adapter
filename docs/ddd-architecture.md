@@ -1,5 +1,13 @@
 # spotter — Target DDD Architecture Design
 
+> **Implementation status (2026-09-13):** This remains a target design, not a
+> completed migration. The composition root and `internal/ports` are active,
+> but K8s/Consul/provider conversion/elector paths still use legacy globals via
+> `cmd/adapter.go`'s compatibility bridge; `pkg/providers/aggregate` remains
+> dormant scaffolding. Notifications are still local log-only delivery until
+> an appcenter endpoint/auth/SLA is supplied and verified. See the remediation
+> plan §13 for the gated C2 work package.
+
 Status: design document for the `refactor/all` branch. This is the target
 architecture that the later implementation phases will follow. It audits the
 current codebase against Domain-Driven Design principles and defines an
