@@ -197,7 +197,7 @@ func (k *k8s) monitor() {
 			obj, err := k.robot.Pop()
 			if err != nil {
 				log.Logger.Errorf("k8s client watch error: %s", err.Error())
-				if k.stopped {
+				if k.isStopped() {
 					break
 				}
 				time.Sleep(1 * time.Second)
@@ -226,7 +226,9 @@ func (k *k8s) monitor() {
 	// wait to stop
 	select {
 	case <-k.ctx.Done():
+		k.Lock()
 		k.stopped = true
+		k.Unlock()
 		break
 	}
 
@@ -252,6 +254,13 @@ func (k *k8s) cacheRef() providers.CacheIterface {
 	cache := k.cache
 	k.Unlock()
 	return cache
+}
+
+func (k *k8s) isStopped() bool {
+	k.Lock()
+	stopped := k.stopped
+	k.Unlock()
+	return stopped
 }
 
 func (k *k8s) snapshotForFullPush() ([]*sv.Instance, uint64, bool, bool) {
