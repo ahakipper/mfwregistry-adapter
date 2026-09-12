@@ -388,7 +388,7 @@ func TestFullRetryRevalidateCalledBeforeReplay(t *testing.T) {
 	s.AddFullWithMeta(1, batch, []string{"nacos"}, "k8s", "batch-1", 1, func() ([]*instance.Instance, bool) {
 		revalidations++
 		return batch, true
-	})
+	}, false)
 	s.syncOnce()
 	if s.Len() != 1 || revalidations != 1 {
 		t.Fatalf("after first replay len=%d revalidations=%d, want 1/1", s.Len(), revalidations)
@@ -414,9 +414,9 @@ func TestPrune4xxDropsOnlyPermanentTask(t *testing.T) {
 func TestAddFullWithMetaRejectsMissingScopeOrBatchID(t *testing.T) {
 	s := NewUnsyncedService(context.Background(), &fakes.FakeInstanceSink{}, nil, nil)
 	items := []*instance.Instance{{Provider: "k8s", InstanceId: "pod", Reversion: 1}}
-	s.AddFullWithMeta(1, items, nil, "", "", 1, nil)
-	s.AddFullWithMeta(1, items, nil, "k8s", "", 1, nil)
-	s.AddFullWithMeta(1, items, nil, "", "batch", 1, nil)
+	s.AddFullWithMeta(1, items, nil, "", "", 1, nil, false)
+	s.AddFullWithMeta(1, items, nil, "k8s", "", 1, nil, false)
+	s.AddFullWithMeta(1, items, nil, "", "batch", 1, nil, false)
 	if got := s.Len(); got != 0 {
 		t.Fatalf("malformed full retry entries = %d, want 0", got)
 	}

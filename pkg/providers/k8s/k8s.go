@@ -22,17 +22,18 @@ import (
 
 // K8S provider implement
 type k8s struct {
-	providerName string
-	robot        k8srobot.Robot             // the K8s multi-cluster aggregator
-	ctx          context.Context            // context
-	worker       worker.Worker              // the role of worker is to synchronize provider changes to the discovery center
-	stopped      bool                       // whether the current provider has stopped
-	sync.Mutex                              // lock mutex
-	interval     int                        // the time interval for full synchronization. default 600s(10m)
-	filters      []providers.InstanceFilter // filters is a collection of functions used to filter invalid instances
-	cache        providers.CacheIterface    // pod cache
-	generation   uint64
-	pool         *ants.Pool // goroutine pool
+	providerName       string
+	robot              k8srobot.Robot             // the K8s multi-cluster aggregator
+	ctx                context.Context            // context
+	worker             worker.Worker              // the role of worker is to synchronize provider changes to the discovery center
+	stopped            bool                       // whether the current provider has stopped
+	sync.Mutex                                    // lock mutex
+	interval           int                        // the time interval for full synchronization. default 600s(10m)
+	filters            []providers.InstanceFilter // filters is a collection of functions used to filter invalid instances
+	cache              providers.CacheIterface    // pod cache
+	generation         uint64
+	emptyConfirmations uint32
+	pool               *ants.Pool // goroutine pool
 	// queueDepthMetrics publishes the robot's coalescing-queue depth on the
 	// k8s_queue_depth gauge (dsca-1 DS-1-1 fix item 1: "plus a queueDepth
 	// gauge"). Nil disables publication — the in-package tests construct the
@@ -246,14 +247,24 @@ func (k *k8s) ProcessCache(event k8srobot.EventType, ins *sv.Instance) {
 	k.generation++
 }
 
-func (k *k8s) snapshotForFullPush() ([]*sv.Instance, uint64, bool) {
+func (k *k8s) snapshotForFullPush() ([]*sv.Instance, uint64, bool, bool) {
+	all := k.cache.List()
+	if k.robot != nil && k.robot.HasSynced() {
+		if source := k.GetAll(); source != nil {
+			all = source
+		}
+	}
 	k.Lock()
 	defer k.Unlock()
-	all := k.cache.List()
 	if all == nil {
 		all = []*sv.Instance{}
 	}
-	return all, k.generation, true
+	if len(all) == 0 {
+		k.emptyConfirmations++
+	} else {
+		k.emptyConfirmations = 0
+	}
+	return all, k.generation, true, k.emptyConfirmations >= 3
 }
 
 // VerifyInstance checks wether the instance is valid
@@ -691,7 +702,7 @@ func (k *k8s) ProcessIntervalFullPush() {
 // exactly that cluster whose desired set went empty — the provider's
 // vanished services, never another provider's.
 func (k *k8s) emitSyncAll() {
-	all, generation, valid := k.snapshotForFullPush()
+	all, generation, valid, emptyConfirmed := k.snapshotForFullPush()
 	if !valid {
 		return
 	}
@@ -699,14 +710,15 @@ func (k *k8s) emitSyncAll() {
 	// a PushAll observation measures "age of the full push at completion",
 	// not event age.
 	k.worker.Handle(&worker.Event{
-		Trigger:  time.Now().UnixNano(),
-		Data:     all,
-		Operate:  worker.OperateTypeSyncAll,
-		Scope:    "k8s",
-		BatchID:  worker.FullBatchID("k8s", all),
-		Sequence: generation,
+		Trigger:        time.Now().UnixNano(),
+		Data:           all,
+		Operate:        worker.OperateTypeSyncAll,
+		Scope:          "k8s",
+		BatchID:        worker.FullBatchID("k8s", all),
+		Sequence:       generation,
+		EmptyConfirmed: emptyConfirmed,
 		Revalidate: func() ([]*sv.Instance, bool) {
-			latest, current, ok := k.snapshotForFullPush()
+			latest, current, ok, _ := k.snapshotForFullPush()
 			if !ok {
 				return nil, false
 			}

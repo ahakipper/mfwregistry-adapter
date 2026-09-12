@@ -673,6 +673,20 @@ func TestBlackboxConsulEmitSyncAllSourceErrorSafeFail(t *testing.T) {
 	}
 }
 
+func TestBlackboxConsulEmptyFullRequiresThreeSuccessfulConfirmations(t *testing.T) {
+	c := &consul{cache: providers.NewCache(8), worker: &fakeWorker{}, ctx: context.Background()}
+	for i := 0; i < 2; i++ {
+		_, _, valid, confirmed := c.snapshotForFullPush()
+		if !valid || confirmed {
+			t.Fatalf("empty confirmation %d = valid:%v confirmed:%v, want valid and unconfirmed", i+1, valid, confirmed)
+		}
+	}
+	_, _, valid, confirmed := c.snapshotForFullPush()
+	if !valid || !confirmed {
+		t.Fatalf("third empty confirmation = valid:%v confirmed:%v, want confirmed", valid, confirmed)
+	}
+}
+
 // flippingMonitor is a Monitor double whose GetServices error state can be
 // flipped concurrently: it alternates between answering an empty catalog
 // (legit empty) and a connection-shaped error (source read failure). It

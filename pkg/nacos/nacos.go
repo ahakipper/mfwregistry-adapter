@@ -208,6 +208,34 @@ type clusterKeyOf struct {
 // Sink satisfies the internal/ports.InstanceSink port exactly (the
 // compile-time check fails on any future signature drift).
 var _ ports.InstanceSink = (*Sink)(nil)
+var _ ports.FullOperationSink = (*Sink)(nil)
+
+// PushAllOperation is the metadata-aware full retry boundary. A confirmed
+// empty snapshot is converted into offline markers for only the owning
+// provider scope; an unconfirmed empty source remains a safe no-op.
+func (s *Sink) PushAllOperation(op ports.RetryOperation) error {
+	if len(op.Instances) > 0 {
+		return s.PushAll(op.Trigger, op.Instances)
+	}
+	if !op.EmptyConfirmed || op.Scope == "" {
+		return nil
+	}
+	s.rememberedMu.Lock()
+	markers := make([]*instance.Instance, 0)
+	for key := range s.remembered {
+		if key.cluster == op.Scope {
+			markers = append(markers, &instance.Instance{
+				AppCode: key.service, Provider: key.cluster,
+				Status: instance.InstanceStatusOffline, Enabled: false,
+			})
+		}
+	}
+	s.rememberedMu.Unlock()
+	if len(markers) == 0 {
+		return nil
+	}
+	return s.prune(markers)
+}
 
 // NewSink creates a Nacos sink bound to addr. A nil logger is defaulted.
 func NewSink(addr string, logger ports.Logger) (*Sink, error) {
@@ -370,6 +398,9 @@ func (s *Sink) prune(instances []*instance.Instance) error {
 				continue // another provider's cluster: never pruned here
 			}
 			if wanted[host.InstanceID] {
+				continue
+			}
+			if host.Metadata["spotterOwner"] != metadataOwner {
 				continue
 			}
 			tasks = append(tasks, pruneTask{key: key, host: host})
@@ -660,6 +691,7 @@ func compositeID(ins *instance.Instance) string {
 // server and any older binary's writes — so the marker only needs to be
 // checked, never enforced.
 const metadataSchemaVersion = "1"
+const metadataOwner = "spotter"
 
 // metadataOf renders the metadata map carried for the GetAll round-trip
 // (plan §7.3): identity and every compared field, as strings, plus the
@@ -669,6 +701,7 @@ const metadataSchemaVersion = "1"
 // upgrade").
 func metadataOf(ins *instance.Instance) map[string]string {
 	metadata := map[string]string{
+		"spotterOwner":  metadataOwner,
 		"sourceKey":     ins.SourceKey,
 		"sourceCluster": ins.SourceCluster,
 		"instanceId":    ins.InstanceId,

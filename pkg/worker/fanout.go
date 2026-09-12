@@ -285,7 +285,7 @@ func (s *orderedSink) PushAllWithRevalidate(trigger int64, items []*instance.Ins
 		}
 		items = fresh
 	}
-	return s.runLocked(trigger, items, true, true)
+	return s.runLocked(trigger, items, true, true, nil)
 }
 
 func (s *orderedSink) PushAllOperation(op ports.RetryOperation) error {
@@ -303,7 +303,7 @@ func (s *orderedSink) PushAllOperation(op ports.RetryOperation) error {
 	}
 	s.lastFullScope = op.Scope
 	s.lastFullBatchID = op.BatchID
-	return s.runLocked(op.Trigger, op.Instances, true, true)
+	return s.runLocked(op.Trigger, op.Instances, true, true, &op)
 }
 
 func (s *orderedSink) GetAll(statuses []int32, provider string) (*instance.InstanceList, error) {
@@ -314,14 +314,14 @@ func (s *orderedSink) run(trigger int64, items []*instance.Instance, full bool) 
 	if full {
 		s.fullGate.Lock()
 		defer s.fullGate.Unlock()
-		return s.runLocked(trigger, items, true, false)
+		return s.runLocked(trigger, items, true, false, nil)
 	}
 	s.fullGate.RLock()
 	defer s.fullGate.RUnlock()
 	keys := identityKeys(items)
 	unlock := s.lockKeys(keys)
 	defer unlock()
-	return s.runLocked(trigger, items, false, false)
+	return s.runLocked(trigger, items, false, false, nil)
 }
 
 func identityKeys(items []*instance.Instance) []string {
@@ -376,7 +376,7 @@ func (s *orderedSink) lockKeys(keys []string) func() {
 	}
 }
 
-func (s *orderedSink) runLocked(trigger int64, items []*instance.Instance, full bool, trustedComplete bool) error {
+func (s *orderedSink) runLocked(trigger int64, items []*instance.Instance, full bool, trustedComplete bool, operation *ports.RetryOperation) error {
 	if s.closed {
 		return errors.New("worker: sink is closed")
 	}
@@ -445,7 +445,16 @@ func (s *orderedSink) runLocked(trigger int64, items []*instance.Instance, full 
 	s.latestMu.Unlock()
 	var err error
 	if full {
-		err = s.inner.PushAll(trigger, filtered)
+		if operation != nil {
+			operation.Instances = filtered
+			if metadata, ok := s.inner.(ports.FullOperationSink); ok {
+				err = metadata.PushAllOperation(*operation)
+			} else {
+				err = s.inner.PushAll(trigger, filtered)
+			}
+		} else {
+			err = s.inner.PushAll(trigger, filtered)
+		}
 	} else {
 		err = s.inner.Push(trigger, filtered)
 	}
@@ -530,6 +539,13 @@ func (s *recordingSink) Close() error {
 		return c.Close()
 	}
 	return nil
+}
+
+func (s *recordingSink) PushAllOperation(op ports.RetryOperation) error {
+	if metadata, ok := s.inner.(ports.FullOperationSink); ok {
+		return metadata.PushAllOperation(op)
+	}
+	return s.inner.PushAll(op.Trigger, op.Instances)
 }
 
 // observe records one e2e observation for this sink with the outcome

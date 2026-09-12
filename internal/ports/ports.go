@@ -84,17 +84,18 @@ type EventQueue interface {
 // keeps the operation kind and source scope alongside the payload so a failed
 // full push cannot be replayed as unrelated single-instance pushes.
 type RetryOperation struct {
-	Sink       string
-	Operate    OperateType
-	Provider   string
-	Scope      string
-	BatchID    string
-	Identity   string
-	Revision   int64
-	Sequence   uint64
-	Trigger    int64
-	Instances  []*instance.Instance
-	Revalidate func() ([]*instance.Instance, bool)
+	Sink           string
+	Operate        OperateType
+	Provider       string
+	Scope          string
+	BatchID        string
+	Identity       string
+	Revision       int64
+	Sequence       uint64
+	Trigger        int64
+	Instances      []*instance.Instance
+	Revalidate     func() ([]*instance.Instance, bool)
+	EmptyConfirmed bool
 }
 
 // RetryOperationQueue is the worker-facing descriptive seam. It uses named

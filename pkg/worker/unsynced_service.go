@@ -49,15 +49,16 @@ const (
 // pendingPush is one queued retry: the original trigger time and the
 // instance to re-push.
 type pendingPush struct {
-	Trigger      int64
-	Instance     *instance.Instance
-	Full         bool
-	Batch        []*instance.Instance
-	Operation    RetryOperationKind
-	Scope        string
-	BatchID      string
-	FullRevision uint64
-	Revalidate   func() ([]*instance.Instance, bool)
+	Trigger        int64
+	Instance       *instance.Instance
+	Full           bool
+	Batch          []*instance.Instance
+	Operation      RetryOperationKind
+	Scope          string
+	BatchID        string
+	FullRevision   uint64
+	Revalidate     func() ([]*instance.Instance, bool)
+	EmptyConfirmed bool
 }
 
 // AddFull preserves a failed full synchronization as a full operation so
@@ -74,12 +75,12 @@ func (s *UnsyncedService) AddFull(trigger int64, instances []*instance.Instance,
 	return
 nonEmpty:
 	scope := fullScope(instances)
-	s.AddFullWithMeta(trigger, instances, sinks, scope, fullBatchID(scope, instances), uint64(maxPositive(trigger)), nil)
+	s.AddFullWithMeta(trigger, instances, sinks, scope, fullBatchID(scope, instances), uint64(maxPositive(trigger)), nil, false)
 }
 
 // AddFullWithMeta preserves the complete operation and its source metadata so
 // retries can rebuild the snapshot instead of replaying a stale batch.
-func (s *UnsyncedService) AddFullWithMeta(trigger int64, instances []*instance.Instance, sinks []string, scope, batchID string, sequence uint64, revalidate func() ([]*instance.Instance, bool)) {
+func (s *UnsyncedService) AddFullWithMeta(trigger int64, instances []*instance.Instance, sinks []string, scope, batchID string, sequence uint64, revalidate func() ([]*instance.Instance, bool), emptyConfirmed bool) {
 	if scope == "" || batchID == "" {
 		return
 	}
@@ -115,7 +116,7 @@ func (s *UnsyncedService) AddFullWithMeta(trigger int64, instances []*instance.I
 			continue
 		}
 		batch := append([]*instance.Instance(nil), instances...)
-		s.store[key] = &pendingPush{Trigger: trigger, Full: true, Batch: batch, Operation: RetryPushAll, Scope: scope, BatchID: batchID, FullRevision: sequence, Revalidate: revalidate}
+		s.store[key] = &pendingPush{Trigger: trigger, Full: true, Batch: batch, Operation: RetryPushAll, Scope: scope, BatchID: batchID, FullRevision: sequence, Revalidate: revalidate, EmptyConfirmed: emptyConfirmed}
 	}
 }
 
@@ -182,7 +183,7 @@ func (s *UnsyncedService) AddOperation(op ports.RetryOperation) {
 		return
 	}
 	if op.Operate == ports.OperateTypeSyncAll {
-		s.AddFullWithMeta(op.Trigger, op.Instances, []string{op.Sink}, op.Scope, op.BatchID, op.Sequence, op.Revalidate)
+		s.AddFullWithMeta(op.Trigger, op.Instances, []string{op.Sink}, op.Scope, op.BatchID, op.Sequence, op.Revalidate, op.EmptyConfirmed)
 		return
 	}
 	s.Add(op.Trigger, op.Instances, []string{op.Sink})
@@ -200,15 +201,16 @@ func (s *UnsyncedService) DrainOperations() []ports.RetryOperation {
 			continue
 		}
 		op := ports.RetryOperation{
-			Sink:       key.Sink,
-			Operate:    ports.OperateTypeSync,
-			Provider:   pending.Scope,
-			Scope:      pending.Scope,
-			BatchID:    pending.BatchID,
-			Revision:   int64(pending.FullRevision),
-			Sequence:   pending.FullRevision,
-			Trigger:    pending.Trigger,
-			Revalidate: pending.Revalidate,
+			Sink:           key.Sink,
+			Operate:        ports.OperateTypeSync,
+			Provider:       pending.Scope,
+			Scope:          pending.Scope,
+			BatchID:        pending.BatchID,
+			Revision:       int64(pending.FullRevision),
+			Sequence:       pending.FullRevision,
+			Trigger:        pending.Trigger,
+			Revalidate:     pending.Revalidate,
+			EmptyConfirmed: pending.EmptyConfirmed,
 		}
 		if pending.Full {
 			op.Operate = ports.OperateTypeSyncAll

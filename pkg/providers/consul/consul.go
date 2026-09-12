@@ -20,19 +20,20 @@ import (
 
 // K8S provider implement
 type consul struct {
-	providerName  string
-	clientFactory ConsulClientFactory        // consul api factory
-	monitor       Monitor                    // monitor
-	ctx           context.Context            // context
-	worker        worker.Worker              // the role of worker is to synchronize provider changes to the discovery center
-	stopped       bool                       // whether the current provider has stopped
-	sync.Mutex                               // lock mutex
-	interval      int                        // the time interval for full synchronization. default 7200s(2h)
-	filters       []providers.InstanceFilter // filters is a collection of functions used to filter invalid instances
-	cache         providers.CacheIterface    // consul endpoint cache
-	generation    uint64
-	pool          *ants.Pool // goroutine pool
-	initDone      bool
+	providerName       string
+	clientFactory      ConsulClientFactory        // consul api factory
+	monitor            Monitor                    // monitor
+	ctx                context.Context            // context
+	worker             worker.Worker              // the role of worker is to synchronize provider changes to the discovery center
+	stopped            bool                       // whether the current provider has stopped
+	sync.Mutex                                    // lock mutex
+	interval           int                        // the time interval for full synchronization. default 7200s(2h)
+	filters            []providers.InstanceFilter // filters is a collection of functions used to filter invalid instances
+	cache              providers.CacheIterface    // consul endpoint cache
+	generation         uint64
+	emptyConfirmations uint32
+	pool               *ants.Pool // goroutine pool
+	initDone           bool
 
 	// sourceErr records the error of the last GetAll when the consul source
 	// could not be read (nil after a successful read, empty or not): the
@@ -444,20 +445,21 @@ func (c *consul) ProcessIntervalFullPush() {
 // already holds this lock across the worker.GetAll RPC (a strictly wider
 // footprint), so no new lock-ordering surface is introduced.
 func (c *consul) emitSyncAll() {
-	all, generation, valid := c.snapshotForFullPush()
+	all, generation, valid, emptyConfirmed := c.snapshotForFullPush()
 	if !valid {
 		return
 	}
 	// Tick-time origin + ns unit (dsca-2 §3 Option (b), §6 origin semantics).
 	c.worker.Handle(&worker.Event{
-		Trigger:  time.Now().UnixNano(),
-		Data:     all,
-		Operate:  worker.OperateTypeSyncAll,
-		Scope:    "ecs",
-		BatchID:  worker.FullBatchID("ecs", all),
-		Sequence: generation,
+		Trigger:        time.Now().UnixNano(),
+		Data:           all,
+		Operate:        worker.OperateTypeSyncAll,
+		Scope:          "ecs",
+		BatchID:        worker.FullBatchID("ecs", all),
+		Sequence:       generation,
+		EmptyConfirmed: emptyConfirmed,
 		Revalidate: func() ([]*v2.Instance, bool) {
-			latest, current, ok := c.snapshotForFullPush()
+			latest, current, ok, _ := c.snapshotForFullPush()
 			if !ok {
 				return nil, false
 			}
@@ -469,17 +471,25 @@ func (c *consul) emitSyncAll() {
 	})
 }
 
-func (c *consul) snapshotForFullPush() ([]*v2.Instance, uint64, bool) {
+func (c *consul) snapshotForFullPush() ([]*v2.Instance, uint64, bool, bool) {
 	c.Lock()
 	defer c.Unlock()
-	if c.sourceErr != nil {
-		return nil, c.generation, false
-	}
 	all := c.cache.List()
+	if c.monitor != nil {
+		all = c.GetAll()
+	}
+	if c.sourceErr != nil {
+		return nil, c.generation, false, false
+	}
 	if all == nil {
 		all = []*v2.Instance{}
 	}
-	return all, c.generation, true
+	if len(all) == 0 {
+		c.emptyConfirmations++
+	} else {
+		c.emptyConfirmations = 0
+	}
+	return all, c.generation, true, c.emptyConfirmations >= 3
 }
 
 // CompareAndFlush compare and find diff instances then flush

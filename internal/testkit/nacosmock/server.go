@@ -204,6 +204,14 @@ func (s *Server) SetInstancesInNamespace(hosts []Host, namespace, group, service
 	for _, host := range hosts {
 		host.ClusterName = cluster
 		host.NamespaceID = namespace
+		if host.Metadata == nil {
+			host.Metadata = map[string]string{}
+		}
+		if _, ok := host.Metadata["spotterOwner"]; !ok {
+			// SetInstances models state previously written by Spotter. Tests
+			// that need foreign/unowned data can set an explicit owner value.
+			host.Metadata["spotterOwner"] = "spotter"
+		}
 		instance := fromHost(group, service, host)
 		instance.NamespaceID = namespace
 		stored[instanceKey{namespace: namespace, composite: instance.InstanceID}] = instance
