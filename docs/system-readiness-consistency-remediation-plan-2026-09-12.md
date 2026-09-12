@@ -8,7 +8,7 @@
 
 **版本变更：** v6 将“禁止 Nacos 生产路径裸 HTTP、统一经官方 Nacos SDK/facade”从可选 POC 提升为 P1 强制整改和 Nacos 启用时的发布门禁，并补充 SDK 迁移、例外管理和完整测试矩阵。
 
-**当前基线：** `refactor/all` / `42ecb89`。A0→A3、B1、B2 HTTP 过渡层、B3 SDK seam、B4 Atlas gate、C1 Observe 修复、D1 provider overflow/lifecycle、C2 logger/notifier/metrics 注入和两条 `go vet` 诊断清零已按阶段提交并通过 focused/full/race 测试；`go vet ./...` 当前为 0。Nacos naming 已默认经官方 SDK，catalog/prune、cluster Admin、readiness 仍是有期限的 audited HTTP 例外；真实 Nacos/Atlas 证据、appcenter endpoint contract、完整 2h Observe 和最终 overflow/DDD 发布证据仍未闭环。
+**当前基线：** `refactor/all` / `e025223`。A0→A3、B1、B2 HTTP 过渡层、B3 SDK seam、B4 Atlas gate、C1 Observe 修复、D1 provider overflow/lifecycle、C2 logger/notifier/metrics 注入和两条 `go vet` 诊断清零已按阶段提交并通过 focused/full/race 测试；`go vet ./...` 当前为 0。Nacos naming 已默认经官方 SDK，catalog/prune、cluster Admin、readiness 仍是有期限的 audited HTTP 例外；真实 Nacos/Atlas 证据、appcenter endpoint contract、完整 2h Observe 和最终真实环境发布证据仍未闭环。
 
 **范围边界：** K8s 是本阶段规模主路径；Consul 1000+ 规模观察是 accepted non-goal，只有重新启用 ECS/机器部署时才开启独立里程碑。Nacos SDK 统一接入是生产必做项；兼容验证完成前可保留 HTTP 回滚/对照通道，但不能把裸 HTTP 作为最终生产路径。
 
@@ -480,7 +480,7 @@ go test -tags=nacos_real -race ./tests/e2e/... -run 'TestNacosReal|TestNacosSDKR
 
 **执行状态（2026-09-13）：** Observe harness 已完成本地 deterministic 修复：`logSlice` 解析 zap JSON `ts`（字符串、数值纳秒精度）及带前缀/普通行首时间戳；churn ledger 在 apply/delete API 调用前发布 mutation clock，避免 tick 先看到 source/remote 变化而没有 ledger。对应 `tests/observe` parser/engine tests 与 `-tags=observe` 编译门禁通过。完整 OBS-mini/OBS-full、kwok/Nacos/Atlas/etcd 自包含运行尚未执行，Consul 规模观察继续为 accepted non-goal。
 
-`728f1d2` 进一步关闭了 C1 复核发现的闭环缺口：正常 `SyncAll` 通过 typed full-operation fanout 保留 scope/batch/empty-confirmation，ordered sink tombstone 按 provider scope 隔离，K8s 多 app-code allow-list 改为 membership，K8s/Consul provider pool 改为 nonblocking 并记录 overload drop，K8s cache pointer/stop-state/HasSynced 等待具备锁与取消语义。当前仍需为 overflow drop 增加按 key 合并的可重放队列，并完成完整 2h OBS 证据，故 C1 总体仍为 PARTIAL。
+`728f1d2` 进一步关闭了 C1 复核发现的闭环缺口：正常 `SyncAll` 通过 typed full-operation fanout 保留 scope/batch/empty-confirmation，ordered sink tombstone 按 provider scope 隔离，K8s 多 app-code allow-list 改为 membership，K8s/Consul provider pool 改为 nonblocking 并记录 overload drop，K8s cache pointer/stop-state/HasSynced 等待具备锁与取消语义。`ff10610` 又加入 bounded identity-keyed overflow requeue、provider shutdown joins 和可取消的 Pop/periodic loops。完整 2h OBS 证据仍未执行，故 C1 总体仍为 PARTIAL。
 
 ### 12.1 新增负向测试矩阵
 
@@ -675,9 +675,11 @@ Expiry/revisit trigger:
 **复核范围：** 当前 `refactor/all` HEAD、A0–A3/B1–B4/C1/C3 变更、K8s
 watch/cache/worker/reconcile 链路、Nacos SDK/HTTP 例外、Atlas/Observe/DDD/通知状态，
 以及 `go test`/race/vet/tagged harness。Reviewer 未发现新的离线 P0；以下 P1/P2
-仍是发布阻塞或后续 work package：真实 Nacos/Atlas/2h Observe 证据、C2 DDD globals
-与真实 appcenter 告警、Nacos Admin/Catalog/readiness 例外替换、SDK static-token
-能力，以及 provider overflow queue/Pop retry 全面可取消化。
+仍是发布阻塞或后续 work package：真实 Nacos/Atlas/2h Observe 证据、真实 appcenter
+告警、Nacos Admin/Catalog/readiness 例外替换、SDK static-token 能力，以及
+overflow queue 在多进程/进程重启场景下的持久化重放证据。C2 的 active graph
+globals 已完成注入和隔离，但 legacy compatibility shim 的最终删除仍需兼容调用方
+迁移证明。
 
 Reviewer 特别确认：
 
