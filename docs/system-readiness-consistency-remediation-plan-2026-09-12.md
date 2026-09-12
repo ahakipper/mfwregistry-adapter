@@ -8,7 +8,7 @@
 
 **版本变更：** v6 将“禁止 Nacos 生产路径裸 HTTP、统一经官方 Nacos SDK/facade”从可选 POC 提升为 P1 强制整改和 Nacos 启用时的发布门禁，并补充 SDK 迁移、例外管理和完整测试矩阵。
 
-**当前基线：** `refactor/all` / `728f1d2`。A0→A3、B1、B2 HTTP 过渡层、B3 SDK seam、B4 Atlas gate、C1 Observe 修复、K8s cache/stop/full-reconcile/backpressure 修复和两条 `go vet` 诊断清零已按阶段提交并通过 focused/full/race 测试；`go vet ./...` 当前为 0。Nacos naming 已默认经官方 SDK，catalog/prune、cluster Admin、readiness 仍是有期限的 audited HTTP 例外；真实 Nacos/Atlas 证据、DDD/通知和完整 2h Observe 仍未闭环。
+**当前基线：** `refactor/all` / `702373d`。A0→A3、B1、B2 HTTP 过渡层、B3 SDK seam、B4 Atlas gate、C1 Observe 修复、K8s cache/stop/full-reconcile/backpressure 修复和两条 `go vet` 诊断清零已按阶段提交并通过 focused/full/race 测试；`go vet ./...` 当前为 0。Nacos naming 已默认经官方 SDK，catalog/prune、cluster Admin、readiness 仍是有期限的 audited HTTP 例外；真实 Nacos/Atlas 证据、DDD/通知和完整 2h Observe 仍未闭环。
 
 **范围边界：** K8s 是本阶段规模主路径；Consul 1000+ 规模观察是 accepted non-goal，只有重新启用 ECS/机器部署时才开启独立里程碑。Nacos SDK 统一接入是生产必做项；兼容验证完成前可保留 HTTP 回滚/对照通道，但不能把裸 HTTP 作为最终生产路径。
 
