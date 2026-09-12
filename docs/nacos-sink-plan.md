@@ -14,7 +14,7 @@
 > `ID-NACOS-SDK-MANDATE`.
 
 Status: authoritative implementation plan for the multi-sink initiative on
-`refactor/all` (HEAD `b976356` at drafting time). The lead implements it
+`refactor/all` (current implementation baseline `b1d9e2f`). The lead implements it
 phase-by-phase (F2..F6) under agent review; each phase's exit criteria are
 the review contract. Companions: [ddd-architecture.md](ddd-architecture.md)
 (target layering, §4 decisions), [architecture.md](architecture.md),
