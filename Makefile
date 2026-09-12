@@ -14,8 +14,9 @@ build:
 # --- Test matrix -----------------------------------------------------------
 
 # Packages under test. Explicit allowlist: untested legacy packages cannot
-# break the matrix, and spotter/tools/cache currently fails vet under -cover
-# (fmt.Sprintf with arguments but no formatting directives, cache.go:52).
+# break the matrix. The historical tools/cache vet failure was cleared in
+# eb6bf0c; future coverage expansion should add legacy packages deliberately,
+# not hide new diagnostics behind this list.
 TEST_PKGS := ./internal/... \
 	./pkg/discoverycenter \
 	./pkg/nacos \
