@@ -62,6 +62,13 @@ same client configuration. Catalog/prune, cluster health-check update, and
 console readiness remain audited HTTP compatibility exceptions with an owner
 and expiry; they are not a production SDK PASS until the Admin/Maintainer SDK
 equivalent is verified.
+
+For notifications, configure `--appcenter-notice-endpoint`,
+`--appcenter-notice-auth-token`, `--appcenter-notice-timeout` and
+`--appcenter-notice-retries` only after the deployment supplies a
+`NoticeRequestBuilder` payload contract. Without a complete contract the
+runtime uses a fail-closed notifier and records delivery failure; local log
+output is not treated as appcenter alert delivery.
 | `-w, --disable-worker` | `false` | Disable the real push; pushes are logged only. Testing flag. |
 | `--appcodes` | `[]` | Restrict pushes to these appcodes. Testing flag. |
 | `--metrics-addr` | `:8090` | Prometheus metrics listen address. |
