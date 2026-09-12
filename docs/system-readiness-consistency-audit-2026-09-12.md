@@ -2,7 +2,7 @@
 
 **审计日期：** 2026-09-12（当前状态增量更新至 2026-09-13）
 **仓库：** `/Users/d-robotics/go/src/github.com/ahakipper/mfwregistry-adapter`  
-**分支/提交：** `refactor/all` / `702373d`
+**分支/提交：** `refactor/all` / `e025223`
 **文档状态：** FINAL（已完成第二轮独立 reviewer 复核）
 
 本文是对当前工程的一次总盘点，作为后续全面优化的主要参考。它把已有设计文档、当前代码、测试结果和已提交的观察产物放在同一份证据链中；结论优先以当前工作树和实际命令输出为准，不以旧文档中的历史基线为准。
@@ -28,7 +28,7 @@
 | Nacos naming | **SDK DEFAULT / REAL EVIDENCE PENDING** | 官方 SDK v2.3.5 facade 已接入，生产默认 `sdk`；catalog/prune、cluster Admin、readiness 仍是有 owner/expiry 的 HTTP compatibility exceptions。 |
 | Atlas wire | **NOT VERIFIED (P1)** | JSON mirror + guarded `atlas_real` harness；真实 protobuf/JSON、TLS/auth/method path 仍待 scratch。 |
 | Observe | **HARNESS FIXED / 2H NOT RUN** | zap `ts` 解析和 ledger-before-apply/delete 已修复；完整自包含 2h OBS 仍待执行。 |
-| DDD / notice | **NOT DONE (P1/P2)** | providers/elector/conversion 仍引用 legacy globals；appcenter 实际 HTTP/API 告警尚未提供，当前仍 log-only；aggregate 仍 scaffolding。 |
+| DDD / notice | **CODE IMPLEMENTED / REAL DELIVERY PENDING** | active provider/elector/conversion/metrics graph uses injected ports; legacy constructors/bridge remain for compatibility; aggregate is build-gated; appcenter HTTP adapter is fail-closed until deployment contract is supplied. |
 | Consul scale | **ACCEPTED NON-GOAL** | 当前无机器部署场景；重新启用 ECS/机器部署时再开同等规模门禁。 |
 | Static quality | **PASS** | `go vet ./...` 已在 `eb6bf0c` 清零原两条诊断。 |
 
@@ -92,7 +92,7 @@
 ### 3.2 当前 Sink 的一致性风险
 
 > **版本说明：** 本节 R1–R7 的代码行号和“尚未修复”描述来自原始
-> `838ad19` 快照，保留用于问题 provenance；不得直接当作 `702373d` 当前
+> `838ad19` 快照，保留用于问题 provenance；不得直接当作 `e025223` 当前
 > 状态。R1/R2/R3 的实现闭环已在 A2/A3/B1/B2 及后续提交中补齐，当前
 > 未验证项和仍开放项见本文“当前状态增量”表。
 
