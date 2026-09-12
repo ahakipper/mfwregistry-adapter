@@ -103,6 +103,57 @@ type countingFullSink struct {
 	pushCalls int
 }
 
+type scopedOperationSink struct {
+	countingFullSink
+	operations []ports.RetryOperation
+}
+
+func (s *scopedOperationSink) PushAllOperation(operation ports.RetryOperation) error {
+	s.operations = append(s.operations, operation)
+	return nil
+}
+
+func TestOrderedSinkScopesTrustedFullTombstonesByProvider(t *testing.T) {
+	inner := &scopedOperationSink{}
+	s := &orderedSink{inner: inner}
+	k8s := probeInstance("k8s/uid")
+	k8s.Provider = "k8s"
+	ecs := probeInstance("ecs/service")
+	ecs.Provider = "ecs"
+	if err := s.PushAllOperation(ports.RetryOperation{Sink: "nacos", Operate: ports.OperateTypeSyncAll, Scope: "k8s", BatchID: "k8s-1", Trigger: 1, Instances: []*instance.Instance{k8s}}); err != nil {
+		t.Fatalf("k8s full operation: %v", err)
+	}
+	if err := s.PushAllOperation(ports.RetryOperation{Sink: "nacos", Operate: ports.OperateTypeSyncAll, Scope: "ecs", BatchID: "ecs-1", Trigger: 2, Instances: []*instance.Instance{ecs}}); err != nil {
+		t.Fatalf("ecs full operation: %v", err)
+	}
+	// The ECS complete snapshot must not tombstone the K8s identity. A
+	// same-revision K8s incremental remains valid and must reach the sink.
+	if err := s.Push(1, []*instance.Instance{k8s}); err != nil {
+		t.Fatalf("k8s incremental after ecs full: %v", err)
+	}
+	if inner.pushCalls != 1 {
+		t.Fatalf("k8s incremental calls = %d, want 1 (cross-provider tombstone must not suppress it)", inner.pushCalls)
+	}
+}
+
+func TestOrderedSinkMissingScopeCannotTombstoneOtherProviders(t *testing.T) {
+	inner := &scopedOperationSink{}
+	s := &orderedSink{inner: inner}
+	k8s := probeInstance("k8s/uid")
+	if err := s.PushAllOperation(ports.RetryOperation{Sink: "nacos", Operate: ports.OperateTypeSyncAll, Scope: "k8s", BatchID: "k8s-1", Trigger: 1, Instances: []*instance.Instance{k8s}}); err != nil {
+		t.Fatalf("seed scoped full operation: %v", err)
+	}
+	if err := s.PushAllOperation(ports.RetryOperation{Sink: "nacos", Operate: ports.OperateTypeSyncAll, BatchID: "unscoped", Trigger: 2, Instances: nil}); !errors.Is(err, errStaleFullPush) {
+		t.Fatalf("unscoped destructive operation error = %v, want stale/untrusted rejection", err)
+	}
+	if err := s.Push(1, []*instance.Instance{k8s}); err != nil {
+		t.Fatalf("k8s incremental after unscoped full: %v", err)
+	}
+	if inner.pushCalls != 1 {
+		t.Fatalf("k8s incremental calls = %d, want 1", inner.pushCalls)
+	}
+}
+
 func (s *countingFullSink) Push(int64, []*instance.Instance) error {
 	s.pushCalls++
 	return nil

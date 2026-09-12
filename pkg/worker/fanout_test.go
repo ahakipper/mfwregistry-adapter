@@ -1523,3 +1523,25 @@ type nacosPermanentTestError struct{}
 
 func (*nacosPermanentTestError) Error() string   { return "4xx" }
 func (*nacosPermanentTestError) Permanent() bool { return true }
+
+func TestFanoutPushAllOperationBroadcastsScopedMetadata(t *testing.T) {
+	a := &fullOperationRecordingSink{FakeInstanceSink: &fakes.FakeInstanceSink{}}
+	b := &fullOperationRecordingSink{FakeInstanceSink: &fakes.FakeInstanceSink{}}
+	fanout, err := NewFanoutSink(&fakes.FakeLogger{},
+		NamedSink{Name: "atlas", Sink: a}, NamedSink{Name: "nacos", Sink: b})
+	if err != nil {
+		t.Fatalf("NewFanoutSink() error = %v", err)
+	}
+	if err := fanout.PushAllOperation(ports.RetryOperation{Operate: ports.OperateTypeSyncAll, Scope: "k8s", BatchID: "empty-k8s", Sequence: 3, Trigger: 9, EmptyConfirmed: true}); err != nil {
+		t.Fatalf("broadcast PushAllOperation() error = %v", err)
+	}
+	for name, sink := range map[string]*fullOperationRecordingSink{"atlas": a, "nacos": b} {
+		if len(sink.operations) != 1 {
+			t.Fatalf("%s operations = %d, want one broadcast operation", name, len(sink.operations))
+		}
+		op := sink.operations[0]
+		if op.Sink != name || op.Scope != "k8s" || op.BatchID != "empty-k8s" || !op.EmptyConfirmed {
+			t.Fatalf("%s operation metadata = %+v, want sink-scoped confirmed empty", name, op)
+		}
+	}
+}

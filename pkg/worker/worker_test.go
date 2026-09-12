@@ -18,6 +18,34 @@ type staleSequenceSink struct {
 	n     int
 }
 
+type fullOperationRecordingSink struct {
+	*fakes.FakeInstanceSink
+	operations []ports.RetryOperation
+}
+
+func (s *fullOperationRecordingSink) PushAllOperation(operation ports.RetryOperation) error {
+	s.operations = append(s.operations, operation)
+	return nil
+}
+
+func TestWorkerSyncAllPreservesScopeAndEmptyConfirmation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sink := &fullOperationRecordingSink{FakeInstanceSink: &fakes.FakeInstanceSink{}}
+	w, err := NewResourceWorker(ctx, sink, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+	if err != nil {
+		t.Fatalf("NewResourceWorker() error = %v", err)
+	}
+	w.Handle(&Event{Trigger: 9, Scope: "k8s", BatchID: "empty-k8s", Sequence: 3, Operate: OperateTypeSyncAll, EmptyConfirmed: true})
+	if len(sink.operations) != 1 {
+		t.Fatalf("full operations = %d, want 1", len(sink.operations))
+	}
+	op := sink.operations[0]
+	if op.Scope != "k8s" || op.BatchID != "empty-k8s" || op.Sequence != 3 || !op.EmptyConfirmed || op.Operate != ports.OperateTypeSyncAll {
+		t.Fatalf("full operation metadata = %+v, want k8s/empty-k8s/3/confirmed", op)
+	}
+}
+
 func (s *staleSequenceSink) Push(int64, []*instance.Instance) error { return nil }
 func (s *staleSequenceSink) PushAll(_ int64, items []*instance.Instance) error {
 	s.mu.Lock()

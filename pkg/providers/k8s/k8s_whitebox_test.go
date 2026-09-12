@@ -1237,6 +1237,16 @@ func TestCompareAndFlushPushAppCodesFiltersRemoteList(t *testing.T) {
 	}
 }
 
+func TestFormatInstanceAllowsAnyConfiguredAppCode(t *testing.T) {
+	pod := newValidPod("msp", "pod-a")
+	saved := config.PushAppCodes
+	config.PushAppCodes = []string{"other-app", "pay-user"}
+	defer func() { config.PushAppCodes = saved }()
+	if got := formatInstance(nil, pod); got == nil || got.AppCode != "pay-user" {
+		t.Fatalf("formatInstance with multi-appcode allow-list = %#v, want pay-user instance (membership, not first-item equality)", got)
+	}
+}
+
 func TestCompareAndFlushEmptyPodListDoesNothing(t *testing.T) {
 	robot := newFakeRobot(nil, nil, false)
 	w := &fakeWorker{}
@@ -1421,6 +1431,26 @@ func TestMonitorStopsOnContextCancel(t *testing.T) {
 	}
 	if !robot.wasStopped() {
 		t.Fatal("robot.Stop() was not called by monitor")
+	}
+}
+
+func TestMonitorStopsWhileWaitingForInitialSync(t *testing.T) {
+	robot := newFakeRobot(nil, nil, false)
+	w := &fakeWorker{getAllResponse: &sv.InstanceList{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	k := newTestProvider(robot, w)
+	k.ctx = ctx
+	done := make(chan struct{})
+	go func() {
+		k.Run()
+		close(done)
+	}()
+	time.Sleep(25 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Run() remained blocked in the initial HasSynced wait after context cancel")
 	}
 }
 
