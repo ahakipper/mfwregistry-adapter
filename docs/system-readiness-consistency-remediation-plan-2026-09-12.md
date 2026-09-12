@@ -8,11 +8,11 @@
 
 **版本变更：** v6 将“禁止 Nacos 生产路径裸 HTTP、统一经官方 Nacos SDK/facade”从可选 POC 提升为 P1 强制整改和 Nacos 启用时的发布门禁，并补充 SDK 迁移、例外管理和完整测试矩阵。
 
-**当前基线：** `refactor/all` / `702373d`。A0→A3、B1、B2 HTTP 过渡层、B3 SDK seam、B4 Atlas gate、C1 Observe 修复、K8s cache/stop/full-reconcile/backpressure 修复和两条 `go vet` 诊断清零已按阶段提交并通过 focused/full/race 测试；`go vet ./...` 当前为 0。Nacos naming 已默认经官方 SDK，catalog/prune、cluster Admin、readiness 仍是有期限的 audited HTTP 例外；真实 Nacos/Atlas 证据、DDD/通知和完整 2h Observe 仍未闭环。
+**当前基线：** `refactor/all` / `42ecb89`。A0→A3、B1、B2 HTTP 过渡层、B3 SDK seam、B4 Atlas gate、C1 Observe 修复、D1 provider overflow/lifecycle、C2 logger/notifier/metrics 注入和两条 `go vet` 诊断清零已按阶段提交并通过 focused/full/race 测试；`go vet ./...` 当前为 0。Nacos naming 已默认经官方 SDK，catalog/prune、cluster Admin、readiness 仍是有期限的 audited HTTP 例外；真实 Nacos/Atlas 证据、appcenter endpoint contract、完整 2h Observe 和最终 overflow/DDD 发布证据仍未闭环。
 
 **范围边界：** K8s 是本阶段规模主路径；Consul 1000+ 规模观察是 accepted non-goal，只有重新启用 ECS/机器部署时才开启独立里程碑。Nacos SDK 统一接入是生产必做项；兼容验证完成前可保留 HTTP 回滚/对照通道，但不能把裸 HTTP 作为最终生产路径。
 
-**执行状态（2026-09-13）：** `b1d9e2f` 已完成 B2 的 HTTP compatibility foundation：多地址 failover（5xx/transport 可切换、4xx 停止）、显式 namespace/group/auth/TLS/timeout、CLI→Config wiring、read+write readiness canary（成功地址固定 register/deregister，清理失败告警）、custom scope PushAll/prune/GetAll 回归测试。`fd1f539` 完成 B3 SDK seam：生产默认 `sdk`，naming lifecycle/query/subscribe 走官方 SDK，HTTP 仅集中在已登记的 catalog/prune、cluster Admin、readiness 例外。`c8e5613` 完成 B4 fail-closed Atlas gate，`cce983e` 完成 Observe 时间/ledger 修复，`eb6bf0c` 清零 `go vet`，`75a151b/403e0c5` 修复 K8s cache 指针和 stop-state 竞态，`728f1d2` 修复 normal SyncAll metadata、cross-provider tombstone、multi-appcode filter、provider backpressure 和 HasSynced cancellation。真实 Nacos/Atlas 版本验证、完整 2h Observe、DDD/通知仍未提供，因此发布状态仍为 NOT VERIFIED。
+**执行状态（2026-09-13）：** `b1d9e2f` 已完成 B2 的 HTTP compatibility foundation：多地址 failover（5xx/transport 可切换、4xx 停止）、显式 namespace/group/auth/TLS/timeout、CLI→Config wiring、read+write readiness canary（成功地址固定 register/deregister，清理失败告警）、custom scope PushAll/prune/GetAll 回归测试。`fd1f539` 完成 B3 SDK seam：生产默认 `sdk`，naming lifecycle/query/subscribe 走官方 SDK，HTTP 仅集中在已登记的 catalog/prune、cluster Admin、readiness 例外。`c8e5613` 完成 B4 fail-closed Atlas gate，`cce983e` 完成 Observe 时间/ledger 修复，`eb6bf0c` 清零 `go vet`，`75a151b/403e0c5` 修复 K8s cache 指针和 stop-state 竞态，`728f1d2` 修复 normal SyncAll metadata、cross-provider tombstone、multi-appcode filter、provider backpressure 和 HasSynced cancellation，`ff10610` 完成 provider overflow/lifecycle 汇合，`42ecb89` 完成 C2 显式依赖注入、aggregate 隔离和通知生命周期/敏感信息收口。真实 Nacos/Atlas 版本验证、完整 2h Observe、appcenter endpoint contract 和最终发布证据仍未提供，因此发布状态仍为 NOT VERIFIED。
 
 ## 1. 不可变的验收原则
 
@@ -559,14 +559,14 @@ Make target 契约：`make test-observe` 必须等价执行 `go test -tags=obser
 
 ## 13. C2：通知、DDD globals 与生命周期收口（P1/P2）
 
-**执行状态（2026-09-13）：NOT DONE / REMAINING.** 当前 `internal/infra/notice`
-只包装了本地 `pkg/notice/appcenternotice` logger；真实 appcenter HTTP/API、认证、
-重试和失败计数尚未接入，因此通知仍只能判为 log-only。`pkg/providers/k8s`、
-`pkg/providers/consul`、`pkg/providers/k8s/conversion.go`、`pkg/worker/elector.go`
-和 `pkg/metrics/proserver.go` 仍直接引用 legacy `pkg/log`/`pkg/notice` globals，
-`cmd/adapter.go` 的 `assignLegacyGlobals` 仍是生产 bridge；`pkg/providers/aggregate`
-仍为未启用 scaffolding。C2 需要在获得 appcenter endpoint/auth/SLA 后再实施，不能
-用当前离线 notifier 单测或日志证明替代真实告警证据。
+**执行状态（2026-09-13）：IMPLEMENTED / PRODUCTION EVIDENCE REMAINING.**
+`42ecb89` 已将 active server/provider graph 改为显式 logger/notifier/metrics/config
+依赖，aggregate 已由 `legacyaggregate` build tag 隔离；仅兼容构造器保留 legacy
+global bridge。`internal/infra/notice.HTTPNotifier` 已具备 endpoint/auth/request-builder
+契约、timeout、429/5xx/transport retry、atomic counters、payload redaction 和
+`Close` 汇合；缺少部署方 appcenter payload schema、真实 endpoint/auth/SLA 时会
+fail-closed，不能把本地单测提升为真实告警 PASS。故 C2 代码门禁通过，但真实
+appcenter delivery 与 legacy shim 最终删除仍是发布前 P1/P2 证据项。
 
 ### 13.1 通知
 
