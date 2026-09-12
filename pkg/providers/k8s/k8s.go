@@ -78,6 +78,9 @@ func (legacyNotifier) Notify(title, content string) { notice.Notice(title, conte
 
 func (k *k8s) ensureDeps() {
 	k.depsOnce.Do(func() {
+		if k.done == nil {
+			k.done = make(chan struct{})
+		}
 		if !k.depsConfigured {
 			// White-box/legacy callers may construct the unexported provider
 			// directly. Preserve their config-global filtering semantics while

@@ -81,6 +81,9 @@ type consul struct {
 
 func (c *consul) ensureDeps() {
 	c.depsOnce.Do(func() {
+		if c.done == nil {
+			c.done = make(chan struct{})
+		}
 		if c.logger == nil {
 			c.logger = ports.NopLogger{}
 		}
