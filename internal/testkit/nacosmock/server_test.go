@@ -109,6 +109,82 @@ func TestDeregisterMissingParamsRejected(t *testing.T) {
 	}
 }
 
+func TestIndependentListAndCatalogViewsAndFailureInjection(t *testing.T) {
+	server := Start()
+	defer server.Close()
+	registerInstance(t, server, registerParams{ServiceName: "svc", IP: "10.0.0.1", Port: 80, ClusterName: "k8s", GroupName: "g", Ephemeral: false, Enabled: true})
+	registerInstance(t, server, registerParams{ServiceName: "svc", IP: "10.0.0.2", Port: 80, ClusterName: "k8s", GroupName: "g", Ephemeral: false, Enabled: false})
+	status, _ := doForm(t, server, http.MethodGet, "/nacos/v1/ns/instance/list", map[string]string{"serviceName": "svc", "groupName": "g", "namespaceId": "public"})
+	if status != http.StatusOK {
+		t.Fatalf("list status = %d, want 200", status)
+	}
+	status, _ = doForm(t, server, http.MethodGet, "/nacos/v1/ns/catalog/instances", map[string]string{"serviceName": "svc", "clusterName": "k8s", "groupName": "g", "namespaceId": "public", "pageNo": "1", "pageSize": "10"})
+	if status != http.StatusOK {
+		t.Fatalf("catalog status = %d, want 200", status)
+	}
+	server.SetListStatus(http.StatusServiceUnavailable)
+	status, _ = doForm(t, server, http.MethodGet, "/nacos/v1/ns/instance/list", map[string]string{"serviceName": "svc", "groupName": "g"})
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("injected list status = %d, want 503", status)
+	}
+	status, _ = doForm(t, server, http.MethodGet, "/nacos/v1/ns/catalog/instances", map[string]string{"serviceName": "svc", "clusterName": "k8s", "groupName": "g", "pageNo": "1", "pageSize": "10"})
+	if status != http.StatusOK {
+		t.Fatalf("catalog status after list-only injection = %d, want 200", status)
+	}
+	server.SetCatalogStatus(http.StatusBadGateway)
+	status, _ = doForm(t, server, http.MethodGet, "/nacos/v1/ns/catalog/instances", map[string]string{"serviceName": "svc", "clusterName": "k8s", "groupName": "g", "pageNo": "1", "pageSize": "10"})
+	if status != http.StatusBadGateway {
+		t.Fatalf("injected catalog status = %d, want 502", status)
+	}
+}
+
+func TestNamespaceScopesDoNotOverwriteInstancesOrClusterConfig(t *testing.T) {
+	server := Start()
+	defer server.Close()
+	registerInstance(t, server, registerParams{ServiceName: "svc", IP: "10.0.0.1", Port: 80, ClusterName: "k8s", GroupName: "g", NamespaceID: "ns-a", Enabled: true})
+	registerInstance(t, server, registerParams{ServiceName: "svc", IP: "10.0.0.1", Port: 80, ClusterName: "k8s", GroupName: "g", NamespaceID: "ns-b", Enabled: false})
+	if got := len(server.Instances("svc", "k8s")); got != 2 {
+		t.Fatalf("namespace-colliding Instances = %d, want 2", got)
+	}
+	for _, namespace := range []string{"ns-a", "ns-b"} {
+		status, body := doForm(t, server, http.MethodGet, "/nacos/v1/ns/instance/list", map[string]string{"namespaceId": namespace, "serviceName": "svc", "groupName": "g"})
+		if status != http.StatusOK {
+			t.Fatalf("list namespace %s status = %d, want 200", namespace, status)
+		}
+		var list instanceListResponse
+		if err := json.Unmarshal([]byte(body), &list); err != nil {
+			t.Fatalf("decode list namespace %s: %v", namespace, err)
+		}
+		wantList := 1
+		if namespace == "ns-b" {
+			wantList = 0 // disabled instances are hidden from instance/list
+		}
+		if list.Count != wantList || len(list.Hosts) != wantList || (wantList == 1 && list.Hosts[0].NamespaceID != namespace) {
+			t.Fatalf("list namespace %s = %#v, want only one matching host", namespace, list)
+		}
+		status, body = doForm(t, server, http.MethodGet, "/nacos/v1/ns/catalog/instances", map[string]string{"namespaceId": namespace, "serviceName": "svc", "clusterName": "k8s", "groupName": "g", "pageNo": "1", "pageSize": "10"})
+		if status != http.StatusOK {
+			t.Fatalf("catalog namespace %s status = %d, want 200", namespace, status)
+		}
+		var catalog catalogInstancesResponse
+		if err := json.Unmarshal([]byte(body), &catalog); err != nil {
+			t.Fatalf("decode catalog namespace %s: %v", namespace, err)
+		}
+		if catalog.Count != 1 || len(catalog.List) != 1 || catalog.List[0].NamespaceID != namespace {
+			t.Fatalf("catalog namespace %s = %#v, want only one matching host", namespace, catalog)
+		}
+	}
+	for _, namespace := range []string{"ns-a", "ns-b"} {
+		status, _ := doForm(t, server, http.MethodPut, "/nacos/v1/ns/cluster", map[string]string{"namespaceId": namespace, "serviceName": "svc", "clusterName": "k8s", "groupName": "g", "checkPort": "0", "useInstancePort4Check": "false", "healthChecker": `{"type":"NONE"}`})
+		if status != http.StatusOK {
+			t.Fatalf("cluster config namespace %s status = %d, want 200", namespace, status)
+		}
+		if got := server.ClusterConfigInNamespace(namespace, "svc", "g", "k8s"); got == nil || got.NamespaceID != namespace {
+			t.Fatalf("cluster config namespace %s = %#v, want isolated config", namespace, got)
+		}
+	}
+}
+
 // TestClusterUpdateStoresConfig: PUT /nacos/v1/ns/cluster stores the cluster
 // configuration per (service, group, cluster) — the endpoint the Nacos sink
 // calls to disable the server-side health check (healthChecker
@@ -675,6 +751,7 @@ type registerParams struct {
 	Ephemeral   bool
 	Enabled     bool
 	Metadata    string // raw JSON, URL-encoded on the wire
+	NamespaceID string
 }
 
 func registerInstance(t *testing.T, server *Server, params registerParams) {
@@ -687,6 +764,9 @@ func registerInstance(t *testing.T, server *Server, params registerParams) {
 		"groupName":   params.GroupName,
 		"ephemeral":   strconv.FormatBool(params.Ephemeral),
 		"enabled":     strconv.FormatBool(params.Enabled),
+	}
+	if params.NamespaceID != "" {
+		form["namespaceId"] = params.NamespaceID
 	}
 	if params.Metadata != "" {
 		form["metadata"] = params.Metadata

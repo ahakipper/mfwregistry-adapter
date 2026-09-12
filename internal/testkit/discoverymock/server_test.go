@@ -156,6 +156,28 @@ func TestServerSupportsConcurrentCallsAndIdempotentClose(t *testing.T) {
 	}
 }
 
+func TestServerMethodSpecificGetAllFailure(t *testing.T) {
+	server, err := Start()
+	if err != nil {
+		t.Fatalf("start server: %v", err)
+	}
+	defer server.Close()
+	conn, err := server.DialContext(context.Background())
+	if err != nil {
+		t.Fatalf("dial server: %v", err)
+	}
+	defer conn.Close()
+	server.SetMethodResponseCode("GetAllInstance", 503, "temporarily unavailable")
+	var list instance.InstanceList
+	if err := conn.Invoke(context.Background(), "/service.v2.InstanceService/GetAllInstance", &instance.GetAllInstancesRequest{}, &list); err == nil {
+		t.Fatal("GetAllInstance succeeded despite method-specific fault")
+	}
+	var response instance.CommonResponse
+	if err := conn.Invoke(context.Background(), "/service.v2.InstanceService/SynInstance", &instance.SynInstancesRequest{}, &response); err != nil {
+		t.Fatalf("SynInstance affected by GetAllInstance-only fault: %v", err)
+	}
+}
+
 func testInstance(id string, status int32, provider string) *instance.Instance {
 	return &instance.Instance{
 		InstanceId: id,
