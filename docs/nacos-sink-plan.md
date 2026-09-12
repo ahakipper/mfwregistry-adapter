@@ -13,7 +13,7 @@
 > Production readiness is governed by remediation plan B2/B3 and
 > `ID-NACOS-SDK-MANDATE`.
 
-Current operation ownership (baseline `fd1f539`) is
+Current operation ownership (baseline `728f1d2`) is
 intentionally explicit:
 
 | Operation | Production adapter | Temporary exception |
@@ -33,7 +33,7 @@ target version” for each of the three compatibility operations. The expiry
 does not waive the release blocker.
 
 Status: authoritative implementation plan for the multi-sink initiative on
-`refactor/all` (current implementation baseline `fd1f539`). The lead implements it
+`refactor/all` (current implementation baseline `728f1d2`). The lead implements it
 phase-by-phase (F2..F6) under agent review; each phase's exit criteria are
 the review contract. Companions: [ddd-architecture.md](ddd-architecture.md)
 (target layering, §4 decisions), [architecture.md](architecture.md),
@@ -203,6 +203,11 @@ The port keeps its exact shape (ports.go:54-59): `Push`, `PushAll`,
   `ports.InstanceSink`, `discoverycenter.Pusher` (registry.go:12-16),
   `worker.Worker` (types.go:5-10) and the fakes; a variant multiplies that
   surface.
+
+> The following paragraph is the original F5 design snapshot (before the A2/B1
+> full-operation fixes). Current SyncAll metadata, provider scope, and Nacos
+> empty-confirmation behavior are recorded in the remediation plan and in the
+> current code.
 
 Failure window, stated honestly: in v1 only the primary sink's (Atlas) view
 feeds `CompareAndFlush`. Nacos drift involving no local instance change
@@ -591,17 +596,13 @@ preserved end-to-end. This prune is the Nacos drift self-heal that §3.3
 and §6.3 refer to: out-of-band drift is corrected at every full push, not
 only when a local change happens to touch the instance.
 
-**SyncAll trigger (change scoped in by this initiative; the prune above is
-dead code without it).** `PushAll`'s only production caller is the worker's
-`OperateTypeSyncAll` handler (worker.go:67-75), and no production code
-emits that event: the one full-list emitter that existed
-(`flushInstances`, k8s.go:253-269) is dead (ddd-architecture.md §4(g)), so
-the periodic path only ever emits per-instance `Sync` events. F5 therefore
-revives the dormant path that ddd-architecture.md §4(d) deliberately kept:
-after `CompareAndFlush` completes, `ProcessIntervalFullPush` in both
-providers (k8s.go:408-428, consul.go:283-303) emits one
-`worker.Event{Trigger: now, Data: <provider>.GetAll(),
-Operate: OperateTypeSyncAll}` through the existing `worker.Handle` seam.
+**SyncAll trigger (historical F5 wording; current path is active).** Both
+providers emit a scoped `OperateTypeSyncAll` after `CompareAndFlush`; the
+worker preserves `Scope`, `BatchID`, `Sequence`, revalidation and
+`EmptyConfirmed` through the typed full-operation fanout. Nacos confirmed-empty
+operations can therefore prune only the owning provider scope, while an
+unconfirmed or ambiguous empty source remains conservative. A2/A3/B1 and the
+current remediation plan are authoritative for this behavior.
 Consequences, stated: the prune sweep runs every `--push-interval` (that
 is the §8.5 reconciliation bound); Atlas also receives one
 `SynAllInstance` RPC per tick (client.go:118-130 — the RPC that has

@@ -540,9 +540,10 @@ binary into `/usr/bin` and uses `/usr/bin/spotter` as the entrypoint.
    `VerifyInstance`, `buildAndSendEvent` and the ants-pool setup are effectively
    duplicated between `pkg/providers/k8s` and `pkg/providers/consul` (a `TODO`
    in the consul provider acknowledges this).
-6. **Tests require live infrastructure.** Several tests (consul monitor/watch,
-   discovery center client) dial real endpoints and *fail* (not skip) when the
-   infrastructure is unreachable.
+6. **Real-environment evidence is opt-in.** The default unit/blackbox/e2e
+   suites use loopback mocks and do not prove production Consul/Atlas/Nacos
+   behavior. Tagged `atlas_real`, `nacos_real` and `nacos_sdk_eval` harnesses
+   require explicit scratch endpoints; without them they skip as NOT VERIFIED.
 7. **`go vet` baseline is cleared.** The two diagnostics called out by the
    readiness audit (the cache formatting call and the unkeyed K8s resource
    literal) were fixed in `eb6bf0c`; `go vet ./...` now exits 0. Any future

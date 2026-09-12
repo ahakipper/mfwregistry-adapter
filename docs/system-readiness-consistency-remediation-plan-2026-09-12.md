@@ -8,11 +8,11 @@
 
 **版本变更：** v6 将“禁止 Nacos 生产路径裸 HTTP、统一经官方 Nacos SDK/facade”从可选 POC 提升为 P1 强制整改和 Nacos 启用时的发布门禁，并补充 SDK 迁移、例外管理和完整测试矩阵。
 
-**当前基线：** `refactor/all` / `403e0c5`。A0→A3、B1、B2 HTTP 过渡层、B3 SDK seam、B4 Atlas gate、C1 Observe 修复、K8s cache/stop race 修复和两条 `go vet` 诊断清零已按阶段提交并通过 focused/full/race 测试；`go vet ./...` 当前为 0。Nacos naming 已默认经官方 SDK，catalog/prune、cluster Admin、readiness 仍是有期限的 audited HTTP 例外；真实 Nacos/Atlas 证据、DDD/通知和完整 2h Observe 仍未闭环。
+**当前基线：** `refactor/all` / `728f1d2`。A0→A3、B1、B2 HTTP 过渡层、B3 SDK seam、B4 Atlas gate、C1 Observe 修复、K8s cache/stop/full-reconcile/backpressure 修复和两条 `go vet` 诊断清零已按阶段提交并通过 focused/full/race 测试；`go vet ./...` 当前为 0。Nacos naming 已默认经官方 SDK，catalog/prune、cluster Admin、readiness 仍是有期限的 audited HTTP 例外；真实 Nacos/Atlas 证据、DDD/通知和完整 2h Observe 仍未闭环。
 
 **范围边界：** K8s 是本阶段规模主路径；Consul 1000+ 规模观察是 accepted non-goal，只有重新启用 ECS/机器部署时才开启独立里程碑。Nacos SDK 统一接入是生产必做项；兼容验证完成前可保留 HTTP 回滚/对照通道，但不能把裸 HTTP 作为最终生产路径。
 
-**执行状态（2026-09-13）：** `b1d9e2f` 已完成 B2 的 HTTP compatibility foundation：多地址 failover（5xx/transport 可切换、4xx 停止）、显式 namespace/group/auth/TLS/timeout、CLI→Config wiring、read+write readiness canary（成功地址固定 register/deregister，清理失败告警）、custom scope PushAll/prune/GetAll 回归测试。`fd1f539` 完成 B3 SDK seam：生产默认 `sdk`，naming lifecycle/query/subscribe 走官方 SDK，HTTP 仅集中在已登记的 catalog/prune、cluster Admin、readiness 例外。`c8e5613` 完成 B4 fail-closed Atlas gate，`cce983e` 完成 Observe 时间/ledger 修复，`eb6bf0c` 清零 `go vet`，`75a151b/403e0c5` 修复 K8s cache 指针和 stop-state 竞态。真实 Nacos/Atlas 版本验证、完整 2h Observe、DDD/通知仍未提供，因此发布状态仍为 NOT VERIFIED。
+**执行状态（2026-09-13）：** `b1d9e2f` 已完成 B2 的 HTTP compatibility foundation：多地址 failover（5xx/transport 可切换、4xx 停止）、显式 namespace/group/auth/TLS/timeout、CLI→Config wiring、read+write readiness canary（成功地址固定 register/deregister，清理失败告警）、custom scope PushAll/prune/GetAll 回归测试。`fd1f539` 完成 B3 SDK seam：生产默认 `sdk`，naming lifecycle/query/subscribe 走官方 SDK，HTTP 仅集中在已登记的 catalog/prune、cluster Admin、readiness 例外。`c8e5613` 完成 B4 fail-closed Atlas gate，`cce983e` 完成 Observe 时间/ledger 修复，`eb6bf0c` 清零 `go vet`，`75a151b/403e0c5` 修复 K8s cache 指针和 stop-state 竞态，`728f1d2` 修复 normal SyncAll metadata、cross-provider tombstone、multi-appcode filter、provider backpressure 和 HasSynced cancellation。真实 Nacos/Atlas 版本验证、完整 2h Observe、DDD/通知仍未提供，因此发布状态仍为 NOT VERIFIED。
 
 ## 1. 不可变的验收原则
 
@@ -479,6 +479,8 @@ go test -tags=nacos_real -race ./tests/e2e/... -run 'TestNacosReal|TestNacosSDKR
 ## 12. C1：补齐测试、边界和 E2E 门禁（P0/P1）
 
 **执行状态（2026-09-13）：** Observe harness 已完成本地 deterministic 修复：`logSlice` 解析 zap JSON `ts`（字符串、数值纳秒精度）及带前缀/普通行首时间戳；churn ledger 在 apply/delete API 调用前发布 mutation clock，避免 tick 先看到 source/remote 变化而没有 ledger。对应 `tests/observe` parser/engine tests 与 `-tags=observe` 编译门禁通过。完整 OBS-mini/OBS-full、kwok/Nacos/Atlas/etcd 自包含运行尚未执行，Consul 规模观察继续为 accepted non-goal。
+
+`728f1d2` 进一步关闭了 C1 复核发现的闭环缺口：正常 `SyncAll` 通过 typed full-operation fanout 保留 scope/batch/empty-confirmation，ordered sink tombstone 按 provider scope 隔离，K8s 多 app-code allow-list 改为 membership，K8s/Consul provider pool 改为 nonblocking 并记录 overload drop，K8s cache pointer/stop-state/HasSynced 等待具备锁与取消语义。当前仍需为 overflow drop 增加按 key 合并的可重放队列，并完成完整 2h OBS 证据，故 C1 总体仍为 PARTIAL。
 
 ### 12.1 新增负向测试矩阵
 
