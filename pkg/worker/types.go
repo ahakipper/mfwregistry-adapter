@@ -21,15 +21,16 @@ const (
 )
 
 type Event struct {
-	Trigger    int64                // trigger time
-	Data       []*instance.Instance // data
-	Operate    OperateType          // operate type
-	Revalidate func() ([]*instance.Instance, bool)
-	Scope      string
-	BatchID    string
-	Sequence   uint64
-	Identity   string
-	Revision   int64
+	Trigger        int64                // trigger time
+	Data           []*instance.Instance // data
+	Operate        OperateType          // operate type
+	Revalidate     func() ([]*instance.Instance, bool)
+	Scope          string
+	BatchID        string
+	Sequence       uint64
+	Identity       string
+	Revision       int64
+	EmptyConfirmed bool
 }
 
 type EventResource struct {

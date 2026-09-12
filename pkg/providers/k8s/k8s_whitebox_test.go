@@ -914,6 +914,20 @@ func TestK8sSyncAllRevalidateReturnsCompleteConcurrentCache(t *testing.T) {
 	}
 }
 
+func TestK8sEmptyFullRequiresThreeSuccessfulConfirmations(t *testing.T) {
+	k := newTestProvider(newFakeRobot(nil, nil, false), &fakeWorker{})
+	for i := 0; i < 2; i++ {
+		_, _, valid, confirmed := k.snapshotForFullPush()
+		if !valid || confirmed {
+			t.Fatalf("empty confirmation %d = valid:%v confirmed:%v, want valid and unconfirmed", i+1, valid, confirmed)
+		}
+	}
+	_, _, valid, confirmed := k.snapshotForFullPush()
+	if !valid || !confirmed {
+		t.Fatalf("third empty confirmation = valid:%v confirmed:%v, want confirmed", valid, confirmed)
+	}
+}
+
 // -----------------------------------------------------------------------------
 // eventSync
 // -----------------------------------------------------------------------------

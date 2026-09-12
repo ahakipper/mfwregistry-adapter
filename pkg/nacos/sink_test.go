@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"spotter/internal/domain/instance"
+	"spotter/internal/ports"
 	"spotter/internal/testkit/fakes"
 	"spotter/internal/testkit/nacosmock"
 	"spotter/pkg/nacos"
@@ -1548,6 +1549,38 @@ func TestBlackboxSinkPushAllPruneDeregistersBoundedParallel(t *testing.T) {
 	// Assert < 150ms: far above the mock noise floor, half the serial floor.
 	if elapsed >= 150*time.Millisecond {
 		t.Fatalf("PushAll prune wall clock = %v, want < 150ms (the DELETEs share the bounded group, not the ~310ms serial floor)", elapsed)
+	}
+}
+
+func TestBlackboxSinkPushAllOperationConfirmedEmptyPrunesOwnedScope(t *testing.T) {
+	sink, server := newSinkAt(t)
+	owned := domainInstance("pod-owned", "pay-user", "10.8.0.1", 8080, "k8s", instance.InstanceStatusOnline)
+	if err := sink.PushAll(1, []*instance.Instance{owned}); err != nil {
+		t.Fatalf("seed owned instance: %v", err)
+	}
+	if err := sink.PushAllOperation(ports.RetryOperation{
+		Sink: "nacos", Operate: ports.OperateTypeSyncAll, Scope: "k8s", BatchID: "empty-k8s",
+		Sequence: 3, Trigger: 3, EmptyConfirmed: true,
+	}); err != nil {
+		t.Fatalf("confirmed empty full operation: %v", err)
+	}
+	if got := server.Instances("pay-user", "k8s"); len(got) != 0 {
+		t.Fatalf("owned instances after confirmed empty = %v, want empty", got)
+	}
+}
+
+func TestBlackboxSinkPruneSkipsForeignOwner(t *testing.T) {
+	sink, server := newSinkAt(t)
+	server.SetInstances([]nacosmock.Host{{IP: "10.8.0.9", Port: 8080, Enabled: true, Metadata: map[string]string{
+		"instanceId": "foreign", "spotterOwner": "other-writer",
+	}}}, "DEFAULT_GROUP", "pay-user", "k8s")
+	owned := domainInstance("pod-owned", "pay-user", "10.8.0.1", 8080, "k8s", instance.InstanceStatusOnline)
+	if err := sink.PushAll(1, []*instance.Instance{owned}); err != nil {
+		t.Fatalf("push with foreign owner: %v", err)
+	}
+	instances := server.Instances("pay-user", "k8s")
+	if len(instances) != 2 {
+		t.Fatalf("foreign owner state after prune = %v, want both foreign and owned", instances)
 	}
 }
 
