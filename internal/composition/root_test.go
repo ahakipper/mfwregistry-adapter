@@ -1,8 +1,10 @@
 package composition
 
 import (
+	"context"
 	"io"
 	"io/ioutil"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +13,7 @@ import (
 
 	infraconfig "spotter/internal/infra/config"
 	inframetrics "spotter/internal/infra/metrics"
+	infranotice "spotter/internal/infra/notice"
 	"spotter/internal/ports"
 	"spotter/internal/testkit/fakes"
 )
@@ -182,6 +185,35 @@ func TestBuildInvalidConfig(t *testing.T) {
 	}
 	if rt != nil {
 		t.Errorf("Build() runtime = %v, want nil", rt)
+	}
+}
+
+func TestBuildSelectsConfiguredHTTPNotifierOrFailClosed(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.AppCenterNoticeEndpoint = "https://notice.example.test/api"
+	cfg.AppCenterNoticeAuthToken = "token"
+	cfg.AppCenterNoticeTimeout = 2
+	builder := func(ctx context.Context, endpoint string, message infranotice.Message) (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodPost, endpoint, http.NoBody)
+	}
+	logger := &fakes.FakeLogger{}
+	rt, err := Build(cfg, Deps{Logger: logger, NoticeRequestBuilder: builder})
+	if err != nil {
+		t.Fatalf("Build(configured notifier) error = %v", err)
+	}
+	if _, ok := rt.Notifier.(*infranotice.HTTPNotifier); !ok {
+		t.Fatalf("configured notifier = %T, want *HTTPNotifier", rt.Notifier)
+	}
+	if rt.LogCloser != nil {
+		_ = rt.LogCloser.Close()
+	}
+
+	rt, err = Build(cfg, Deps{Logger: logger})
+	if err != nil {
+		t.Fatalf("Build(missing builder) error = %v", err)
+	}
+	if _, ok := rt.Notifier.(*infranotice.FailClosedNotifier); !ok {
+		t.Fatalf("missing-builder notifier = %T, want *FailClosedNotifier", rt.Notifier)
 	}
 }
 
