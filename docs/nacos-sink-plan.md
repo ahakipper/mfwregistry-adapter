@@ -13,6 +13,25 @@
 > Production readiness is governed by remediation plan B2/B3 and
 > `ID-NACOS-SDK-MANDATE`.
 
+Current operation ownership (baseline `b1d9e2f` plus the B3 facade) is
+intentionally explicit:
+
+| Operation | Production adapter | Temporary exception |
+|---|---|---|
+| persistent register/deregister, SelectAll, service list, subscribe/unsubscribe | official `nacos-sdk-go/v2` naming facade (`--nacos-transport=sdk`) | none; `http-compat` is rollback/test-only |
+| catalog/prune, cluster health-check update, console readiness | versioned audited HTTP compatibility adapter | B3/B3-G release blocker until an official Admin/Maintainer equivalent is verified |
+
+The server wiring defaults to `sdk`; an explicit `http-compat` mode is required
+for the nacosmock suites and emergency rollback. Static `accessToken` is
+rejected in SDK mode because SDK v2.3.5 exposes username/password auth rather
+than an equivalent static-token option; this is fail-closed by design.
+
+The code-level exception registry (`pkg/nacos.HTTPCompatibilityExceptions`)
+requires owner `spotter-maintainers`, expiry `2026-10-31`, and the removal
+criterion “official Nacos Admin/Maintainer SDK equivalent verified against the
+target version” for each of the three compatibility operations. The expiry
+does not waive the release blocker.
+
 Status: authoritative implementation plan for the multi-sink initiative on
 `refactor/all` (current implementation baseline `b1d9e2f`). The lead implements it
 phase-by-phase (F2..F6) under agent review; each phase's exit criteria are
@@ -20,7 +39,8 @@ the review contract. Companions: [ddd-architecture.md](ddd-architecture.md)
 (target layering, §4 decisions), [architecture.md](architecture.md),
 [testing.md](testing.md). This document changes no code by itself. All
 file:line citations were verified against the working tree at HEAD
-`b976356`; facts labeled "F0-verified" were validated by the lead on the
+`b976356` historical drafting snapshot; current code status is recorded in the
+addendum above. Facts labeled "F0-verified" were validated by the lead on the
 local docker/colima stack and are ground truth.
 
 ---

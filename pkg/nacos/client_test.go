@@ -104,7 +104,7 @@ func TestBlackboxClientServerListFailsOverOn5xx(t *testing.T) {
 	defer first.Close()
 	second := nacosmock.Start()
 	defer second.Close()
-	client, err := nacos.NewClientWithConfig(nacos.ClientConfig{ServerURLs: []string{first.URL, second.URL()}}, &fakes.FakeLogger{})
+	client, err := nacos.NewClientWithConfig(nacos.ClientConfig{TransportMode: nacos.TransportHTTPCompat, ServerURLs: []string{first.URL, second.URL()}}, &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewClientWithConfig() error = %v", err)
 	}
@@ -123,7 +123,7 @@ func TestBlackboxClientServerListStopsOn4xx(t *testing.T) {
 	defer first.Close()
 	second := nacosmock.Start()
 	defer second.Close()
-	client, err := nacos.NewClientWithConfig(nacos.ClientConfig{ServerURLs: []string{first.URL, second.URL()}}, &fakes.FakeLogger{})
+	client, err := nacos.NewClientWithConfig(nacos.ClientConfig{TransportMode: nacos.TransportHTTPCompat, ServerURLs: []string{first.URL, second.URL()}}, &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewClientWithConfig() error = %v", err)
 	}
@@ -133,6 +133,33 @@ func TestBlackboxClientServerListStopsOn4xx(t *testing.T) {
 	}
 	if len(second.Requests()) != 0 {
 		t.Fatalf("4xx request unexpectedly failed over to second server: %#v", second.Requests())
+	}
+}
+
+func TestBlackboxClientSDKModeUsesOfficialPersistentLifecycle(t *testing.T) {
+	server := nacosmock.Start()
+	defer server.Close()
+	client, err := nacos.NewClientWithConfig(nacos.ClientConfig{
+		ServerURL: server.URL(), TransportMode: nacos.TransportSDK,
+	}, &fakes.FakeLogger{})
+	if err != nil {
+		t.Fatalf("NewClientWithConfig(sdk) error = %v", err)
+	}
+	defer func() { _ = client.Close() }()
+	params := nacos.InstanceParams{ServiceName: "sdk-svc", IP: "10.0.0.1", Port: 8080, ClusterName: "k8s", Enabled: true, Ephemeral: false}
+	if err := client.RegisterInstance(params); err != nil {
+		t.Fatalf("SDK RegisterInstance() error = %v", err)
+	}
+	requests := server.Requests()
+	if len(requests) != 1 || requests[0].Method != "POST" || requests[0].Path != "/nacos/v1/ns/instance" {
+		t.Fatalf("SDK register requests = %v, want one POST to the naming endpoint", requests)
+	}
+	if err := client.DeregisterInstance(params); err != nil {
+		t.Fatalf("SDK DeregisterInstance() error = %v", err)
+	}
+	requests = server.Requests()
+	if len(requests) != 2 || requests[1].Method != "DELETE" || requests[1].Path != "/nacos/v1/ns/instance" {
+		t.Fatalf("SDK deregister requests = %v, want POST then DELETE", requests)
 	}
 }
 
@@ -697,6 +724,9 @@ func TestBlackboxClientNewClientValidation(t *testing.T) {
 			t.Fatalf("NewClient(%q) error = nil, want URL credentials rejected", address)
 		}
 	}
+	if _, err := nacos.NewClientWithConfig(nacos.ClientConfig{ServerURL: "127.0.0.1:8848", TransportMode: nacos.TransportMode("bogus")}, &fakes.FakeLogger{}); err == nil {
+		t.Fatal("NewClientWithConfig(bogus transport) error = nil, want fail-closed validation")
+	}
 }
 
 func TestClientConfigInjectsNamespaceGroupAndToken(t *testing.T) {
@@ -711,7 +741,7 @@ func TestClientConfigInjectsNamespaceGroupAndToken(t *testing.T) {
 		_, _ = w.Write([]byte("ok"))
 	}))
 	defer server.Close()
-	c, err := nacos.NewClientWithConfig(nacos.ClientConfig{ServerURL: server.URL, NamespaceID: "tenant-a", GroupName: "blue", AccessToken: "secret-token"}, nil)
+	c, err := nacos.NewClientWithConfig(nacos.ClientConfig{TransportMode: nacos.TransportHTTPCompat, ServerURL: server.URL, NamespaceID: "tenant-a", GroupName: "blue", AccessToken: "secret-token"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -771,7 +801,7 @@ func TestBlackboxClientDialHealthCheckReadiness(t *testing.T) {
 func TestBlackboxClientReadinessIncludesWriteProbe(t *testing.T) {
 	server := nacosmock.Start()
 	defer server.Close()
-	if err := nacos.CheckReadinessWithConfig(nacos.ClientConfig{ServerURL: server.URL(), NamespaceID: "tenant-a", GroupName: "blue"}, &fakes.FakeLogger{}); err != nil {
+	if err := nacos.CheckReadinessWithConfig(nacos.ClientConfig{TransportMode: nacos.TransportHTTPCompat, ServerURL: server.URL(), NamespaceID: "tenant-a", GroupName: "blue"}, &fakes.FakeLogger{}); err != nil {
 		t.Fatalf("CheckReadinessWithConfig() error = %v", err)
 	}
 	requests := server.Requests()
@@ -811,7 +841,7 @@ func TestBlackboxClientReadinessWriteFailureBlocksStartup(t *testing.T) {
 	server := nacosmock.Start()
 	defer server.Close()
 	server.SetEndpointStatus("/nacos/v1/ns/instance", http.StatusInternalServerError)
-	err := nacos.CheckReadinessWithConfig(nacos.ClientConfig{ServerURL: server.URL(), NamespaceID: "tenant-a", GroupName: "blue", Timeout: 250 * time.Millisecond}, &fakes.FakeLogger{})
+	err := nacos.CheckReadinessWithConfig(nacos.ClientConfig{TransportMode: nacos.TransportHTTPCompat, ServerURL: server.URL(), NamespaceID: "tenant-a", GroupName: "blue", Timeout: 250 * time.Millisecond}, &fakes.FakeLogger{})
 	if err == nil {
 		t.Fatal("CheckReadinessWithConfig() error = nil, want persistent write-probe failure")
 	}
@@ -826,7 +856,7 @@ func TestBlackboxClientReadinessPinsCanaryAddress(t *testing.T) {
 	defer first.Close()
 	second := nacosmock.Start()
 	defer second.Close()
-	if err := nacos.CheckReadinessWithConfig(nacos.ClientConfig{ServerURLs: []string{first.URL(), second.URL()}}, &fakes.FakeLogger{}); err != nil {
+	if err := nacos.CheckReadinessWithConfig(nacos.ClientConfig{TransportMode: nacos.TransportHTTPCompat, ServerURLs: []string{first.URL(), second.URL()}}, &fakes.FakeLogger{}); err != nil {
 		t.Fatalf("CheckReadinessWithConfig() error = %v", err)
 	}
 	firstWrites := 0
@@ -850,7 +880,7 @@ func TestBlackboxClientConfigServerURLsTakePrecedence(t *testing.T) {
 	defer first.Close()
 	second := nacosmock.Start()
 	defer second.Close()
-	client, err := nacos.NewClientWithConfig(nacos.ClientConfig{ServerURL: second.URL(), ServerURLs: []string{first.URL()}}, &fakes.FakeLogger{})
+	client, err := nacos.NewClientWithConfig(nacos.ClientConfig{TransportMode: nacos.TransportHTTPCompat, ServerURL: second.URL(), ServerURLs: []string{first.URL()}}, &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewClientWithConfig() error = %v", err)
 	}
@@ -866,7 +896,7 @@ func TestBlackboxClientConfigTimeoutOverridesFallback(t *testing.T) {
 	server := nacosmock.Start()
 	defer server.Close()
 	server.SetDelay(200 * time.Millisecond)
-	client, err := nacos.NewClientWithConfig(nacos.ClientConfig{ServerURL: server.URL(), Timeout: 25 * time.Millisecond}, &fakes.FakeLogger{})
+	client, err := nacos.NewClientWithConfig(nacos.ClientConfig{TransportMode: nacos.TransportHTTPCompat, ServerURL: server.URL(), Timeout: 25 * time.Millisecond}, &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewClientWithConfig() error = %v", err)
 	}
@@ -883,7 +913,7 @@ func TestBlackboxClientConfigTimeoutOverridesFallback(t *testing.T) {
 func TestBlackboxClientConfigScopesEveryEndpoint(t *testing.T) {
 	server := nacosmock.Start()
 	defer server.Close()
-	client, err := nacos.NewClientWithConfig(nacos.ClientConfig{ServerURL: server.URL(), NamespaceID: "tenant-a", GroupName: "blue"}, &fakes.FakeLogger{})
+	client, err := nacos.NewClientWithConfig(nacos.ClientConfig{TransportMode: nacos.TransportHTTPCompat, ServerURL: server.URL(), NamespaceID: "tenant-a", GroupName: "blue"}, &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewClientWithConfig() error = %v", err)
 	}

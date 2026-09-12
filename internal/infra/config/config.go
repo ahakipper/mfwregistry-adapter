@@ -185,6 +185,11 @@ type Flags struct {
 	NacosServerName         string
 	NacosInsecureSkipVerify bool
 	NacosTimeout            int
+	// NacosTransport selects the Nacos SDK facade ("sdk") or the temporary
+	// HTTP compatibility adapter ("http-compat"). Empty is resolved to SDK
+	// by server wiring; the compatibility value is intended only for tests or
+	// an explicitly approved rollback window.
+	NacosTransport string
 	// ReconcileSource is the --reconcile-source flag (dsca-3 §3.1): the
 	// fanout sink NAME whose view the periodic compare reads ("nacos"
 	// designates the nacos sink). A plain string mirroring NacosAddr's
@@ -279,6 +284,7 @@ type Config struct {
 	NacosServerName         string
 	NacosInsecureSkipVerify bool
 	NacosTimeout            int
+	NacosTransport          string
 
 	// ReconcileSource is the fanout sink name whose view the periodic
 	// compare reads (dsca-3 §3.1); empty keeps the primary (Atlas) — the
@@ -408,6 +414,7 @@ func Load(env string, flags Flags) (Config, error) {
 	cfg.NacosServerName = flags.NacosServerName
 	cfg.NacosInsecureSkipVerify = flags.NacosInsecureSkipVerify
 	cfg.NacosTimeout = flags.NacosTimeout
+	cfg.NacosTransport = flags.NacosTransport
 
 	// Reconcile source: additive flag of dsca-3 §3.1 — empty means the
 	// primary (Atlas) stays the compare source (no default, no preset

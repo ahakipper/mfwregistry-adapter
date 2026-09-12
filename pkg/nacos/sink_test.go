@@ -1588,7 +1588,7 @@ func TestBlackboxSinkCustomGroupAndNamespaceRoundTripAndPrune(t *testing.T) {
 	server := nacosmock.Start()
 	defer server.Close()
 	sink, err := nacos.NewSinkWithConfig(nacos.ClientConfig{
-		ServerURL: server.URL(), NamespaceID: "tenant-a", GroupName: "blue",
+		TransportMode: nacos.TransportHTTPCompat, ServerURL: server.URL(), NamespaceID: "tenant-a", GroupName: "blue",
 	}, &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewSinkWithConfig() error = %v", err)

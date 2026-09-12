@@ -1,8 +1,8 @@
-// Package nacos is the transitional Nacos InstanceSink adapter. It currently
-// exposes the Nacos v1 OpenAPI compatibility transport used by the migration
-// harness; the production default is scheduled to move to the official
-// nacos-sdk-go facade under remediation gate B3. The Sink implements
-// internal/ports.InstanceSink over that transport (§7.3).
+// Package nacos is the Nacos InstanceSink adapter. Naming lifecycle and
+// discovery operations can use the official nacos-sdk-go facade (B3); the
+// v1 OpenAPI client in this file is an explicitly scoped compatibility adapter
+// retained for catalog/admin/readiness gaps and migration rollback. The Sink
+// implements internal/ports.InstanceSink over either transport (§7.3).
 package nacos
 
 import (
@@ -113,21 +113,27 @@ type ServicePage struct {
 	Doms  []string `json:"doms"`
 }
 
-// Client is the compatibility client for the Nacos v1 OpenAPI. It is kept
-// behind the Sink boundary so the B3 SDK facade can replace it without
-// changing provider/reconcile code.
+// Client is the transport-neutral client boundary. When ClientConfig selects
+// TransportSDK, naming calls route through sdkNamingFacade; otherwise they use
+// the audited v1 HTTP compatibility implementation below.
 type Client struct {
 	baseURL  *url.URL
 	baseURLs []*url.URL
 	http     *http.Client
 	logger   ports.Logger
 	config   ClientConfig
+	sdk      *sdkNamingFacade
 }
 
-// ClientConfig controls the HTTP compatibility transport used by the Nacos
-// sink. It is intentionally explicit so authentication and TLS settings are
-// never hidden in process globals or logged.
+// ClientConfig controls the official SDK transport and the isolated HTTP
+// compatibility adapter used for Admin/Catalog operations. It is intentionally
+// explicit so authentication and TLS settings are never hidden in process
+// globals or logged.
 type ClientConfig struct {
+	// TransportMode selects the production SDK path ("sdk") or the temporary
+	// HTTP compatibility adapter ("http-compat"). Empty resolves to SDK;
+	// callers that need compatibility must opt in explicitly.
+	TransportMode TransportMode
 	// ServerURL is the legacy single-address setting. When ServerURLs is
 	// non-empty it is ignored; list order is the failover order.
 	ServerURL string
@@ -192,12 +198,21 @@ const (
 // RequestTimeout fallback is used only when ClientConfig.Timeout is unset
 // (the configured timeout also covers response-body reads).
 func NewClient(addr string, logger ports.Logger) (*Client, error) {
-	return NewClientWithConfig(ClientConfig{ServerURL: addr}, logger)
+	// Deprecated: this legacy constructor is retained for tests and the
+	// explicit HTTP rollback path. Production wiring must use
+	// NewClientWithConfig with TransportSDK (the server defaults to SDK).
+	return NewClientWithConfig(ClientConfig{ServerURL: addr, TransportMode: TransportHTTPCompat}, logger)
 }
 
 // NewClientWithConfig creates a configured Nacos client. NewClient remains a
 // compatibility wrapper for existing callers.
 func NewClientWithConfig(cfg ClientConfig, logger ports.Logger) (*Client, error) {
+	if cfg.TransportMode == "" {
+		cfg.TransportMode = TransportSDK
+	}
+	if cfg.TransportMode != "" && cfg.TransportMode != TransportSDK && cfg.TransportMode != TransportHTTPCompat {
+		return nil, fmt.Errorf("nacos: unsupported transport mode %q (want %q or %q)", cfg.TransportMode, TransportSDK, TransportHTTPCompat)
+	}
 	addresses := append([]string(nil), cfg.ServerURLs...)
 	if len(addresses) == 0 && cfg.ServerURL != "" {
 		addresses = []string{cfg.ServerURL}
@@ -256,13 +271,21 @@ func NewClientWithConfig(cfg ClientConfig, logger ports.Logger) (*Client, error)
 	if timeout <= 0 {
 		timeout = RequestTimeout
 	}
-	return &Client{
+	client := &Client{
 		baseURL:  parsedURLs[0],
 		baseURLs: parsedURLs,
 		http:     &http.Client{Timeout: timeout, Transport: transport},
 		logger:   logger,
 		config:   cfg,
-	}, nil
+	}
+	if cfg.TransportMode == TransportSDK {
+		facade, err := newSDKNamingFacade(cfg)
+		if err != nil {
+			return nil, err
+		}
+		client.sdk = facade
+	}
+	return client, nil
 }
 
 func loadRootCAs(path string) (*x509.CertPool, error) {
@@ -286,7 +309,9 @@ func loadRootCAs(path string) (*x509.CertPool, error) {
 // CheckReadiness polls the console readiness endpoint once; it is the
 // startup health gate wired by the server construction. A non-200 status
 // or a transport error is an error. Like NewClient, an address without a
-// scheme defaults to http://.
+// scheme defaults to http://. Deprecated: production startup must use
+// CheckReadinessWithConfig so credentials, TLS, server-list failover and the
+// persistent write canary share the configured transport.
 func CheckReadiness(addr string, timeout time.Duration) error {
 	if addr != "" && !strings.Contains(addr, "://") {
 		addr = "http://" + addr
@@ -310,6 +335,7 @@ func CheckReadinessWithConfig(cfg ClientConfig, logger ports.Logger) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = c.Close() }()
 	var lastErr error
 	for _, base := range c.baseURLsOrPrimary() {
 		request, err := http.NewRequest(http.MethodGet, joinURL(base.String(), pathReadiness), nil)
@@ -346,6 +372,22 @@ func CheckReadinessWithConfig(cfg ClientConfig, logger ports.Logger) error {
 		probeClient := *c
 		probeClient.baseURL = base
 		probeClient.baseURLs = []*url.URL{base}
+		var pinnedSDK *sdkNamingFacade
+		if c.sdk != nil {
+			// The SDK facade owns its own NacosServer rotation list; changing
+			// Client.baseURLs alone would not pin SDK writes. Build a one-server
+			// facade for the canary and close it on every return path.
+			pinnedConfig := c.config
+			pinnedConfig.ServerURL = base.String()
+			pinnedConfig.ServerURLs = nil
+			var sdkErr error
+			pinnedSDK, sdkErr = newSDKNamingFacade(pinnedConfig)
+			if sdkErr != nil {
+				return fmt.Errorf("nacos: readiness SDK write probe: %w", sdkErr)
+			}
+			probeClient.sdk = pinnedSDK
+			defer pinnedSDK.client.CloseClient()
+		}
 		canary := InstanceParams{
 			ServiceName: fmt.Sprintf("__spotter_readiness_%d", time.Now().UnixNano()),
 			IP:          "127.0.0.1",
@@ -378,12 +420,45 @@ func CheckReadinessWithConfig(cfg ClientConfig, logger ports.Logger) error {
 
 // RegisterInstance registers (upserts) one persistent instance.
 func (c *Client) RegisterInstance(params InstanceParams) error {
+	if c.sdk != nil {
+		return c.sdk.register(params)
+	}
 	return c.doForm(http.MethodPost, pathInstance, params.values())
 }
 
 // DeregisterInstance deletes one instance by its composite id parameters.
 func (c *Client) DeregisterInstance(params InstanceParams) error {
+	if c.sdk != nil {
+		return c.sdk.deregister(params)
+	}
 	return c.doForm(http.MethodDelete, pathInstance, params.values())
+}
+
+// Subscribe registers an SDK-backed naming subscription. HTTP compatibility
+// mode intentionally returns an error: the compatibility transport has no
+// long-lived watch implementation and must not silently emulate one with
+// polling. Callers can therefore distinguish an unavailable operation.
+func (c *Client) Subscribe(service, group string, clusters []string, callback func([]Host, error)) error {
+	if c.sdk == nil {
+		return errors.New("nacos: subscribe requires sdk transport")
+	}
+	return c.sdk.subscribe(service, group, clusters, callback)
+}
+
+func (c *Client) Unsubscribe(service, group string, clusters []string, callback func([]Host, error)) error {
+	if c.sdk == nil {
+		return errors.New("nacos: unsubscribe requires sdk transport")
+	}
+	return c.sdk.unsubscribe(service, group, clusters, callback)
+}
+
+// Close releases SDK gRPC resources. HTTP compatibility clients remain
+// stateless and require no explicit close.
+func (c *Client) Close() error {
+	if c.sdk != nil {
+		c.sdk.client.CloseClient()
+	}
+	return nil
 }
 
 // UpdateCluster disables Nacos's server-side health check for one (service,
@@ -417,8 +492,8 @@ func (c *Client) UpdateCluster(serviceName, clusterName string) error {
 	values.Set("checkPort", "0")
 	values.Set("useInstancePort4Check", "false")
 	values.Set("healthChecker", healthCheckerNone)
-	values.Set("groupName", DefaultGroup)
-	values.Set("namespaceId", DefaultNamespaceID)
+	values.Set("groupName", effectiveGroup(c.config.GroupName))
+	values.Set("namespaceId", effectiveNamespace(c.config.NamespaceID))
 	return c.doForm(http.MethodPut, pathCluster, values)
 }
 
@@ -426,14 +501,18 @@ func (c *Client) UpdateCluster(serviceName, clusterName string) error {
 // group/namespace (DefaultGroup/public when unset).
 // A service without instances yields an empty slice.
 //
-// Fidelity limit (the F8 root cause): the endpoint HIDES instances with
-// enabled=false — the exact state spotter's own unhealthy pushes write — so
-// this view is unsuitable for the prune. Use ListCatalogInstances for that.
+// In HTTP compatibility mode the endpoint HIDES instances with enabled=false
+// (the exact state spotter's own unhealthy pushes write), so this view is
+// unsuitable for the prune. SDK mode uses SelectAllInstances and includes
+// disabled instances; the prune still uses the explicit catalog facade.
 func (c *Client) ListInstances(serviceName string) ([]Host, error) {
+	if c.sdk != nil {
+		return c.sdk.list(serviceName, "")
+	}
 	values := url.Values{}
 	values.Set("serviceName", serviceName)
-	values.Set("groupName", DefaultGroup)
-	values.Set("namespaceId", DefaultNamespaceID)
+	values.Set("groupName", effectiveGroup(c.config.GroupName))
+	values.Set("namespaceId", effectiveNamespace(c.config.NamespaceID))
 
 	var hosts Hosts
 	if err := c.doJSON(http.MethodGet, pathInstanceLis, values, &hosts); err != nil {
@@ -464,8 +543,8 @@ func (c *Client) ListCatalogInstances(serviceName, clusterName string) ([]Host, 
 		values := url.Values{}
 		values.Set("serviceName", serviceName)
 		values.Set("clusterName", clusterName)
-		values.Set("groupName", DefaultGroup)
-		values.Set("namespaceId", DefaultNamespaceID)
+		values.Set("groupName", effectiveGroup(c.config.GroupName))
+		values.Set("namespaceId", effectiveNamespace(c.config.NamespaceID))
 		values.Set("pageSize", strconv.Itoa(catalogPageSize))
 		values.Set("pageNo", strconv.Itoa(page))
 		values.Set("hasIpCount", "false")
@@ -500,6 +579,27 @@ func (c *Client) ListCatalogInstances(serviceName, clusterName string) ([]Host, 
 // paginating the service list until a short (or empty) page ends the iteration. pageSize
 // is the requested page size (the plan's default loop uses 100).
 func (c *Client) ListServices(pageSize int) ([]string, error) {
+	if c.sdk != nil {
+		if pageSize < 1 {
+			pageSize = 100
+		}
+		all := make([]string, 0)
+		for page := 1; page <= maxServiceListPages; page++ {
+			namespace := c.config.NamespaceID
+			if namespace == DefaultNamespaceID {
+				namespace = ""
+			}
+			names, err := c.sdk.services(page, pageSize, namespace)
+			if err != nil {
+				return nil, err
+			}
+			all = append(all, names...)
+			if len(names) < pageSize {
+				return all, nil
+			}
+		}
+		return nil, fmt.Errorf("nacos sdk: service list pagination exceeded %d pages", maxServiceListPages)
+	}
 	if pageSize < 1 {
 		pageSize = 100
 	}
@@ -508,8 +608,8 @@ func (c *Client) ListServices(pageSize int) ([]string, error) {
 		values := url.Values{}
 		values.Set("pageNo", strconv.Itoa(page))
 		values.Set("pageSize", strconv.Itoa(pageSize))
-		values.Set("groupName", DefaultGroup)
-		values.Set("namespaceId", DefaultNamespaceID)
+		values.Set("groupName", effectiveGroup(c.config.GroupName))
+		values.Set("namespaceId", effectiveNamespace(c.config.NamespaceID))
 
 		var body ServicePage
 		if err := c.doJSON(http.MethodGet, pathServiceList, values, &body); err != nil {

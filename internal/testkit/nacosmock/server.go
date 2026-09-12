@@ -353,6 +353,21 @@ func (s *Server) Close() {
 }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, request *http.Request) {
+	// The official SDK sends naming mutations as application/x-www-form-
+	// urlencoded bodies, while the compatibility client places the same
+	// fields on the query string. Normalize both wire shapes into the query
+	// view consumed by the mock handlers so the fixture exercises either
+	// transport without weakening endpoint validation.
+	if request.Method != http.MethodGet {
+		_ = request.ParseForm()
+		values := request.URL.Query()
+		for key, list := range request.Form {
+			if _, present := values[key]; !present {
+				values[key] = append([]string(nil), list...)
+			}
+		}
+		request.URL.RawQuery = values.Encode()
+	}
 	s.record(request)
 
 	s.mu.RLock()
