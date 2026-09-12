@@ -8,7 +8,7 @@ per tier, and specifies the exact Makefile targets that will implement the
 matrix. It is the implementation brief for the test work that follows; it does
 not change any code by itself.
 
-**Current status (2026-09-13, implementation baseline `702373d`):** the default unit, full and
+**Current status (2026-09-13, implementation baseline `b38505c`):** the default unit, full and
 race suites are green and `go vet ./...` is clean. The Nacos naming path is
 SDK-backed by default; `http-compat` is an explicit test/rollback mode. The
 `atlas_real`, `nacos_real` and `nacos_sdk_eval` tags compile and skip without a
