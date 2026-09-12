@@ -106,19 +106,21 @@ func NewServerFromDeps(rt *composition.Runtime) (*Server, error) {
 	}
 	// init Server
 	return &Server{
-		stopElectorFunc:     ecancel,
-		stopProviderFunc:    nil,
-		Providers:           nil,
-		elector:             elector,
-		leaderChCh:          leaderChanges,
-		stop:                make(chan struct{}),
-		logger:              rt.Logger,
-		notifier:            rt.Notifier,
-		metrics:             rt.Metrics,
-		cfg:                 rt.Config,
-		localIP:             rt.LocalIP,
-		waitRetry:           waitForRetry,
-		initializeProviders: initializeProvidersFromConfig(rt.Config),
+		stopElectorFunc:  ecancel,
+		stopProviderFunc: nil,
+		Providers:        nil,
+		elector:          elector,
+		leaderChCh:       leaderChanges,
+		stop:             make(chan struct{}),
+		logger:           rt.Logger,
+		notifier:         rt.Notifier,
+		metrics:          rt.Metrics,
+		cfg:              rt.Config,
+		localIP:          rt.LocalIP,
+		waitRetry:        waitForRetry,
+		initializeProviders: func(ctx context.Context, w worker.Worker) ([]providers.Provider, error) {
+			return InitializeProvidersWithDeps(ctx, w, rt.Config, rt.Logger, rt.Notifier)
+		},
 	}, nil
 }
 
@@ -239,6 +241,11 @@ func (s *Server) Stop() {
 		}
 		if s.stop != nil {
 			close(s.stop)
+		}
+		if closer, ok := s.notifier.(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil && s.logger != nil {
+				s.logger.Errorf("close notifier: %s", err)
+			}
 		}
 	})
 	s.logger.Info("internal server stop background context")
@@ -414,7 +421,7 @@ func (s *Server) startProviders() error {
 
 	initialize := s.initializeProviders
 	if initialize == nil {
-		initialize = initializeProvidersFromConfig(s.cfg)
+		initialize = initializeProvidersFromConfig(s.cfg, s.logger, s.notifier)
 	}
 	prs, err := initialize(wctx, w)
 	if err != nil {
@@ -433,6 +440,12 @@ func (s *Server) startProviders() error {
 	for _, provider := range prs {
 		if reporter, ok := provider.(k8s.QueueDepthReporter); ok {
 			reporter.SetQueueDepthReporter(s.metrics)
+		}
+		if reporter, ok := provider.(k8s.MetricsReporter); ok {
+			reporter.SetMetricsRecorder(s.metrics)
+		}
+		if reporter, ok := provider.(consul2.MetricsReporter); ok {
+			reporter.SetMetricsRecorder(s.metrics)
 		}
 	}
 
@@ -549,9 +562,9 @@ func (s *Server) stopAndStartProviders() (err error) {
 // initializeProvidersFromConfig binds InitializeProviders to a resolved
 // config, preserving the legacy InitializeProviders seam with injected
 // configuration.
-func initializeProvidersFromConfig(cfg infraconfig.Config) func(context.Context, worker.Worker) ([]providers.Provider, error) {
+func initializeProvidersFromConfig(cfg infraconfig.Config, logger ports.Logger, notifier ports.Notifier) func(context.Context, worker.Worker) ([]providers.Provider, error) {
 	return func(ctx context.Context, w worker.Worker) ([]providers.Provider, error) {
-		return InitializeProviders(ctx, w, cfg)
+		return InitializeProvidersWithDeps(ctx, w, cfg, logger, notifier)
 	}
 }
 
@@ -559,6 +572,18 @@ func initializeProvidersFromConfig(cfg infraconfig.Config) func(context.Context,
 // a package-level function (with the config passed in) so it remains a
 // testable seam.
 func InitializeProviders(ctx context.Context, w worker.Worker, cfg infraconfig.Config) (prs []providers.Provider, err error) {
+	return initializeProvidersWithDeps(ctx, w, cfg, nil, nil)
+}
+
+// InitializeProvidersWithDeps is the production composition seam. Provider
+// logging and notices are explicit ports; the legacy InitializeProviders
+// wrapper remains for callers/tests that still exercise the historical global
+// configuration path.
+func InitializeProvidersWithDeps(ctx context.Context, w worker.Worker, cfg infraconfig.Config, logger ports.Logger, notifier ports.Notifier) (prs []providers.Provider, err error) {
+	return initializeProvidersWithDeps(ctx, w, cfg, logger, notifier)
+}
+
+func initializeProvidersWithDeps(ctx context.Context, w worker.Worker, cfg infraconfig.Config, logger ports.Logger, notifier ports.Notifier) (prs []providers.Provider, err error) {
 	if len(cfg.Providers) == 0 {
 		err = errors.New("empty provider names for initializing")
 		return nil, err
@@ -574,7 +599,7 @@ func InitializeProviders(ctx context.Context, w worker.Worker, cfg infraconfig.C
 		case providers.ProviderK8s:
 			// create k8s provider and pass the worker to the providers
 			var k8sProvider providers.Provider
-			k8sProvider, err = k8s.NewK8SProvider(ctx, w, cfg.PushAllInterval, cfg.KubeConfigPath)
+			k8sProvider, err = k8s.NewK8SProviderWithDeps(ctx, w, cfg.PushAllInterval, cfg.KubeConfigPath, logger, notifier, cfg.PushAppCodes)
 			if err != nil {
 				err = errors.WithMessagef(err, "new k8s provider")
 				return nil, err
@@ -591,7 +616,7 @@ func InitializeProviders(ctx context.Context, w worker.Worker, cfg infraconfig.C
 				err = errors.New("the consul server address is not configured")
 				return nil, err
 			}
-			consulProvider, err = consul2.NewConsulProvider(ctx, w, cfg.PushAllInterval, cfg.ConsulAddress)
+			consulProvider, err = consul2.NewConsulProviderWithDeps(ctx, w, cfg.PushAllInterval, cfg.ConsulAddress, logger, notifier)
 			if err != nil {
 				err = errors.WithMessagef(err, "new consul provider")
 				return nil, err

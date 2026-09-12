@@ -1,32 +1,37 @@
+//go:build legacyaggregate
+
+// Package aggregate is retained only for source compatibility with the
+// abandoned pre-composition controller. It is excluded from normal builds;
+// production wiring uses internal/composition and provider ports.
 package aggregate
 
 import (
-    "context"
-    "github.com/panjf2000/ants/v2"
-    "spotter/pkg/providers"
+	"context"
+	"github.com/panjf2000/ants/v2"
+	"spotter/pkg/providers"
 )
 
 var Providers []providers.Provider
 
 func RegisterAggregateProvider(provider providers.Provider) {
-    if provider != nil {
-        Providers = append(Providers, provider)
-    }
+	if provider != nil {
+		Providers = append(Providers, provider)
+	}
 }
 
 // Controller
 // The purpose of Controller is to aggregate all providers and perform uniform behaviors.
 // In this way, each provider does not need to execute unified repetitive logic separately. For example: CompareAndFlush.
 type Controller struct {
-    interval int                        // the time interval for full synchronization. default 600s(10m)
-    filters  []providers.InstanceFilter // filters is a collection of functions used to filter invalid instances
-    cache    providers.CacheIterface    // pod cache
-    pool     *ants.Pool                 // goroutine pool
-    ctx      context.Context
+	interval int                        // the time interval for full synchronization. default 600s(10m)
+	filters  []providers.InstanceFilter // filters is a collection of functions used to filter invalid instances
+	cache    providers.CacheIterface    // pod cache
+	pool     *ants.Pool                 // goroutine pool
+	ctx      context.Context
 }
 
 func NewAggregateController() *Controller {
-    return &Controller{}
+	return &Controller{}
 }
 
 //func (ag *Controller) processIntervalFullPush() {

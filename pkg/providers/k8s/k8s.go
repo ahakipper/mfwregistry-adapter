@@ -44,6 +44,12 @@ type k8s struct {
 	// gauge"). Nil disables publication — the in-package tests construct the
 	// provider without a recorder and must keep compiling.
 	queueDepthMetrics ports.MetricsRecorder
+	metricsRecorder   ports.MetricsRecorder
+	logger            ports.Logger
+	notifier          ports.Notifier
+	pushAppCodes      []string
+	depsConfigured    bool
+	depsOnce          sync.Once
 	// nacosReconcile records that the periodic CompareAndFlush's remote view
 	// is the nacos sink (dsca-3 §3.1, --reconcile-source nacos). It switches
 	// the reconcile semantics onto the R1-R4 rule set of dsca-3 §3.3:
@@ -60,6 +66,33 @@ type k8s struct {
 	nacosReconcile bool
 }
 
+type nopNotifier struct{}
+
+func (nopNotifier) Notify(string, string) {}
+
+// legacyNotifier is used only by the compatibility constructor. Production
+// composition passes an internal/ports.Notifier directly.
+type legacyNotifier struct{}
+
+func (legacyNotifier) Notify(title, content string) { notice.Notice(title, content) }
+
+func (k *k8s) ensureDeps() {
+	k.depsOnce.Do(func() {
+		if !k.depsConfigured {
+			// White-box/legacy callers may construct the unexported provider
+			// directly. Preserve their config-global filtering semantics while
+			// keeping the production constructor fully injected.
+			k.pushAppCodes = append([]string(nil), config.PushAppCodes...)
+		}
+		if k.logger == nil {
+			k.logger = ports.NopLogger{}
+		}
+		if k.notifier == nil {
+			k.notifier = nopNotifier{}
+		}
+	})
+}
+
 // queueDepthReportInterval is the gauge's publication cadence: short enough
 // to catch a burst's rise and fall between full-push ticks, cheap enough
 // (one mutex-guarded map-length read) to run forever.
@@ -67,6 +100,19 @@ const queueDepthReportInterval = 5 * time.Second
 
 // NewK8SProvider Init k8s provider
 func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int, configPath []string) (provider providers.Provider, err error) {
+	return NewK8SProviderWithDeps(ctx, worker, pushInterval, configPath, log.Logger, legacyNotifier{}, config.PushAppCodes)
+}
+
+// NewK8SProviderWithDeps constructs the provider from explicit runtime
+// collaborators. The legacy constructor above remains only as a compatibility
+// wrapper for callers that still initialize pkg/log and pkg/notice globals.
+func NewK8SProviderWithDeps(ctx context.Context, worker worker.Worker, pushInterval int, configPath []string, logger ports.Logger, notifier ports.Notifier, pushAppCodes []string) (provider providers.Provider, err error) {
+	if logger == nil {
+		logger = ports.NopLogger{}
+	}
+	if notifier == nil {
+		notifier = nopNotifier{}
+	}
 	clusters := make([]k8srobot.Cluster, len(configPath))
 	for idx, path := range configPath {
 		clusters[idx] = k8srobot.Cluster{
@@ -88,13 +134,17 @@ func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int,
 
 	// init k8s obj
 	k := &k8s{
-		providerName: "k8s",
-		robot:        kr,
-		ctx:          ctx,
-		worker:       worker,
-		interval:     pushInterval,
-		cache:        providers.NewCache(2),
-		done:         make(chan struct{}),
+		providerName:   "k8s",
+		robot:          kr,
+		ctx:            ctx,
+		worker:         worker,
+		interval:       pushInterval,
+		cache:          providers.NewCache(2),
+		done:           make(chan struct{}),
+		logger:         logger,
+		notifier:       notifier,
+		pushAppCodes:   append([]string(nil), pushAppCodes...),
+		depsConfigured: true,
 	}
 	p, _ := ants.NewPool(providers.PoolBenchSize, withExpiryDuration(time.Second*providers.PoolExpireTime), ants.WithNonblocking(true))
 	k.pool = p
@@ -114,6 +164,19 @@ type QueueDepthReporter interface {
 	SetQueueDepthReporter(metrics ports.MetricsRecorder)
 }
 
+// MetricsReporter is the explicit metrics wiring seam. The compatibility
+// constructor leaves it nil and retains the historical package collector;
+// production composition installs the injected recorder.
+type MetricsReporter interface {
+	SetMetricsRecorder(ports.MetricsRecorder)
+}
+
+func (k *k8s) SetMetricsRecorder(recorder ports.MetricsRecorder) {
+	k.Lock()
+	k.metricsRecorder = recorder
+	k.Unlock()
+}
+
 // SetQueueDepthReporter installs the recorder the provider publishes the
 // robot's coalescing-queue depth on (the k8s_queue_depth gauge, dsca-1
 // DS-1-1 fix item 1). The provider package stays free of a metrics
@@ -129,10 +192,11 @@ func (k *k8s) SetQueueDepthReporter(metrics ports.MetricsRecorder) {
 }
 
 func (k *k8s) reportDroppedEvent(detail string) {
+	k.ensureDeps()
 	k.Lock()
 	recorder := k.queueDepthMetrics
 	k.Unlock()
-	log.Logger.Warnf("k8s event worker pool rejected %s", detail)
+	k.logger.Warnf("k8s event worker pool rejected %s", detail)
 	if recorder != nil {
 		recorder.IncEventsDropped(k.providerName)
 	}
@@ -164,8 +228,9 @@ func (k *k8s) overflowQueue() *providers.OverflowQueue {
 }
 
 func (k *k8s) requeueEvent(key string, task func()) {
+	k.ensureDeps()
 	if k.overflowQueue().Offer(key, task) {
-		log.Logger.Warnf("k8s event worker pool saturated; requeued identity %s", key)
+		k.logger.Warnf("k8s event worker pool saturated; requeued identity %s", key)
 	}
 }
 
@@ -173,6 +238,7 @@ func (k *k8s) requeueEvent(key string, task func()) {
 // order. OverflowQueue.Close waits for its dispatcher, so no retry can race
 // pool.Release and no goroutine remains blocked in a retry timer.
 func (k *k8s) shutdown() {
+	k.ensureDeps()
 	k.stopOnce.Do(func() {
 		if k.done != nil {
 			close(k.done)
@@ -189,7 +255,7 @@ func (k *k8s) shutdown() {
 	k.overflowMu.Unlock()
 	if q != nil {
 		if remaining := q.Close(); remaining > 0 {
-			log.Logger.Warnf("k8s provider stopped with %d overflow identities pending", remaining)
+			k.logger.Warnf("k8s provider stopped with %d overflow identities pending", remaining)
 		}
 	}
 	k.runWG.Wait()
@@ -232,9 +298,10 @@ func (k *k8s) reportQueueDepth() {
 
 // Run starts to monitor k8s cluster pod changes
 func (k *k8s) Run() (err error) {
-	log.Logger.Infof("start to run k8s provider")
+	k.ensureDeps()
+	k.logger.Infof("start to run k8s provider")
 	k.monitor()
-	log.Logger.Info("k8s providers worker stopped")
+	k.logger.Info("k8s providers worker stopped")
 
 	return nil
 }
@@ -243,6 +310,7 @@ func (k *k8s) Run() (err error) {
 // Perform full instances synchronization periodically
 // Perform instances comparison for single synchronization one by one. Note: this operation will only be executed once.
 func (k *k8s) monitor() {
+	k.ensureDeps()
 	var popDone chan struct{}
 	defer func() {
 		// Stop the robot first so Pop unblocks, then wait for the watch loop
@@ -263,8 +331,8 @@ func (k *k8s) monitor() {
 			break
 		} else {
 			// Notice handling
-			log.Logger.Warnf("the robot has not synced yet")
-			notice.Notice("robot failed to sync the K8s clusters", "While the robot is syncing the K8s clusters, the K8s clusters are not fully synced")
+			k.logger.Warnf("the robot has not synced yet")
+			k.notifier.Notify("robot failed to sync the K8s clusters", "While the robot is syncing the K8s clusters, the K8s clusters are not fully synced")
 			timer := time.NewTimer(15 * time.Second)
 			select {
 			case <-timer.C:
@@ -280,7 +348,7 @@ func (k *k8s) monitor() {
 			}
 		}
 	}
-	log.Logger.Infof("the robot has finished synced of all the k8s data, start to compare and sync instanes")
+	k.logger.Infof("the robot has finished synced of all the k8s data, start to compare and sync instanes")
 	k.runWG.Add(2)
 	go func() {
 		defer k.runWG.Done()
@@ -306,7 +374,7 @@ func (k *k8s) monitor() {
 			// get pod changes from k8s client
 			obj, err := k.robot.Pop()
 			if err != nil {
-				log.Logger.Errorf("k8s client watch error: %s", err.Error())
+				k.logger.Errorf("k8s client watch error: %s", err.Error())
 				if k.isStopped() || k.ctx.Err() != nil {
 					break
 				}
@@ -324,7 +392,7 @@ func (k *k8s) monitor() {
 				}
 				continue
 			}
-			log.Logger.Infof("get changes from k8s robot client, resource type: %s, key: %s, event: %s", obj.RType.String(), obj.Key, obj.Event.String())
+			k.logger.Infof("get changes from k8s robot client, resource type: %s, key: %s, event: %s", obj.RType.String(), obj.Key, obj.Event.String())
 			// trigger time. UnixNano, not Unix: dsca-2 §3 Option (b) widens
 			// the Trigger unit to ns-since-epoch at every producer site so the
 			// fan-out's e2e decorator (time.Since(time.Unix(0, trigger))) sees
@@ -356,7 +424,7 @@ func (k *k8s) monitor() {
 		break
 	}
 
-	log.Logger.Info("exit the k8s monitor")
+	k.logger.Info("exit the k8s monitor")
 }
 
 func (k *k8s) ProcessCache(event k8srobot.EventType, ins *sv.Instance) {
@@ -452,6 +520,7 @@ func (k *k8s) eventSync(ins *sv.Instance, triggerTime int64) {
 }
 
 func (k *k8s) pod2Instance(obj k8srobot.QueueObject) (ins *sv.Instance) {
+	k.ensureDeps()
 	// get pod info from k8s robot
 	items, ok := k.robot.GetByClusterKey(k8srobot.Pods, obj.ClusterID, obj.Key)
 	if obj.ClusterID == "" {
@@ -474,13 +543,13 @@ func (k *k8s) pod2Instance(obj k8srobot.QueueObject) (ins *sv.Instance) {
 		if !valid || pod == nil {
 			return nil
 		}
-		instance := formatInstance(&obj, pod)
+		instance := formatInstanceWithDeps(&obj, pod, k.pushAppCodes, k.logger)
 		if instance == nil {
-			log.Logger.Errorf("formatting instance to be nil, pod name: %s", pod.Name)
+			k.logger.Errorf("formatting instance to be nil, pod name: %s", pod.Name)
 			return nil
 		}
 		if ver := k.VerifyInstance(instance); ver != nil {
-			log.Logger.Warnf("invalid instance, instanceid: %s, reason: %s", instance.InstanceId, ver.Error())
+			k.logger.Warnf("invalid instance, instanceid: %s, reason: %s", instance.InstanceId, ver.Error())
 			return nil
 		}
 		// A pod that dies before ever receiving an IP (e.g. a Pending pod churned away mid
@@ -499,7 +568,7 @@ func (k *k8s) pod2Instance(obj k8srobot.QueueObject) (ins *sv.Instance) {
 				cached = cache.Get(providers.IdentityKey(instance))
 			}
 			if cached == nil || cached.Ip == "" {
-				log.Logger.Infof("drop offline instance %s with empty ip, nothing was registered downstream", instance.InstanceId)
+				k.logger.Infof("drop offline instance %s with empty ip, nothing was registered downstream", instance.InstanceId)
 				return nil
 			}
 			merged := *cached
@@ -531,7 +600,7 @@ func (k *k8s) pod2Instance(obj k8srobot.QueueObject) (ins *sv.Instance) {
 			// log error
 		case k8srobot.EventDelete:
 			instanceId := k.obj2InstanceId(obj)
-			log.Logger.Infof("delete event, instanceid: %s", instanceId)
+			k.logger.Infof("delete event, instanceid: %s", instanceId)
 			key := obj.ClusterID + "/" + obj.UID
 			if obj.ClusterID == "" || obj.UID == "" {
 				key = "k8s:" + instanceId
@@ -603,7 +672,7 @@ func (k *k8s) flushInstances() {
 		k.generation++
 		generation := k.generation
 		k.Unlock()
-		log.Logger.Infof("flush k8s cache spend time: %s", unit.RelTime(before, time.Now(), "", ""))
+		k.logger.Infof("flush k8s cache spend time: %s", unit.RelTime(before, time.Now(), "", ""))
 		// push all. Origin is tick-time (time.Now at Event construction),
 		// not CreateAt — the documented full-push origin semantics of
 		// dsca-2 §6; UnixNano per the same unit widening.
@@ -621,7 +690,8 @@ func (k *k8s) flushInstances() {
 
 // CompareAndFlush compare and find diff instances then flush
 func (k *k8s) CompareAndFlush() {
-	log.Logger.Infof("%s: trying to compare and find diff instances then flush", k.providerName)
+	k.ensureDeps()
+	k.logger.Infof("%s: trying to compare and find diff instances then flush", k.providerName)
 	if all := k.GetAll(); all != nil && len(all) > 0 {
 		// process the cache
 		newCache := providers.NewCache(2)
@@ -652,20 +722,20 @@ func (k *k8s) CompareAndFlush() {
 			// everything" trigger, and that world's semantics stay
 			// untouched.
 			if k.nacosReconcile {
-				log.Logger.Errorf("get all instances from the reconcile source failed, skipping this compare tick: %s", err.Error())
+				k.logger.Errorf("get all instances from the reconcile source failed, skipping this compare tick: %s", err.Error())
 				return
 			}
-			log.Logger.Errorf("get all instances from atlas failed")
+			k.logger.Errorf("get all instances from atlas failed")
 		}
 		if list == nil || list.Instance == nil || len(list.Instance) == 0 {
 			for _, ins := range all {
 				k.buildAndSendEvent(ins)
 			}
 			return
-		} else if len(config.PushAppCodes) > 0 {
+		} else if len(k.pushAppCodes) > 0 {
 			instances := []*sv.Instance{}
 			for _, ins := range list.Instance {
-				for _, appcode := range config.PushAppCodes {
+				for _, appcode := range k.pushAppCodes {
 					if appcode == ins.AppCode {
 						instances = append(instances, ins)
 					}
@@ -677,10 +747,10 @@ func (k *k8s) CompareAndFlush() {
 		servMap, servAmbiguous := providers.StrictListToMap(list.GetInstance())
 		k8sMap, k8sAmbiguous := providers.StrictListToMap(all)
 		if len(servAmbiguous) > 0 || len(k8sAmbiguous) > 0 {
-			log.Logger.Errorf("k8s: ambiguous instance identities; quarantining compare (remote=%v provider=%v)", servAmbiguous, k8sAmbiguous)
+			k.logger.Errorf("k8s: ambiguous instance identities; quarantining compare (remote=%v provider=%v)", servAmbiguous, k8sAmbiguous)
 			return
 		}
-		log.Logger.Infof("discovery center online k8s instances size :%d  k8s online instance size :%d  total :%d", len(servMap), onlineCount, len(k8sMap))
+		k.logger.Infof("discovery center online k8s instances size :%d  k8s online instance size :%d  total :%d", len(servMap), onlineCount, len(k8sMap))
 		// bothExist,k8sExist two flag to notice
 		bothExist := false
 		k8sExist := false
@@ -711,12 +781,12 @@ func (k *k8s) CompareAndFlush() {
 					// its own log line. A notice on top of the push, never
 					// instead of it.
 					if servIns.Reversion > k8sIns.Reversion {
-						log.Logger.Warnf("the instance: %s of appcode: %s carries a nacos reversion %d above the local %d (out-of-band edit suspected); the reconcile push overwrites it with the local value", k8sIns.InstanceId, k8sIns.AppCode, servIns.Reversion, k8sIns.Reversion)
-						notice.Notice("Forged remote reversion", fmt.Sprintf("The k8s instance %s of appcode %s holds nacos reversion %d above the local %d (out-of-band edit suspected); the reconcile overwrites the remote value with the local one", k8sIns.InstanceId, k8sIns.AppCode, servIns.Reversion, k8sIns.Reversion))
+						k.logger.Warnf("the instance: %s of appcode: %s carries a nacos reversion %d above the local %d (out-of-band edit suspected); the reconcile push overwrites it with the local value", k8sIns.InstanceId, k8sIns.AppCode, servIns.Reversion, k8sIns.Reversion)
+						k.notifier.Notify("Forged remote reversion", fmt.Sprintf("The k8s instance %s of appcode %s holds nacos reversion %d above the local %d (out-of-band edit suspected); the reconcile overwrites the remote value with the local one", k8sIns.InstanceId, k8sIns.AppCode, servIns.Reversion, k8sIns.Reversion))
 					}
 				}
 				if diff {
-					log.Logger.Infof("the instance: %s of appcode: %s is newer, trigger a push.", k8sIns.InstanceId, k8sIns.AppCode)
+					k.logger.Infof("the instance: %s of appcode: %s is newer, trigger a push.", k8sIns.InstanceId, k8sIns.AppCode)
 					bothExist = true
 					k.buildAndSendEvent(k8sIns)
 				}
@@ -725,7 +795,7 @@ func (k *k8s) CompareAndFlush() {
 			} else {
 				// case2: instance is both in K8s, but not in the discovery center.
 				// Instance is newer than the discovery center, subject to the data in K8s
-				log.Logger.Infof("k8s match much id: %v , status : %v \n", k8sIns.InstanceId, k8sIns.Status)
+				k.logger.Infof("k8s match much id: %v , status : %v \n", k8sIns.InstanceId, k8sIns.Status)
 				if k8sIns.Status == 1 {
 					k8sExist = true
 					k.buildAndSendEvent(k8sIns)
@@ -735,16 +805,16 @@ func (k *k8s) CompareAndFlush() {
 		}
 		// case 1 notice
 		if bothExist {
-			notice.Notice("Instance data inconsistency", "Full push: data inconsistency between the discovery center and the K8s clusters, the instances are the same in the discovery center and the K8s clusters, but some data fields of the instances differ")
+			k.notifier.Notify("Instance data inconsistency", "Full push: data inconsistency between the discovery center and the K8s clusters, the instances are the same in the discovery center and the K8s clusters, but some data fields of the instances differ")
 		}
 		// case 2 notice
 		if k8sExist {
-			notice.Notice("Instance data inconsistency", "Full push: data inconsistency between the discovery center and the K8s clusters, the instances differ between the discovery center and the K8s clusters, some instances exist in the K8s clusters but not in the discovery center")
+			k.notifier.Notify("Instance data inconsistency", "Full push: data inconsistency between the discovery center and the K8s clusters, the instances differ between the discovery center and the K8s clusters, some instances exist in the K8s clusters but not in the discovery center")
 		}
 		// case3: instance is not is K8s, but in the discovery center.
 		// Then instances should not be exists in the discovery center, just delete it.
 		if len(servMap) > 0 {
-			log.Logger.Infof("atlas server pre delete instance size :%d \n", len(servMap))
+			k.logger.Infof("atlas server pre delete instance size :%d \n", len(servMap))
 			for _, servIns := range servMap {
 				servIns.Enabled = false
 				servIns.Status = 3
@@ -755,7 +825,7 @@ func (k *k8s) CompareAndFlush() {
 			}
 			// case 3 notice
 			if registryExist {
-				notice.Notice("Instance data inconsistency", "Full push: data inconsistency between the discovery center and the K8s clusters, the instances differ between the discovery center and the K8s clusters, some instances exist in the discovery center but not in the K8s clusters")
+				k.notifier.Notify("Instance data inconsistency", "Full push: data inconsistency between the discovery center and the K8s clusters, the instances differ between the discovery center and the K8s clusters, some instances exist in the discovery center but not in the K8s clusters")
 			}
 		}
 	}
@@ -796,6 +866,7 @@ func (k *k8s) buildAndSendEvent(instance *sv.Instance) {
 }
 
 func (k *k8s) GetAll() (result []*sv.Instance) {
+	k.ensureDeps()
 	// Always a non-nil list: an empty source is the reconcile signal of
 	// AUDIT-B-4, and emitSyncAll's event must carry an empty slice, not a
 	// nil one, so the worker/sink seam observes a well-formed batch.
@@ -816,7 +887,7 @@ func (k *k8s) GetAll() (result []*sv.Instance) {
 			item = source.Object
 		}
 		pod := item.(*v1.Pod)
-		instance := formatInstance(obj, pod)
+		instance := formatInstanceWithDeps(obj, pod, k.pushAppCodes, k.logger)
 		if instance == nil {
 			continue
 		}
@@ -826,10 +897,10 @@ func (k *k8s) GetAll() (result []*sv.Instance) {
 			}
 			result = append(result, instance)
 		} else {
-			log.Logger.Warnf("invalid instance, instanceid: %s, reason: %s", instance.InstanceId, ver.Error())
+			k.logger.Warnf("invalid instance, instanceid: %s, reason: %s", instance.InstanceId, ver.Error())
 		}
 	}
-	log.Logger.Infof("k8s get all size: %d", len(result))
+	k.logger.Infof("k8s get all size: %d", len(result))
 
 	return
 }
@@ -841,6 +912,7 @@ func (k *k8s) GetAll() (result []*sv.Instance) {
 // provider's full instance list (plan §7.4): that event revives the worker's dormant SyncAll handler,
 // so every sink's full-push reconcile (for example the Nacos PushAll prune) runs each push interval.
 func (k *k8s) ProcessIntervalFullPush() {
+	k.ensureDeps()
 	interval := providers.FullPushInterval
 	if k.interval != 0 {
 		interval = time.Duration(k.interval) * time.Second
@@ -854,8 +926,15 @@ func (k *k8s) ProcessIntervalFullPush() {
 			k.emitSyncAll()
 			after := time.Now()
 			offset := after.Sub(before).Milliseconds()
-			metrics.SyncAllK8sDurationsHistogram.Observe(float64(offset))
-			log.Logger.Infof("the synchronization operation is completed periodically, interval: %d, time spend: %s", interval, unit.RelTime(before, time.Now(), "", ""))
+			k.Lock()
+			recorder := k.metricsRecorder
+			k.Unlock()
+			if recorder != nil {
+				recorder.ObserveSyncAllDuration(providers.ProviderK8s, after.Sub(before))
+			} else {
+				metrics.SyncAllK8sDurationsHistogram.Observe(float64(offset))
+			}
+			k.logger.Infof("the synchronization operation is completed periodically, interval: %d, time spend: %s", interval, unit.RelTime(before, time.Now(), "", ""))
 		case <-k.ctx.Done():
 			ticker.Stop()
 			return

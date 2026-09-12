@@ -5,6 +5,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"regexp"
 	"spotter/config"
+	internalports "spotter/internal/ports"
 	sv "spotter/pkg/beehive/service/v2"
 	k8srobot "spotter/pkg/k8srobot"
 	"spotter/pkg/log"
@@ -15,6 +16,13 @@ import (
 
 // TODO obj param optimize
 func formatInstance(obj *k8srobot.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
+	return formatInstanceWithDeps(obj, pod, config.PushAppCodes, log.Logger)
+}
+
+// formatInstanceWithDeps is the production conversion entry point. It keeps
+// source filtering and diagnostics on explicit collaborators; formatInstance
+// above remains a compatibility wrapper for legacy white-box tests only.
+func formatInstanceWithDeps(obj *k8srobot.QueueObject, pod *v1.Pod, pushAppCodes []string, logger internalports.Logger) (ins *sv.Instance) {
 	if pod == nil {
 		return ins
 	}
@@ -22,7 +30,7 @@ func formatInstance(obj *k8srobot.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
 	labels := pod.Labels
 	var runtimeConfig *providers.RuntimeConfig
 	var envType string
-	var ports []*sv.PortInfo
+	var portInfos []*sv.PortInfo
 	var cpu float32
 	var memory int32
 	var envs map[string]string
@@ -45,11 +53,11 @@ func formatInstance(obj *k8srobot.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
 			}
 		}
 		// merge containers cpu and memory limit value
-		cpu = cpu + formatCpuSize(container.Resources.Limits.Cpu())
+		cpu = cpu + formatCpuSize(container.Resources.Limits.Cpu(), logger)
 		memory = memory + formatMemorySize(container.Resources.Limits.Memory())
 	}
 	// format container port
-	ports = formatAppPort(pod)
+	portInfos = formatAppPort(pod)
 
 	// cpu and memroy
 	runtimeConfig = &providers.RuntimeConfig{
@@ -65,16 +73,19 @@ func formatInstance(obj *k8srobot.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
 		return
 	}
 	// filter appcodes
-	if config.PushAppCodes != nil {
+	if pushAppCodes != nil {
 		allowed := false
-		for _, code := range config.PushAppCodes {
+		for _, code := range pushAppCodes {
 			if appCode == code {
 				allowed = true
 				break
 			}
 		}
 		if !allowed {
-			log.Logger.Warnf("invalid instance, the appcode referenced of the pod is not allowed to push, the allowed appcodes is: %s", strings.Join(config.PushAppCodes, ","))
+			if logger == nil {
+				logger = internalports.NopLogger{}
+			}
+			logger.Warnf("invalid instance, the appcode referenced of the pod is not allowed to push, the allowed appcodes is: %s", strings.Join(pushAppCodes, ","))
 			return nil
 		}
 	}
@@ -118,7 +129,7 @@ func formatInstance(obj *k8srobot.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
 		SourceKey:     label["sourceKey"],
 		SourceCluster: label["sourceCluster"],
 		InstanceId:    pod.Name,
-		Ports:         ports,
+		Ports:         portInfos,
 		AppCode:       appCode,
 		EnvCode:       envCode,
 		EnvType:       envType,
@@ -323,13 +334,16 @@ func formatContainerEnabled(pod *v1.Pod) (enabled bool) {
 }
 
 // 1000m = 1
-func formatCpuSize(r *resource.Quantity) (count float32) {
+func formatCpuSize(r *resource.Quantity, logger internalports.Logger) (count float32) {
 	if cpuInt, ok := r.AsInt64(); !ok {
 		cpuStr := r.String()
 		reg := regexp.MustCompile(`\d+`)
 		c, err := strconv.Atoi(string(reg.Find([]byte(cpuStr))))
 		if err != nil {
-			log.Logger.Error("format cpu error: cpu=", cpuStr)
+			if logger == nil {
+				logger = internalports.NopLogger{}
+			}
+			logger.Error("format cpu error: cpu=", cpuStr)
 		}
 		count = float32(c) / 1000
 	} else {
