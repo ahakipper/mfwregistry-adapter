@@ -247,8 +247,25 @@ func (k *k8s) ProcessCache(event k8srobot.EventType, ins *sv.Instance) {
 	k.generation++
 }
 
+func (k *k8s) cacheRef() providers.CacheIterface {
+	k.Lock()
+	cache := k.cache
+	k.Unlock()
+	return cache
+}
+
 func (k *k8s) snapshotForFullPush() ([]*sv.Instance, uint64, bool, bool) {
-	all := k.cache.List()
+	// Snapshot the cache interface under the provider lock before calling
+	// List. flushInstances swaps the interface during an atomic cache rebuild;
+	// reading k.cache without the lock races with that assignment even though
+	// the cache implementation itself is synchronized.
+	k.Lock()
+	cache := k.cache
+	k.Unlock()
+	var all []*sv.Instance
+	if cache != nil {
+		all = cache.List()
+	}
 	if k.robot != nil && k.robot.HasSynced() {
 		if source := k.GetAll(); source != nil {
 			all = source
@@ -343,7 +360,11 @@ func (k *k8s) pod2Instance(obj k8srobot.QueueObject) (ins *sv.Instance) {
 		// the offline semantics of the CompareAndFlush case-3 branch, and let the diff flow
 		// deregister the instance that was actually registered.
 		if instance.Status == providers.InstanceStatusOffline && instance.Ip == "" {
-			cached := k.cache.Get(providers.IdentityKey(instance))
+			cache := k.cacheRef()
+			var cached *sv.Instance
+			if cache != nil {
+				cached = cache.Get(providers.IdentityKey(instance))
+			}
 			if cached == nil || cached.Ip == "" {
 				log.Logger.Infof("drop offline instance %s with empty ip, nothing was registered downstream", instance.InstanceId)
 				return nil
@@ -355,7 +376,11 @@ func (k *k8s) pod2Instance(obj k8srobot.QueueObject) (ins *sv.Instance) {
 			merged.Reversion = instance.Reversion
 			instance = &merged
 		}
-		cacheInstance := k.cache.Get(providers.IdentityKey(instance))
+		cache := k.cacheRef()
+		var cacheInstance *sv.Instance
+		if cache != nil {
+			cacheInstance = cache.Get(providers.IdentityKey(instance))
+		}
 		if cacheInstance == nil || k.hasInstanceDiff(cacheInstance, instance) {
 			// put all exist instance to cache, purpose for get cache don't make npe
 			k.ProcessCache(obj.Event, instance)
@@ -378,13 +403,16 @@ func (k *k8s) pod2Instance(obj k8srobot.QueueObject) (ins *sv.Instance) {
 			if obj.ClusterID == "" || obj.UID == "" {
 				key = "k8s:" + instanceId
 			}
-			if instance := k.cache.Get(key); instance != nil {
-				if instance.Status != providers.InstanceStatusOffline {
-					// set instance status
-					instance.Status = providers.InstanceStatusOffline
-					// delete cache
-					k.ProcessCache(k8srobot.EventDelete, instance)
-					ins = instance
+			cache := k.cacheRef()
+			if cache != nil {
+				if instance := cache.Get(key); instance != nil {
+					if instance.Status != providers.InstanceStatusOffline {
+						// set instance status
+						instance.Status = providers.InstanceStatusOffline
+						// delete cache
+						k.ProcessCache(k8srobot.EventDelete, instance)
+						ins = instance
+					}
 				}
 			}
 		}
