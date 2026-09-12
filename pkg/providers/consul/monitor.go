@@ -38,6 +38,7 @@ type consulMonitor struct {
 	handlersMu       sync.RWMutex
 	instanceHandlers []InstanceHandler
 	serviceHandlers  []ServiceHandler
+	handlersWG       sync.WaitGroup
 }
 
 const (
@@ -121,7 +122,12 @@ func (m *consulMonitor) Start(ctx context.Context) error {
 		defer m.logger.Info("consul monitor update record action stopped")
 		return m.updateRecord(groupCtx, change)
 	})
-	return eg.Wait()
+	err := eg.Wait()
+	// update*Record dispatches handlers asynchronously. Wait before returning
+	// so the provider can safely release its worker pool on shutdown without a
+	// late callback racing a final Submit.
+	m.handlersWG.Wait()
+	return err
 }
 
 // watchConsul watches Consul service, node, and health changes.
@@ -204,8 +210,11 @@ func (m *consulMonitor) updateRecord(ctx context.Context, change <-chan struct{}
 
 func (m *consulMonitor) updateServiceRecord() {
 	var obj []*api.CatalogService
-	for _, handler := range m.serviceHandlerSnapshot() {
+	handlers := m.serviceHandlerSnapshot()
+	m.handlersWG.Add(len(handlers))
+	for _, handler := range handlers {
 		go func(handler ServiceHandler) {
+			defer m.handlersWG.Done()
 			if err := handler(obj); err != nil {
 				m.logger.Warnf("Error executing service handler function: %v", err)
 			}
@@ -215,8 +224,11 @@ func (m *consulMonitor) updateServiceRecord() {
 
 func (m *consulMonitor) updateInstanceRecord() {
 	obj := &api.CatalogService{}
-	for _, handler := range m.instanceHandlerSnapshot() {
+	handlers := m.instanceHandlerSnapshot()
+	m.handlersWG.Add(len(handlers))
+	for _, handler := range handlers {
 		go func(handler InstanceHandler) {
+			defer m.handlersWG.Done()
 			if err := handler(obj); err != nil {
 				m.notifier.Notify("Failed to handle the consul instance change", err.Error())
 				m.logger.Warnf("Error executing instance handler function: %v", err)

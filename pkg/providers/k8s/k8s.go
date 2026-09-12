@@ -34,6 +34,11 @@ type k8s struct {
 	generation         uint64
 	emptyConfirmations uint32
 	pool               *ants.Pool // goroutine pool
+	overflowMu         sync.Mutex
+	overflow           *providers.OverflowQueue
+	done               chan struct{}
+	stopOnce           sync.Once
+	runWG              sync.WaitGroup
 	// queueDepthMetrics publishes the robot's coalescing-queue depth on the
 	// k8s_queue_depth gauge (dsca-1 DS-1-1 fix item 1: "plus a queueDepth
 	// gauge"). Nil disables publication — the in-package tests construct the
@@ -89,6 +94,7 @@ func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int,
 		worker:       worker,
 		interval:     pushInterval,
 		cache:        providers.NewCache(2),
+		done:         make(chan struct{}),
 	}
 	p, _ := ants.NewPool(providers.PoolBenchSize, withExpiryDuration(time.Second*providers.PoolExpireTime), ants.WithNonblocking(true))
 	k.pool = p
@@ -129,6 +135,66 @@ func (k *k8s) reportDroppedEvent(detail string) {
 	log.Logger.Warnf("k8s event worker pool rejected %s", detail)
 	if recorder != nil {
 		recorder.IncEventsDropped(k.providerName)
+	}
+}
+
+// overflowQueue lazily creates the bounded identity-keyed requeue used when
+// the non-blocking ants pool is saturated. Keeping it lazy avoids a dispatcher
+// goroutine for providers that never experience backpressure (and keeps the
+// white-box construction seam lightweight).
+func (k *k8s) overflowQueue() *providers.OverflowQueue {
+	k.overflowMu.Lock()
+	defer k.overflowMu.Unlock()
+	if k.overflow != nil {
+		return k.overflow
+	}
+	ctx := k.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	k.overflow = providers.NewOverflowQueue(ctx, providers.PoolBenchSize*4, func(task func()) error {
+		if k.pool == nil {
+			return ants.ErrPoolClosed
+		}
+		return k.pool.Submit(task)
+	}, func(key string) {
+		k.reportDroppedEvent(fmt.Sprintf("overflow identity %s (queue full)", key))
+	})
+	return k.overflow
+}
+
+func (k *k8s) requeueEvent(key string, task func()) {
+	if k.overflowQueue().Offer(key, task) {
+		log.Logger.Warnf("k8s event worker pool saturated; requeued identity %s", key)
+	}
+}
+
+// shutdown stops the provider-owned dispatcher and ants workers in a fixed
+// order. OverflowQueue.Close waits for its dispatcher, so no retry can race
+// pool.Release and no goroutine remains blocked in a retry timer.
+func (k *k8s) shutdown() {
+	k.stopOnce.Do(func() {
+		if k.done != nil {
+			close(k.done)
+		}
+	})
+	k.Lock()
+	k.stopped = true
+	k.Unlock()
+	if k.robot != nil {
+		k.robot.Stop()
+	}
+	k.overflowMu.Lock()
+	q := k.overflow
+	k.overflowMu.Unlock()
+	if q != nil {
+		if remaining := q.Close(); remaining > 0 {
+			log.Logger.Warnf("k8s provider stopped with %d overflow identities pending", remaining)
+		}
+	}
+	k.runWG.Wait()
+	if k.pool != nil {
+		k.pool.Release()
 	}
 }
 
@@ -177,6 +243,20 @@ func (k *k8s) Run() (err error) {
 // Perform full instances synchronization periodically
 // Perform instances comparison for single synchronization one by one. Note: this operation will only be executed once.
 func (k *k8s) monitor() {
+	var popDone chan struct{}
+	defer func() {
+		// Stop the robot first so Pop unblocks, then wait for the watch loop
+		// to finish its final Submit. Only after that may shutdown release the
+		// ants pool; otherwise an event racing cancellation could submit into
+		// a released pool and be silently discarded.
+		if popDone != nil && k.robot != nil {
+			k.robot.Stop()
+		}
+		if popDone != nil {
+			<-popDone
+		}
+		k.shutdown()
+	}()
 	go k.robot.Run()
 	for {
 		if k.robot.HasSynced() {
@@ -201,28 +281,47 @@ func (k *k8s) monitor() {
 		}
 	}
 	log.Logger.Infof("the robot has finished synced of all the k8s data, start to compare and sync instanes")
-	go k.ProcessIntervalFullPush()
+	k.runWG.Add(2)
+	go func() {
+		defer k.runWG.Done()
+		k.ProcessIntervalFullPush()
+	}()
 	// The queueDepth gauge's publication ticker (dsca-1 DS-1-1 fix item 1):
 	// every queueDepthReportInterval the provider reads the robot's
 	// coalescing-queue depth (a read-only distinct-key count, race-safe by
 	// the queue's mutex) and hands it to the recorder installed through
 	// SetQueueDepthReporter. Runs even when no recorder is installed (the
 	// per-tick call is a nil check and a map-length read).
-	go k.reportQueueDepthLoop()
+	go func() {
+		defer k.runWG.Done()
+		k.reportQueueDepthLoop()
+	}()
 	// start with full update(CompareAndFlush()),then do incremental update,and every 6 hours to full push(ProcessIntervalFullPush())
 	k.CompareAndFlush()
-	defer k.robot.Stop()
 	// fork a goroutine to monitor pod change
+	popDone = make(chan struct{})
 	go func() {
+		defer close(popDone)
 		for {
 			// get pod changes from k8s client
 			obj, err := k.robot.Pop()
 			if err != nil {
 				log.Logger.Errorf("k8s client watch error: %s", err.Error())
-				if k.isStopped() {
+				if k.isStopped() || k.ctx.Err() != nil {
 					break
 				}
-				time.Sleep(1 * time.Second)
+				timer := time.NewTimer(time.Second)
+				select {
+				case <-timer.C:
+				case <-k.ctx.Done():
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+					return
+				}
 				continue
 			}
 			log.Logger.Infof("get changes from k8s robot client, resource type: %s, key: %s, event: %s", obj.RType.String(), obj.Key, obj.Event.String())
@@ -241,7 +340,8 @@ func (k *k8s) monitor() {
 			if err := k.pool.Submit(func() {
 				k.eventSync(ins, triggerTime)
 			}); err != nil {
-				k.reportDroppedEvent(fmt.Sprintf("%s: %v", obj.Key, err))
+				key := providers.IdentityKey(ins)
+				k.requeueEvent(key, func() { k.eventSync(ins, triggerTime) })
 			}
 			k.robot.Finish(obj)
 		}
@@ -679,7 +779,19 @@ func (k *k8s) buildAndSendEvent(instance *sv.Instance) {
 		}
 		k.worker.Handle(event)
 	}); err != nil {
-		k.reportDroppedEvent(fmt.Sprintf("instance %s: %v", instance.InstanceId, err))
+		key := providers.IdentityKey(instance)
+		k.requeueEvent(key, func() {
+			if instance.Status == 0 {
+				return
+			}
+			ins := make([]*sv.Instance, 1)
+			ins[0] = instance
+			k.worker.Handle(&worker.Event{
+				Trigger: time.Now().UnixNano(),
+				Data:    ins,
+				Operate: worker.OperateTypeSync,
+			})
+		})
 	}
 }
 
@@ -747,6 +859,9 @@ func (k *k8s) ProcessIntervalFullPush() {
 		case <-k.ctx.Done():
 			ticker.Stop()
 			return
+		case <-k.done:
+			ticker.Stop()
+			return
 		}
 	}
 }
@@ -804,6 +919,8 @@ func (k *k8s) reportQueueDepthLoop() {
 		case <-ticker.C:
 			k.reportQueueDepth()
 		case <-k.ctx.Done():
+			return
+		case <-k.done:
 			return
 		}
 	}

@@ -33,6 +33,11 @@ type consul struct {
 	generation         uint64
 	emptyConfirmations uint32
 	pool               *ants.Pool // goroutine pool
+	overflowMu         sync.Mutex
+	overflow           *providers.OverflowQueue
+	runWG              sync.WaitGroup
+	done               chan struct{}
+	stopOnce           sync.Once
 	initDone           bool
 
 	// sourceErr records the error of the last GetAll when the consul source
@@ -117,6 +122,7 @@ func NewConsulProvider(ctx context.Context, worker worker.Worker, pushInterval i
 		// back to the 21600s default and ignored the flag.
 		interval: pushInterval,
 		cache:    providers.NewCache(8),
+		done:     make(chan struct{}),
 	}
 	// Create pool for sending instance events to the discovery center
 	p, _ := ants.NewPool(providers.PoolBenchSize, withExpiryDuration(time.Second*providers.PoolExpireTime), ants.WithNonblocking(true))
@@ -132,14 +138,82 @@ func NewConsulProvider(ctx context.Context, worker worker.Worker, pushInterval i
 	return consulProvider, nil
 }
 
+// overflowQueue lazily creates the bounded identity-keyed requeue used when
+// the non-blocking ants pool is saturated. A source update is retained until
+// the pool accepts it; repeated updates for one identity replace the older
+// task, preventing stale bursts after a short Consul callback stall.
+func (c *consul) overflowQueue() *providers.OverflowQueue {
+	c.overflowMu.Lock()
+	defer c.overflowMu.Unlock()
+	if c.overflow != nil {
+		return c.overflow
+	}
+	ctx := c.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	c.overflow = providers.NewOverflowQueue(ctx, providers.PoolBenchSize*4, func(task func()) error {
+		if c.pool == nil {
+			return ants.ErrPoolClosed
+		}
+		return c.pool.Submit(task)
+	}, func(key string) {
+		log.Logger.Warnf("consul event overflow identity %s dropped after bounded requeue filled", key)
+	})
+	return c.overflow
+}
+
+func (c *consul) requeueEvent(key string, task func()) {
+	if c.overflowQueue().Offer(key, task) {
+		log.Logger.Warnf("consul worker pool saturated; requeued identity %s", key)
+	}
+}
+
+// shutdown stops the provider-owned dispatcher and ants workers. Closing the
+// dispatcher first waits out its retry timer, so pool.Release cannot race a
+// retry submission and pending identities are explicitly observable.
+func (c *consul) shutdown() {
+	c.stopOnce.Do(func() {
+		if c.done != nil {
+			close(c.done)
+		}
+	})
+	c.Lock()
+	c.stopped = true
+	c.Unlock()
+	c.overflowMu.Lock()
+	q := c.overflow
+	c.overflowMu.Unlock()
+	if q != nil {
+		if remaining := q.Close(); remaining > 0 {
+			log.Logger.Warnf("consul provider stopped with %d overflow identities pending", remaining)
+		}
+	}
+	if c.pool != nil {
+		c.pool.Release()
+	}
+}
+
 func (c *consul) Run() (err error) {
+	defer c.shutdown()
 	log.Logger.Infof("start to run ecs provider")
 	// Perform full instances synchronization periodically
-	go c.ProcessIntervalFullPush()
+	c.runWG.Add(2)
+	go func() {
+		defer c.runWG.Done()
+		c.ProcessIntervalFullPush()
+	}()
 	// Perform instances comparison for single synchronization one by one. Note: this operation will only be executed once.
-	go c.CompareAndFlush()
+	go func() {
+		defer c.runWG.Done()
+		c.CompareAndFlush()
+	}()
 	// monitor will hang
 	err = c.monitor.Start(c.ctx)
+	// Monitor cancellation is the provider lifecycle boundary. Join both
+	// background reconcile goroutines before releasing the worker pool so Run
+	// returning proves no late callback can submit more work.
+	c.runWG.Wait()
 	if err != nil {
 		notice.Notice("consul stopped working", err.Error())
 		err = errors.WithMessage(err, "consul provider stopped")
@@ -405,6 +479,9 @@ func (c *consul) ProcessIntervalFullPush() {
 			metrics.SyncAllEcsDurationsHistogram.Observe(float64(offset))
 			log.Logger.Infof("the synchronization operation is completed periodically, interval: %d, time spend: %s", interval, unit.RelTime(before, time.Now(), "", ""))
 		case <-c.ctx.Done():
+			ticker.Stop()
+			return
+		case <-c.done:
 			ticker.Stop()
 			return
 		}
@@ -698,7 +775,19 @@ func (c *consul) buildAndSendEvent(instance *sv.Instance) { // if instance statu
 		}
 		c.worker.Handle(event)
 	}); err != nil {
-		log.Logger.Warnf("consul reconcile worker pool rejected instance %s: %v", instance.InstanceId, err)
+		key := providers.IdentityKey(instance)
+		c.requeueEvent(key, func() {
+			if instance.Status == 0 {
+				return
+			}
+			ins := make([]*sv.Instance, 1)
+			ins[0] = instance
+			c.worker.Handle(&worker.Event{
+				Trigger: time.Now().UnixNano(),
+				Data:    ins,
+				Operate: worker.OperateTypeSync,
+			})
+		})
 	}
 }
 

@@ -63,6 +63,7 @@ type fakeRobot struct {
 
 	hasSynced  bool
 	stopped    bool
+	popErr     error
 	queue      chan k8srobot.QueueObject // scripted events served by Pop
 	stoppedCh  chan struct{}             // closed by Stop to unblock Pop
 	finishedOb []k8srobot.QueueObject
@@ -122,6 +123,12 @@ func (r *fakeRobot) enqueue(obj k8srobot.QueueObject) {
 // already queued, then returns an error. There is no path that returns a zero
 // object with a nil error, so the monitor loop can never busy-spin on it.
 func (r *fakeRobot) Pop() (k8srobot.QueueObject, error) {
+	r.mu.Lock()
+	popErr := r.popErr
+	r.mu.Unlock()
+	if popErr != nil {
+		return k8srobot.QueueObject{}, popErr
+	}
 	select {
 	case obj := <-r.queue:
 		return obj, nil
@@ -132,6 +139,33 @@ func (r *fakeRobot) Pop() (k8srobot.QueueObject, error) {
 		default:
 			return k8srobot.QueueObject{}, errors.New("fake robot has been stopped")
 		}
+	}
+}
+
+func TestMonitorCancelsPopErrorBackoff(t *testing.T) {
+	robot := newFakeRobot(nil, nil, true)
+	robot.popErr = errors.New("watch disconnected")
+	w := &fakeWorker{getAllResponse: &sv.InstanceList{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	k := newTestProvider(robot, w)
+	k.ctx = ctx
+	done := make(chan struct{})
+	go func() {
+		k.Run()
+		close(done)
+	}()
+	// Let the Pop loop enter its one-second error backoff, then cancellation
+	// must interrupt that wait rather than making shutdown take a full second.
+	time.Sleep(25 * time.Millisecond)
+	started := time.Now()
+	cancel()
+	select {
+	case <-done:
+		if elapsed := time.Since(started); elapsed > 300*time.Millisecond {
+			t.Fatalf("Run() returned after %s, want cancellable Pop error backoff", elapsed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run() remained blocked in Pop error backoff after context cancellation")
 	}
 }
 
@@ -1289,6 +1323,50 @@ func TestBuildAndSendEventPushesInstance(t *testing.T) {
 		t.Fatalf("no push for pod-a; events = %#v", events)
 	} else if e.Operate != worker.OperateTypeSync {
 		t.Fatalf("push operate = %q, want %q", e.Operate, worker.OperateTypeSync)
+	}
+}
+
+func TestBuildAndSendEventRequeuesLatestAfterPoolSaturation(t *testing.T) {
+	block := make(chan struct{})
+	pool, err := ants.NewPool(1, ants.WithNonblocking(true))
+	if err != nil {
+		t.Fatalf("NewPool() error = %v", err)
+	}
+	if err := pool.Submit(func() { <-block }); err != nil {
+		t.Fatalf("occupy pool: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := &fakeWorker{}
+	k := &k8s{
+		providerName: "k8s",
+		ctx:          ctx,
+		worker:       w,
+		robot:        newFakeRobot(nil, nil, false),
+		pool:         pool,
+		cache:        providers.NewCache(2),
+	}
+	// Both submissions are rejected while the sole worker is occupied. The
+	// second offer has the same identity and must replace the first one.
+	k.buildAndSendEvent(&sv.Instance{InstanceId: "pod-a", Provider: providers.ProviderK8s, Status: providers.InstanceStatusOnline, Reversion: 1})
+	k.buildAndSendEvent(&sv.Instance{InstanceId: "pod-a", Provider: providers.ProviderK8s, Status: providers.InstanceStatusOnline, Reversion: 2})
+	k.overflowMu.Lock()
+	depth := k.overflow.Len()
+	k.overflowMu.Unlock()
+	if depth != 1 {
+		t.Fatalf("overflow depth = %d, want one identity-keyed task", depth)
+	}
+	close(block)
+	defer func() {
+		if k.overflow != nil {
+			k.overflow.Close()
+		}
+		pool.Release()
+	}()
+	events := w.waitForHandles(t, 1)
+	e := findLastEvent(t, events, "pod-a")
+	if e == nil || len(e.Data) != 1 || e.Data[0].Reversion != 2 {
+		t.Fatalf("replayed event = %#v, want latest revision 2", e)
 	}
 }
 
