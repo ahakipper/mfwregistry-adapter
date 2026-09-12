@@ -8,9 +8,11 @@
 
 **版本变更：** v6 将“禁止 Nacos 生产路径裸 HTTP、统一经官方 Nacos SDK/facade”从可选 POC 提升为 P1 强制整改和 Nacos 启用时的发布门禁，并补充 SDK 迁移、例外管理和完整测试矩阵。
 
-**当前基线：** `refactor/all` / `838ad19`。当前 `make test-all` 通过；`go vet ./...` 仍有两条诊断；Nacos 裸 HTTP 功能可用但架构合规和生产就绪度均为 PARTIAL；Burst delete race、PushAll retry operation type、多集群身份和 SDK 统一接入仍未闭环。
+**当前基线：** `refactor/all` / `b1d9e2f`。A0→A3、B1 和 B2 HTTP 过渡层已按阶段提交并通过 focused/full/race 测试；`go vet ./...` 仍有两条已知诊断（`tools/cache/cache.go:52`、`pkg/providers/k8s/k8s.go:70`）。Nacos 裸 HTTP 功能和配置/readiness 基础已具备，但架构合规和生产就绪度仍为 PARTIAL；官方 SDK/facade 统一接入、真实 Nacos/Atlas 证据、DDD/通知与 vet 收口仍未闭环。
 
 **范围边界：** K8s 是本阶段规模主路径；Consul 1000+ 规模观察是 accepted non-goal，只有重新启用 ECS/机器部署时才开启独立里程碑。Nacos SDK 统一接入是生产必做项；兼容验证完成前可保留 HTTP 回滚/对照通道，但不能把裸 HTTP 作为最终生产路径。
+
+**执行状态（2026-09-13）：** `b1d9e2f` 已完成 B2 的 HTTP compatibility foundation：多地址 failover（5xx/transport 可切换、4xx 停止）、显式 namespace/group/auth/TLS/timeout、CLI→Config wiring、read+write readiness canary（成功地址固定 register/deregister，清理失败告警）、custom scope PushAll/prune/GetAll 回归测试。该提交明确是迁移期 adapter，不代表 B3 SDK 门禁关闭；Nacos 启用时仍不得发布为最终生产路径，直到官方 SDK/facade、operation coverage、静态裸 HTTP 门禁和真实版本验证全部通过。
 
 ## 1. 不可变的验收原则
 
