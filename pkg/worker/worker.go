@@ -109,7 +109,7 @@ func (w *DefaultWorker) InitEventHandlers() {
 		}
 		if err != nil {
 			w.logger.Errorf("wokderService syncAll failed, instance: %v", e.Data)
-			w.unsyncedService.Add(e.Trigger, e.Data, w.queuedSinks(err))
+			w.unsyncedService.AddFullWithMeta(e.Trigger, e.Data, w.queuedSinks(err), e.Scope, e.BatchID, e.Sequence, e.Revalidate)
 			return err
 		}
 		return nil

@@ -4,6 +4,7 @@ package fakes
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -795,34 +796,32 @@ func (r *FakeMetricsRecorder) K8sQueueDepthObservations() []K8sQueueDepthObserva
 // FakeEventQueue is an in-memory highest-Reversion-wins retry queue.
 type FakeEventQueue struct {
 	mu     sync.Mutex
-	events map[string]*ports.Event
+	events map[string]ports.RetryOperation
 }
 
 // NewFakeEventQueue creates an initialized queue.
 func NewFakeEventQueue() *FakeEventQueue {
-	return &FakeEventQueue{events: make(map[string]*ports.Event)}
+	return &FakeEventQueue{events: make(map[string]ports.RetryOperation)}
 }
 
-func (q *FakeEventQueue) Add(triggerTime int64, instances []*instance.Instance) {
+func (q *FakeEventQueue) Add(operation ports.RetryOperation) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.events == nil {
-		q.events = make(map[string]*ports.Event)
+		q.events = make(map[string]ports.RetryOperation)
 	}
-	for _, item := range instances {
-		if item == nil {
-			continue
-		}
-		old, exists := q.events[item.InstanceId]
-		if exists && len(old.Data) > 0 && old.Data[0] != nil && item.Reversion <= old.Data[0].Reversion {
-			continue
-		}
-		q.events[item.InstanceId] = &ports.Event{
-			Trigger: triggerTime,
-			Data:    cloneInstances([]*instance.Instance{item}),
-			Operate: ports.OperateTypeSync,
-		}
+	if operation.Operate == "" {
+		operation.Operate = ports.OperateTypeSync
 	}
+	if operation.Identity == "" && len(operation.Instances) > 0 && operation.Instances[0] != nil {
+		operation.Identity = instance.IdentityKey(operation.Instances[0])
+	}
+	key := operation.Scope + "\x00" + operation.Sink + "\x00" + string(operation.Operate) + "\x00" + operation.Identity
+	if old, exists := q.events[key]; exists && (operation.Sequence < old.Sequence || (operation.Sequence == old.Sequence && operation.Revision < old.Revision)) {
+		return
+	}
+	operation.Instances = cloneInstances(operation.Instances)
+	q.events[key] = operation
 }
 
 func (q *FakeEventQueue) Len() int {
@@ -831,13 +830,36 @@ func (q *FakeEventQueue) Len() int {
 	return len(q.events)
 }
 
-// Drain returns an independent snapshot without removing queued events.
-func (q *FakeEventQueue) Drain() []*ports.Event {
+// Drain returns an independent typed snapshot without removing queued operations.
+func (q *FakeEventQueue) Drain() []ports.RetryOperation {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	result := make([]*ports.Event, 0, len(q.events))
-	for _, event := range q.events {
-		result = append(result, cloneEvent(event))
+	result := make([]ports.RetryOperation, 0, len(q.events))
+	for _, operation := range q.events {
+		operation.Instances = cloneInstances(operation.Instances)
+		result = append(result, operation)
+	}
+	return result
+}
+
+func (q *FakeEventQueue) AddLegacy(triggerTime int64, instances []*instance.Instance) {
+	for _, item := range instances {
+		if item == nil {
+			continue
+		}
+		sequence := uint64(0)
+		if item.Reversion > 0 {
+			sequence = uint64(item.Reversion)
+		}
+		q.Add(ports.RetryOperation{Trigger: triggerTime, Operate: ports.OperateTypeSync, Identity: instance.IdentityKey(item), Revision: item.Reversion, Sequence: sequence, Instances: []*instance.Instance{item}})
+	}
+}
+
+func (q *FakeEventQueue) DrainLegacy() []*ports.Event {
+	operations := q.Drain()
+	result := make([]*ports.Event, 0, len(operations))
+	for _, operation := range operations {
+		result = append(result, &ports.Event{Trigger: operation.Trigger, Data: cloneInstances(operation.Instances), Operate: operation.Operate})
 	}
 	return result
 }
@@ -846,7 +868,11 @@ func (q *FakeEventQueue) Drain() []*ports.Event {
 func (q *FakeEventQueue) Remove(instanceID string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	delete(q.events, instanceID)
+	for key, operation := range q.events {
+		if operation.Identity == instanceID || strings.HasSuffix(operation.Identity, ":"+instanceID) {
+			delete(q.events, key)
+		}
+	}
 }
 
 func cloneSinkCalls(calls []InstanceSinkCall) []InstanceSinkCall {
@@ -930,3 +956,4 @@ var _ ports.InstanceSource = (*FakeInstanceSource)(nil)
 var _ ports.LeaderElector = (*FakeLeaderElector)(nil)
 var _ ports.MetricsRecorder = (*FakeMetricsRecorder)(nil)
 var _ ports.EventQueue = (*FakeEventQueue)(nil)
+var _ ports.LegacyEventQueue = (*FakeEventQueue)(nil)

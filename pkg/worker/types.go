@@ -25,6 +25,11 @@ type Event struct {
 	Data       []*instance.Instance // data
 	Operate    OperateType          // operate type
 	Revalidate func() ([]*instance.Instance, bool)
+	Scope      string
+	BatchID    string
+	Sequence   uint64
+	Identity   string
+	Revision   int64
 }
 
 type EventResource struct {

@@ -361,10 +361,22 @@ func (c *consul) EventsSync(add, update, del []*sv.Instance) {
 
 // eventSync sync the event to the finder
 func (c *consul) eventSync(ins *sv.Instance, triggerTime int64) {
+	sequence := uint64(0)
+	scope := "ecs"
+	if ins != nil && ins.Reversion > 0 {
+		sequence = uint64(ins.Reversion)
+	}
+	if ins != nil && ins.Provider != "" {
+		scope = ins.Provider
+	}
 	c.worker.Handle(&worker.Event{
-		Trigger: triggerTime,
-		Data:    []*sv.Instance{ins},
-		Operate: worker.OperateTypeSync,
+		Trigger:  triggerTime,
+		Data:     []*sv.Instance{ins},
+		Operate:  worker.OperateTypeSync,
+		Scope:    scope,
+		Identity: providers.IdentityKey(ins),
+		Revision: ins.Reversion,
+		Sequence: sequence,
 	})
 }
 
@@ -438,9 +450,12 @@ func (c *consul) emitSyncAll() {
 	}
 	// Tick-time origin + ns unit (dsca-2 §3 Option (b), §6 origin semantics).
 	c.worker.Handle(&worker.Event{
-		Trigger: time.Now().UnixNano(),
-		Data:    all,
-		Operate: worker.OperateTypeSyncAll,
+		Trigger:  time.Now().UnixNano(),
+		Data:     all,
+		Operate:  worker.OperateTypeSyncAll,
+		Scope:    "ecs",
+		BatchID:  worker.FullBatchID("ecs", all),
+		Sequence: generation,
 		Revalidate: func() ([]*v2.Instance, bool) {
 			latest, current, ok := c.snapshotForFullPush()
 			if !ok {

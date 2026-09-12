@@ -64,11 +64,53 @@ type LeaderElector interface {
 	Stop()
 }
 
-// EventQueue stores failed push events for retry.
-type EventQueue interface {
-	Add(triggerTime int64, instances []*instance.Instance)
+// LegacyEventQueue stores failed push events using the pre-multi-sink shape.
+// It remains only for old fixtures and migration adapters.
+type LegacyEventQueue interface {
+	AddLegacy(triggerTime int64, instances []*instance.Instance)
 	Len() int
-	Drain() []*Event
+	DrainLegacy() []*Event
+}
+
+// EventQueue stores typed retry operations. Full operations retain their sink,
+// scope and batch identity instead of being downgraded to individual pushes.
+type EventQueue interface {
+	Add(RetryOperation)
+	Len() int
+	Drain() []RetryOperation
+}
+
+// RetryOperation is the typed retry contract used by multi-sink workers. It
+// keeps the operation kind and source scope alongside the payload so a failed
+// full push cannot be replayed as unrelated single-instance pushes.
+type RetryOperation struct {
+	Sink       string
+	Operate    OperateType
+	Provider   string
+	Scope      string
+	BatchID    string
+	Identity   string
+	Revision   int64
+	Sequence   uint64
+	Trigger    int64
+	Instances  []*instance.Instance
+	Revalidate func() ([]*instance.Instance, bool)
+}
+
+// RetryOperationQueue is the worker-facing descriptive seam. It uses named
+// methods so the legacy worker can coexist with the typed EventQueue adapter
+// during migration.
+type RetryOperationQueue interface {
+	AddOperation(RetryOperation)
+	Len() int
+	DrainOperations() []RetryOperation
+}
+
+// FullOperationSink is the metadata-aware boundary for replaying a complete
+// operation. Implementations must preserve Scope and BatchID through their
+// adapter even when the underlying service API only accepts instances.
+type FullOperationSink interface {
+	PushAllOperation(RetryOperation) error
 }
 
 // Event describes an instance push operation.

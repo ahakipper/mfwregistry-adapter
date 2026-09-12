@@ -2,7 +2,12 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,13 +34,199 @@ const plainSinkName = AtlasSinkName
 type retryKey struct {
 	InstanceID string
 	Sink       string
+	Operation  RetryOperationKind
+	Scope      string
+	BatchID    string
 }
+
+type RetryOperationKind string
+
+const (
+	RetryPush    RetryOperationKind = "Push"
+	RetryPushAll RetryOperationKind = "PushAll"
+)
 
 // pendingPush is one queued retry: the original trigger time and the
 // instance to re-push.
 type pendingPush struct {
-	Trigger  int64
-	Instance *instance.Instance
+	Trigger      int64
+	Instance     *instance.Instance
+	Full         bool
+	Batch        []*instance.Instance
+	Operation    RetryOperationKind
+	Scope        string
+	BatchID      string
+	FullRevision uint64
+	Revalidate   func() ([]*instance.Instance, bool)
+}
+
+// AddFull preserves a failed full synchronization as a full operation so
+// catalog/prune semantics are not downgraded to per-instance retries.
+func (s *UnsyncedService) AddFull(trigger int64, instances []*instance.Instance, sinks []string) {
+	if len(instances) == 0 {
+		return
+	}
+	for _, item := range instances {
+		if item != nil {
+			goto nonEmpty
+		}
+	}
+	return
+nonEmpty:
+	scope := fullScope(instances)
+	s.AddFullWithMeta(trigger, instances, sinks, scope, fullBatchID(scope, instances), uint64(maxPositive(trigger)), nil)
+}
+
+// AddFullWithMeta preserves the complete operation and its source metadata so
+// retries can rebuild the snapshot instead of replaying a stale batch.
+func (s *UnsyncedService) AddFullWithMeta(trigger int64, instances []*instance.Instance, sinks []string, scope, batchID string, sequence uint64, revalidate func() ([]*instance.Instance, bool)) {
+	if scope == "" || batchID == "" {
+		return
+	}
+	allNil := true
+	for _, item := range instances {
+		if item != nil {
+			allNil = false
+			break
+		}
+	}
+	if allNil && scope == "" {
+		return
+	}
+	targets := sinks
+	if len(targets) == 0 {
+		targets = s.sinkNames()
+	}
+	s.Lock()
+	defer s.Unlock()
+	if s.store == nil {
+		s.store = make(map[retryKey]*pendingPush)
+	}
+	if sequence == 0 {
+		if trigger > 0 {
+			sequence = uint64(trigger)
+		}
+	}
+	for _, sink := range targets {
+		// BatchID is metadata used to compare generations; the map key is the
+		// logical full-operation scope so a newer batch replaces an older one.
+		key := retryKey{InstanceID: "__full__", Sink: sink, Operation: RetryPushAll, Scope: scope}
+		if old := s.store[key]; old != nil && old.FullRevision > sequence {
+			continue
+		}
+		batch := append([]*instance.Instance(nil), instances...)
+		s.store[key] = &pendingPush{Trigger: trigger, Full: true, Batch: batch, Operation: RetryPushAll, Scope: scope, BatchID: batchID, FullRevision: sequence, Revalidate: revalidate}
+	}
+}
+
+func maxPositive(value int64) int64 {
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
+func fullScope(instances []*instance.Instance) string {
+	set := make(map[string]struct{})
+	for _, item := range instances {
+		if item == nil {
+			continue
+		}
+		scope := item.Provider
+		if scope == "" {
+			scope = item.SourceCluster
+		}
+		if scope == "" {
+			scope = "unknown"
+		}
+		set[scope] = struct{}{}
+	}
+	scopes := make([]string, 0, len(set))
+	for scope := range set {
+		scopes = append(scopes, scope)
+	}
+	sort.Strings(scopes)
+	if len(scopes) == 0 {
+		return "unknown"
+	}
+	return strings.Join(scopes, "+")
+}
+
+func fullBatchID(scope string, instances []*instance.Instance) string {
+	ids := make([]string, 0, len(instances))
+	for _, item := range instances {
+		if item != nil {
+			payload, err := json.Marshal(item)
+			if err != nil {
+				payload = []byte(fmt.Sprintf("%s/%d", instance.IdentityKey(item), item.Reversion))
+			}
+			ids = append(ids, fmt.Sprintf("%s:%s", instance.IdentityKey(item), payload))
+		}
+	}
+	sort.Strings(ids)
+	h := sha256.Sum256([]byte(scope + ":" + strings.Join(ids, ",")))
+	return fmt.Sprintf("%x", h[:8])
+}
+
+// FullBatchID is the stable identity of one complete snapshot operation.
+// Providers set it on SyncAll events so a retry never has to guess the batch
+// boundary from only the first instance.
+func FullBatchID(scope string, instances []*instance.Instance) string {
+	return fullBatchID(scope, instances)
+}
+
+// AddOperation implements the typed ports retry contract while retaining the
+// worker's per-sink coalescing store internally.
+func (s *UnsyncedService) AddOperation(op ports.RetryOperation) {
+	if op.Sink == "" {
+		return
+	}
+	if op.Operate == ports.OperateTypeSyncAll {
+		s.AddFullWithMeta(op.Trigger, op.Instances, []string{op.Sink}, op.Scope, op.BatchID, op.Sequence, op.Revalidate)
+		return
+	}
+	s.Add(op.Trigger, op.Instances, []string{op.Sink})
+}
+
+// DrainOperations exposes a stable typed snapshot for migration/replay tests.
+// Production retry consumption remains in syncOnce so successful-delete and
+// mid-cycle re-add semantics stay centralized.
+func (s *UnsyncedService) DrainOperations() []ports.RetryOperation {
+	s.RLock()
+	defer s.RUnlock()
+	result := make([]ports.RetryOperation, 0, len(s.store))
+	for key, pending := range s.store {
+		if pending == nil {
+			continue
+		}
+		op := ports.RetryOperation{
+			Sink:       key.Sink,
+			Operate:    ports.OperateTypeSync,
+			Provider:   pending.Scope,
+			Scope:      pending.Scope,
+			BatchID:    pending.BatchID,
+			Revision:   int64(pending.FullRevision),
+			Sequence:   pending.FullRevision,
+			Trigger:    pending.Trigger,
+			Revalidate: pending.Revalidate,
+		}
+		if pending.Full {
+			op.Operate = ports.OperateTypeSyncAll
+			op.Instances = append([]*instance.Instance(nil), pending.Batch...)
+		} else if pending.Instance != nil {
+			op.Identity = instance.IdentityKey(pending.Instance)
+			op.Revision = pending.Instance.Reversion
+			op.Instances = []*instance.Instance{pending.Instance}
+		}
+		result = append(result, op)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Sink != result[j].Sink {
+			return result[i].Sink < result[j].Sink
+		}
+		return result[i].Scope+result[i].BatchID+result[i].Identity < result[j].Scope+result[j].BatchID+result[j].Identity
+	})
+	return result
 }
 
 // UnsyncedService retries failed pushes per sink every 5s. The store lock
@@ -52,6 +243,8 @@ type UnsyncedService struct {
 	store   map[retryKey]*pendingPush
 	sync.RWMutex
 }
+
+var _ ports.RetryOperationQueue = (*UnsyncedService)(nil)
 
 func NewUnsyncedService(ctx context.Context, pusher ports.InstanceSink, logger ports.Logger, metrics ports.MetricsRecorder) *UnsyncedService {
 	if logger == nil {
@@ -99,7 +292,7 @@ func (s *UnsyncedService) Add(triggerTime int64, instances []*instance.Instance,
 			continue
 		}
 		for _, sink := range targets {
-			key := retryKey{InstanceID: instance.IdentityKey(item), Sink: sink}
+			key := retryKey{InstanceID: instance.IdentityKey(item), Sink: sink, Operation: RetryPush}
 			if old, ok := s.store[key]; ok {
 				if item.Reversion > old.Instance.Reversion {
 					old.Instance = item
@@ -205,14 +398,19 @@ func (s *UnsyncedService) dropGhostSinkKeys(batch map[retryKey]pendingPush) {
 	}
 	s.Lock()
 	for _, key := range ghosts {
-		if current, ok := s.store[key]; ok && current.Instance == batch[key].Instance {
+		attempted := batch[key]
+		if current, ok := s.store[key]; ok && samePending(current, &attempted) {
 			delete(s.store, key)
 		}
 	}
 	s.Unlock()
 	for _, key := range ghosts {
+		id := key.InstanceID
+		if batch[key].Instance != nil {
+			id = batch[key].Instance.InstanceId
+		}
 		s.logger.Warnf("dropping queued push for unknown sink %q (the sink is not registered; the entry can never be pushed), instance: %s",
-			key.Sink, batch[key].Instance.InstanceId)
+			key.Sink, id)
 	}
 }
 
@@ -229,6 +427,10 @@ func (s *UnsyncedService) pushSinkOnce(sink string, batch map[retryKey]pendingPu
 		// directly, behavior-identical to pre-F3.
 		for _, key := range keys {
 			pending := batch[key]
+			if pending.Full {
+				s.retryKeyed(sink, key, pending, s.pusher.PushAll(pending.Trigger, pending.Batch))
+				continue
+			}
 			s.retryKeyed(sink, key, pending,
 				s.pusher.Push(pending.Trigger, []*instance.Instance{pending.Instance}))
 		}
@@ -236,6 +438,24 @@ func (s *UnsyncedService) pushSinkOnce(sink string, batch map[retryKey]pendingPu
 	}
 	for _, key := range keys {
 		pending := batch[key]
+		if pending.Full {
+			var err error
+			if opSink, ok := s.fanout.(ports.FullOperationSink); ok {
+				err = opSink.PushAllOperation(ports.RetryOperation{
+					Sink: sink, Operate: ports.OperateTypeSyncAll, Provider: pending.Scope,
+					Scope: pending.Scope, BatchID: pending.BatchID, Sequence: pending.FullRevision,
+					Trigger: pending.Trigger, Instances: pending.Batch, Revalidate: pending.Revalidate,
+				})
+			} else if withRevalidate, ok := s.fanout.(interface {
+				PushAllToWithRevalidate(string, int64, string, string, []*instance.Instance, func() ([]*instance.Instance, bool)) error
+			}); ok {
+				err = withRevalidate.PushAllToWithRevalidate(sink, pending.Trigger, pending.Scope, pending.BatchID, pending.Batch, pending.Revalidate)
+			} else {
+				err = s.fanout.PushAllTo(sink, pending.Trigger, pending.Scope, pending.BatchID, pending.Batch)
+			}
+			s.retryKeyed(sink, key, pending, err)
+			continue
+		}
 		s.retryKeyed(sink, key, pending,
 			s.fanout.PushTo(sink, pending.Trigger, []*instance.Instance{pending.Instance}))
 	}
@@ -245,9 +465,22 @@ func (s *UnsyncedService) pushSinkOnce(sink string, batch map[retryKey]pendingPu
 // unless the entry was re-added mid-cycle; an error keeps it queued for the
 // next cycle, except a permanent error, which drops the entry.
 func (s *UnsyncedService) retryKeyed(sink string, key retryKey, pending pendingPush, err error) {
+	data := "<full batch>"
+	if pending.Instance != nil {
+		data = pending.Instance.InstanceId
+	}
+	if pending.Full && errors.Is(err, errStaleFullPush) {
+		s.logger.Warnf("dropping stale full retry for scope %q; the next full snapshot will rebuild it", pending.Scope)
+		s.Lock()
+		if current, ok := s.store[key]; ok && samePending(current, &pending) {
+			delete(s.store, key)
+		}
+		s.Unlock()
+		return
+	}
 	if err != nil {
-		s.logger.Errorf("retry trying to push instance failed again, sink: %s, data: %v, err: %s",
-			sink, pending.Instance, err.Error())
+		s.logger.Errorf("retry trying to push operation failed again, sink: %s, data: %s, err: %s",
+			sink, data, err.Error())
 		// A 4xx from the sink client (e.g. the nacos APIError) is permanent:
 		// the request itself is rejected, so an identical retry can never
 		// succeed and would spin forever (the live incident: 9624 futile
@@ -255,16 +488,19 @@ func (s *UnsyncedService) retryKeyed(sink string, key retryKey, pending pendingP
 		// instead of re-queuing it for the next cycle.
 		var p interface{ Permanent() bool }
 		if errors.As(err, &p) && p.Permanent() {
+			if pending.Full {
+				s.logger.Errorf("permanent_full_operation: dropping non-retryable full operation sink=%s scope=%s batch_id=%s", sink, pending.Scope, pending.BatchID)
+			}
 			s.Lock()
 			// delete only if the queued instance is still the one just pushed:
 			// a mid-cycle re-add (e.g. a newer revision) must survive the drop.
-			if current, ok := s.store[key]; ok && current.Instance == pending.Instance {
+			if current, ok := s.store[key]; ok && samePending(current, &pending) {
 				delete(s.store, key)
 				// the drop is claimed only now that the key was actually
 				// deleted; a declined compare (a newer re-added revision)
 				// logs nothing and leaves the entry queued.
-				s.logger.Errorf("dropping permanently-failed push from the retry queue, sink: %s, data: %v, err: %s",
-					sink, pending.Instance, err.Error())
+				s.logger.Errorf("dropping permanently-failed operation from the retry queue, sink: %s, data: %s, err: %s",
+					sink, data, err.Error())
 			}
 			s.Unlock()
 		}
@@ -273,10 +509,20 @@ func (s *UnsyncedService) retryKeyed(sink string, key retryKey, pending pendingP
 	s.Lock()
 	// delete only if the queued instance is still the one just pushed: a
 	// mid-cycle re-add (e.g. a newer revision) must survive the delete.
-	if current, ok := s.store[key]; ok && current.Instance == pending.Instance {
+	if current, ok := s.store[key]; ok && samePending(current, &pending) {
 		delete(s.store, key)
 	}
 	s.Unlock()
+}
+
+func samePending(current, attempted *pendingPush) bool {
+	if current == nil || attempted == nil || current.Full != attempted.Full || current.Operation != attempted.Operation {
+		return false
+	}
+	if current.Full {
+		return current.Scope == attempted.Scope && current.BatchID == attempted.BatchID && current.FullRevision == attempted.FullRevision && fullBatchID(current.Scope, current.Batch) == fullBatchID(attempted.Scope, attempted.Batch)
+	}
+	return current.Instance == attempted.Instance
 }
 
 // totalSinkName is the metrics label for the TOTAL queue depth across all

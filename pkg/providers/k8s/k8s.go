@@ -271,10 +271,22 @@ func (k *k8s) VerifyInstance(ins *sv.Instance) error {
 
 // eventSync sync the event to the finder
 func (k *k8s) eventSync(ins *sv.Instance, triggerTime int64) {
+	sequence := uint64(0)
+	scope := "k8s"
+	if ins != nil && ins.Reversion > 0 {
+		sequence = uint64(ins.Reversion)
+	}
+	if ins != nil && ins.SourceCluster != "" {
+		scope = ins.SourceCluster
+	}
 	k.worker.Handle(&worker.Event{
-		Trigger: triggerTime,
-		Data:    []*sv.Instance{ins},
-		Operate: worker.OperateTypeSync,
+		Trigger:  triggerTime,
+		Data:     []*sv.Instance{ins},
+		Operate:  worker.OperateTypeSync,
+		Scope:    scope,
+		Identity: providers.IdentityKey(ins),
+		Revision: ins.Reversion,
+		Sequence: sequence,
 	})
 }
 
@@ -417,15 +429,20 @@ func (k *k8s) flushInstances() {
 		k.Lock()
 		k.cache = newCache
 		k.generation++
+		generation := k.generation
 		k.Unlock()
 		log.Logger.Infof("flush k8s cache spend time: %s", unit.RelTime(before, time.Now(), "", ""))
 		// push all. Origin is tick-time (time.Now at Event construction),
 		// not CreateAt — the documented full-push origin semantics of
 		// dsca-2 §6; UnixNano per the same unit widening.
 		event := &worker.Event{
-			Trigger: time.Now().UnixNano(),
-			Data:    all,
-			Operate: worker.OperateTypeSyncAll}
+			Trigger:  time.Now().UnixNano(),
+			Data:     all,
+			Operate:  worker.OperateTypeSyncAll,
+			Scope:    "k8s",
+			BatchID:  worker.FullBatchID("k8s", all),
+			Sequence: generation,
+		}
 		k.worker.Handle(event)
 	}
 }
@@ -682,9 +699,12 @@ func (k *k8s) emitSyncAll() {
 	// a PushAll observation measures "age of the full push at completion",
 	// not event age.
 	k.worker.Handle(&worker.Event{
-		Trigger: time.Now().UnixNano(),
-		Data:    all,
-		Operate: worker.OperateTypeSyncAll,
+		Trigger:  time.Now().UnixNano(),
+		Data:     all,
+		Operate:  worker.OperateTypeSyncAll,
+		Scope:    "k8s",
+		BatchID:  worker.FullBatchID("k8s", all),
+		Sequence: generation,
 		Revalidate: func() ([]*sv.Instance, bool) {
 			latest, current, ok := k.snapshotForFullPush()
 			if !ok {

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"spotter/internal/domain/instance"
+	"spotter/internal/ports"
 	"spotter/internal/testkit/fakes"
 )
 
@@ -102,8 +103,9 @@ func TestWorkerSyncAllMixedStaleAndTransientQueuesTransientSinkOnly(t *testing.T
 	if err != nil {
 		t.Fatalf("NewResourceWorker() error = %v", err)
 	}
-	w.Handle(&Event{Trigger: 1, Operate: OperateTypeSyncAll,
-		Data: []*instance.Instance{{InstanceId: "mixed", Reversion: 1}}})
+	mixedBatch := []*instance.Instance{{Provider: "k8s", InstanceId: "mixed", Reversion: 1}}
+	w.Handle(&Event{Trigger: 1, Scope: "k8s", BatchID: FullBatchID("k8s", mixedBatch), Sequence: 1, Operate: OperateTypeSyncAll,
+		Data: mixedBatch})
 	w.unsyncedService.RLock()
 	defer w.unsyncedService.RUnlock()
 	if len(w.unsyncedService.store) != 1 {
@@ -268,7 +270,7 @@ func TestWorkerSyncAllFailureQueuesBatchForRetry(t *testing.T) {
 		{InstanceId: "instance-b", Reversion: 2},
 		{InstanceId: "instance-c", Reversion: 3},
 	}
-	worker.Handle(&Event{Trigger: 456, Data: batch, Operate: OperateTypeSyncAll})
+	worker.Handle(&Event{Trigger: 456, Scope: "k8s", BatchID: FullBatchID("k8s", batch), Sequence: 456, Data: batch, Operate: OperateTypeSyncAll})
 
 	// The batch reached the sink as one full push and failed.
 	calls := sink.PushAllCalls()
@@ -277,24 +279,23 @@ func TestWorkerSyncAllFailureQueuesBatchForRetry(t *testing.T) {
 	}
 	// The whole batch is queued under the plain sink name (the single-sink
 	// wiring: a non-fanout error queues every known sink).
-	if got := worker.unsyncedService.Len(); got != len(batch) {
-		t.Fatalf("queued events after failed SyncAll = %d, want %d (the whole batch)", got, len(batch))
+	if got := worker.unsyncedService.Len(); got != 1 {
+		t.Fatalf("queued operations after failed SyncAll = %d, want 1 full operation", got)
 	}
-	if got, want := worker.unsyncedService.Lens(), map[string]int{plainSinkName: len(batch)}; !reflect.DeepEqual(got, want) {
+	if got, want := worker.unsyncedService.Lens(), map[string]int{plainSinkName: 1}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Lens after failed SyncAll = %v, want %v", got, want)
 	}
 
-	// The retry actually re-pushes the batch: one retry cycle drains the
-	// queue through Push (the plain-sink retry path) once the sink recovers.
+	// The retry re-pushes the original batch as one full operation.
 	sink.SetErrors(nil, nil, nil)
 	worker.unsyncedService.syncOnce()
 
 	if got := worker.unsyncedService.Len(); got != 0 {
 		t.Fatalf("queued events after the retry = %d, want 0 (the recovered batch drained)", got)
 	}
-	retries := sink.PushCalls()
-	if len(retries) != len(batch) {
-		t.Fatalf("retry Push calls = %d, want %d (one per queued instance)", len(retries), len(batch))
+	retries := sink.PushAllCalls()
+	if len(retries) != 2 || len(retries[1].Instances) != len(batch) {
+		t.Fatalf("retry PushAll calls = %#v, want one complete batch", retries)
 	}
 	retried := map[string]bool{}
 	for _, call := range retries {
@@ -309,5 +310,126 @@ func TestWorkerSyncAllFailureQueuesBatchForRetry(t *testing.T) {
 		if !retried[item.InstanceId] {
 			t.Fatalf("instance %q was never re-pushed; retried = %v", item.InstanceId, retried)
 		}
+	}
+}
+
+func TestSyncAllPruneFailureRetainsSyncAllOperation(t *testing.T) {
+	sink := &fakes.FakeInstanceSink{PushAllErr: errors.New("catalog prune 500")}
+	w, err := NewResourceWorker(context.Background(), sink, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+	if err != nil {
+		t.Fatalf("NewResourceWorker() error = %v", err)
+	}
+	batch := []*instance.Instance{{Provider: "k8s", InstanceId: "pod", Reversion: 1}}
+	w.Handle(&Event{Trigger: 10, Scope: "k8s", BatchID: FullBatchID("k8s", batch), Sequence: 10, Operate: OperateTypeSyncAll, Data: batch})
+	ops := w.unsyncedService.DrainOperations()
+	if len(ops) != 1 || ops[0].Operate != ports.OperateTypeSyncAll || ops[0].Scope != "k8s" {
+		t.Fatalf("retry operations = %#v, want one scoped SyncAll operation", ops)
+	}
+}
+
+func TestSyncAllRetryCallsPushAllNotPush(t *testing.T) {
+	sink := &fakes.FakeInstanceSink{PushAllErr: errors.New("catalog prune 500")}
+	w, err := NewResourceWorker(context.Background(), sink, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+	if err != nil {
+		t.Fatalf("NewResourceWorker() error = %v", err)
+	}
+	batch := []*instance.Instance{{Provider: "k8s", InstanceId: "pod", Reversion: 1}}
+	w.Handle(&Event{Trigger: 10, Scope: "k8s", BatchID: FullBatchID("k8s", batch), Sequence: 10, Operate: OperateTypeSyncAll, Data: batch})
+	sink.SetErrors(nil, nil, nil)
+	w.unsyncedService.syncOnce()
+	if len(sink.PushAllCalls()) != 2 || len(sink.PushCalls()) != 0 {
+		t.Fatalf("PushAll calls=%d Push calls=%d, want one retry as PushAll", len(sink.PushAllCalls()), len(sink.PushCalls()))
+	}
+}
+
+func TestIncrementalAndFullPushQueuesDoNotOverwriteEachOther(t *testing.T) {
+	s := NewUnsyncedService(context.Background(), &fakes.FakeInstanceSink{}, nil, nil)
+	s.Add(1, []*instance.Instance{{Provider: "k8s", InstanceId: "pod", Reversion: 1}}, nil)
+	s.AddFull(2, []*instance.Instance{{Provider: "k8s", InstanceId: "pod", Reversion: 2}}, nil)
+	if got := s.Len(); got != 2 {
+		t.Fatalf("mixed retry queue length = %d, want 2 operations", got)
+	}
+	ops := s.DrainOperations()
+	seenPush, seenFull := false, false
+	for _, op := range ops {
+		seenPush = seenPush || op.Operate == ports.OperateTypeSync
+		seenFull = seenFull || op.Operate == ports.OperateTypeSyncAll
+	}
+	if !seenPush || !seenFull {
+		t.Fatalf("mixed operations = %#v, want both Push and PushAll", ops)
+	}
+}
+
+func TestPrune5xxRetriesAndDeletesGhostAfterRecovery(t *testing.T) {
+	sink := &fakes.FakeInstanceSink{}
+	sink.SetScript(fakes.ScriptStep{Operation: fakes.SinkOperationPushAll, Mode: fakes.FailureRetryable5xx}, fakes.ScriptStep{Operation: fakes.SinkOperationPushAll, Mode: fakes.FailureSuccess})
+	s := NewUnsyncedService(context.Background(), sink, nil, nil)
+	s.AddFull(1, []*instance.Instance{{Provider: "k8s", InstanceId: "ghost", Reversion: 1}}, nil)
+	s.syncOnce()
+	if s.Len() != 1 {
+		t.Fatalf("queue after prune 5xx = %d, want 1", s.Len())
+	}
+	s.syncOnce()
+	if s.Len() != 0 {
+		t.Fatalf("queue after prune recovery = %d, want 0", s.Len())
+	}
+}
+
+func TestFullRetryRevalidateCalledBeforeReplay(t *testing.T) {
+	sink := &fakes.FakeInstanceSink{}
+	sink.SetScript(fakes.ScriptStep{Operation: fakes.SinkOperationPushAll, Mode: fakes.FailureRetryable5xx}, fakes.ScriptStep{Operation: fakes.SinkOperationPushAll, Mode: fakes.FailureSuccess})
+	fanout, err := NewFanoutSink(&fakes.FakeLogger{}, NamedSink{Name: "nacos", Sink: sink})
+	if err != nil {
+		t.Fatalf("NewFanoutSink() error = %v", err)
+	}
+	var revalidations int
+	batch := []*instance.Instance{{Provider: "k8s", InstanceId: "pod", Reversion: 1}}
+	s := NewUnsyncedService(context.Background(), fanout, nil, nil)
+	s.AddFullWithMeta(1, batch, []string{"nacos"}, "k8s", "batch-1", 1, func() ([]*instance.Instance, bool) {
+		revalidations++
+		return batch, true
+	})
+	s.syncOnce()
+	if s.Len() != 1 || revalidations != 1 {
+		t.Fatalf("after first replay len=%d revalidations=%d, want 1/1", s.Len(), revalidations)
+	}
+	s.syncOnce()
+	if s.Len() != 0 || revalidations != 2 {
+		t.Fatalf("after recovery len=%d revalidations=%d, want 0/2", s.Len(), revalidations)
+	}
+}
+
+func TestPrune4xxDropsOnlyPermanentTask(t *testing.T) {
+	sink := &fakes.FakeInstanceSink{PushErr: errors.New("incremental timeout"), PushAllErr: &nacosPermanentTestError{}}
+	s := NewUnsyncedService(context.Background(), sink, nil, nil)
+	s.AddFull(1, []*instance.Instance{{Provider: "k8s", InstanceId: "ghost", Reversion: 1}}, nil)
+	s.Add(2, []*instance.Instance{{Provider: "k8s", InstanceId: "live", Reversion: 1}}, nil)
+	s.syncOnce()
+	ops := s.DrainOperations()
+	if len(ops) != 1 || ops[0].Operate != ports.OperateTypeSync {
+		t.Fatalf("remaining operations = %#v, want only the incremental retry", ops)
+	}
+}
+
+func TestAddFullWithMetaRejectsMissingScopeOrBatchID(t *testing.T) {
+	s := NewUnsyncedService(context.Background(), &fakes.FakeInstanceSink{}, nil, nil)
+	items := []*instance.Instance{{Provider: "k8s", InstanceId: "pod", Reversion: 1}}
+	s.AddFullWithMeta(1, items, nil, "", "", 1, nil)
+	s.AddFullWithMeta(1, items, nil, "k8s", "", 1, nil)
+	s.AddFullWithMeta(1, items, nil, "", "batch", 1, nil)
+	if got := s.Len(); got != 0 {
+		t.Fatalf("malformed full retry entries = %d, want 0", got)
+	}
+}
+
+func TestAddOperationAcceptsScopedEmptyFull(t *testing.T) {
+	s := NewUnsyncedService(context.Background(), &fakes.FakeInstanceSink{}, nil, nil)
+	s.AddOperation(ports.RetryOperation{Sink: plainSinkName, Operate: ports.OperateTypeSyncAll, Scope: "k8s", BatchID: "empty-batch", Sequence: 4, Trigger: 4})
+	if got := s.Len(); got != 1 {
+		t.Fatalf("scoped empty full entries = %d, want 1", got)
+	}
+	ops := s.DrainOperations()
+	if len(ops) != 1 || ops[0].Operate != ports.OperateTypeSyncAll || ops[0].BatchID != "empty-batch" {
+		t.Fatalf("scoped empty operation = %#v, want typed empty full", ops)
 	}
 }
