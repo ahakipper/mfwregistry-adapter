@@ -1454,3 +1454,72 @@ func TestFanoutCloseIsIdempotentAndClosesUnderlyingOnce(t *testing.T) {
 		t.Fatalf("underlying Close calls = %d, want exactly 1", closes)
 	}
 }
+
+func TestFullRetryScopesRemainIndependent(t *testing.T) {
+	s := NewUnsyncedService(context.Background(), &fakes.FakeInstanceSink{}, nil, nil)
+	a := &instance.Instance{Provider: "k8s", InstanceId: "a"}
+	b := &instance.Instance{Provider: "ecs", InstanceId: "b"}
+	s.AddFull(1, []*instance.Instance{a}, nil)
+	s.AddFull(2, []*instance.Instance{b}, nil)
+	if s.Len() != 2 {
+		t.Fatalf("len=%d want 2", s.Len())
+	}
+}
+
+func TestFullRetrySameScopeKeepsNewestOperation(t *testing.T) {
+	s := NewUnsyncedService(context.Background(), &fakes.FakeInstanceSink{}, nil, nil)
+	s.AddFull(20, []*instance.Instance{{Provider: "k8s", InstanceId: "new"}}, nil)
+	s.AddFull(10, []*instance.Instance{{Provider: "k8s", InstanceId: "old"}}, nil)
+	if got := s.Len(); got != 1 {
+		t.Fatalf("same-scope full queue length = %d, want 1", got)
+	}
+	ops := s.DrainOperations()
+	if len(ops) != 1 || ops[0].Operate != ports.OperateTypeSyncAll || ops[0].Sequence != 20 || ops[0].BatchID == "" {
+		t.Fatalf("queued operation = %#v, want newest typed full operation", ops)
+	}
+}
+
+func TestFullRetryPermanent4xxDropsWithoutPanic(t *testing.T) {
+	sink := &fakes.FakeInstanceSink{PushAllErr: &nacosPermanentTestError{}}
+	s := NewUnsyncedService(context.Background(), sink, nil, nil)
+	s.AddFull(1, []*instance.Instance{{Provider: "k8s", InstanceId: "a"}}, nil)
+	s.syncOnce()
+	if s.Len() != 0 {
+		t.Fatalf("len=%d want 0", s.Len())
+	}
+}
+
+func TestFullRetryStaleOperationIsDeleted(t *testing.T) {
+	fanout, err := NewFanoutSink(&fakes.FakeLogger{}, NamedSink{Name: "nacos", Sink: &fakes.FakeInstanceSink{PushAllErr: errStaleFullPush}})
+	if err != nil {
+		t.Fatalf("NewFanoutSink() error = %v", err)
+	}
+	s := NewUnsyncedService(context.Background(), fanout, nil, nil)
+	s.AddFull(1, []*instance.Instance{{Provider: "k8s", InstanceId: "stale"}}, []string{"nacos"})
+	s.syncOnce()
+	if got := s.Len(); got != 0 {
+		t.Fatalf("stale full retry queue length = %d, want 0", got)
+	}
+}
+
+func TestFanoutPushAllOperationPreservesMetadata(t *testing.T) {
+	inner := &fakes.FakeInstanceSink{}
+	fanout := newTestFanout(t, inner, &fakes.FakeInstanceSink{})
+	batch := []*instance.Instance{{Provider: "k8s", InstanceId: "pod", Reversion: 1}}
+	op := ports.RetryOperation{Sink: stubSinkAtlas, Operate: ports.OperateTypeSyncAll, Scope: "k8s", BatchID: "batch-1", Sequence: 7, Trigger: 7, Instances: batch}
+	if err := fanout.PushAllOperation(op); err != nil {
+		t.Fatalf("PushAllOperation() error = %v", err)
+	}
+	gated, ok := fanout.sinks[0].Sink.(*orderedSink)
+	if !ok {
+		t.Fatal("fanout sink is not orderedSink")
+	}
+	if gated.lastFullScope != "k8s" || gated.lastFullBatchID != "batch-1" {
+		t.Fatalf("metadata scope=%q batch=%q, want k8s/batch-1", gated.lastFullScope, gated.lastFullBatchID)
+	}
+}
+
+type nacosPermanentTestError struct{}
+
+func (*nacosPermanentTestError) Error() string   { return "4xx" }
+func (*nacosPermanentTestError) Permanent() bool { return true }

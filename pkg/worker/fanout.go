@@ -92,6 +92,7 @@ func failedSinkNames(err error, known []string) []string {
 type sinkFanout interface {
 	// PushTo pushes to exactly one named sink; an unknown name errors.
 	PushTo(name string, triggerTime int64, instances []*instance.Instance) error
+	PushAllTo(name string, triggerTime int64, scope, batchID string, instances []*instance.Instance) error
 	// Sinks exposes the registered sink names.
 	Sinks() []string
 }
@@ -152,8 +153,9 @@ type FanoutSink struct {
 // keeps the unsynced_service.go type assertion from silently degrading to
 // the legacy single-sink path if the seam ever drifts.
 var (
-	_ ports.InstanceSink = (*FanoutSink)(nil)
-	_ sinkFanout         = (*FanoutSink)(nil)
+	_ ports.InstanceSink      = (*FanoutSink)(nil)
+	_ sinkFanout              = (*FanoutSink)(nil)
+	_ ports.FullOperationSink = (*FanoutSink)(nil)
 )
 
 // NewFanoutSink creates a fan-out over named sinks. It rejects zero sinks,
@@ -231,18 +233,22 @@ type orderedSink struct {
 	inner ports.InstanceSink
 	// fullGate allows independent identities to proceed concurrently while
 	// making a full snapshot an exclusive operation.
-	fullGate sync.RWMutex
-	keysMu   sync.Mutex
-	keyLocks map[string]*keyLockEntry
-	latestMu sync.Mutex
-	latest   map[string]identityRevision
-	closed   bool
+	fullGate        sync.RWMutex
+	keysMu          sync.Mutex
+	keyLocks        map[string]*keyLockEntry
+	latestMu        sync.Mutex
+	latest          map[string]identityRevision
+	closed          bool
+	lastFullScope   string
+	lastFullBatchID string
 }
 
 type keyLockEntry struct {
 	mu   sync.Mutex
 	refs int
 }
+
+var _ ports.FullOperationSink = (*orderedSink)(nil)
 
 // identityRevision records the last accepted revision and whether the
 // identity was explicitly removed by a trusted complete snapshot. Tombstones
@@ -280,6 +286,24 @@ func (s *orderedSink) PushAllWithRevalidate(trigger int64, items []*instance.Ins
 		items = fresh
 	}
 	return s.runLocked(trigger, items, true, true)
+}
+
+func (s *orderedSink) PushAllOperation(op ports.RetryOperation) error {
+	s.fullGate.Lock()
+	defer s.fullGate.Unlock()
+	if s.closed {
+		return errors.New("worker: sink is closed")
+	}
+	if op.Revalidate != nil {
+		fresh, ok := op.Revalidate()
+		if !ok {
+			return nil
+		}
+		op.Instances = fresh
+	}
+	s.lastFullScope = op.Scope
+	s.lastFullBatchID = op.BatchID
+	return s.runLocked(op.Trigger, op.Instances, true, true)
 }
 
 func (s *orderedSink) GetAll(statuses []int32, provider string) (*instance.InstanceList, error) {
@@ -698,6 +722,49 @@ func (f *FanoutSink) PushTo(name string, triggerTime int64, instances []*instanc
 	}
 	return fmt.Errorf("worker: fanout PushTo unknown sink %q (known sinks: %s)",
 		name, strings.Join(f.Sinks(), ", "))
+}
+
+func (f *FanoutSink) PushAllTo(name string, triggerTime int64, scope, batchID string, instances []*instance.Instance) error {
+	for _, named := range f.sinks {
+		if named.Name == name {
+			return named.Sink.PushAll(triggerTime, instances)
+		}
+	}
+	return fmt.Errorf("worker: fanout PushAllTo unknown sink %q", name)
+}
+
+// PushAllToWithRevalidate replays one full operation for a named sink while
+// rebuilding the snapshot inside that sink's exclusive full-push gate.
+func (f *FanoutSink) PushAllToWithRevalidate(name string, triggerTime int64, scope, batchID string, instances []*instance.Instance, revalidate func() ([]*instance.Instance, bool)) error {
+	for _, named := range f.sinks {
+		if named.Name != name {
+			continue
+		}
+		if gated, ok := named.Sink.(interface {
+			PushAllWithRevalidate(int64, []*instance.Instance, func() ([]*instance.Instance, bool)) error
+		}); ok {
+			return gated.PushAllWithRevalidate(triggerTime, instances, revalidate)
+		}
+		return named.Sink.PushAll(triggerTime, instances)
+	}
+	return fmt.Errorf("worker: fanout PushAllToWithRevalidate unknown sink %q", name)
+}
+
+// PushAllOperation preserves the typed retry metadata at the fanout boundary.
+func (f *FanoutSink) PushAllOperation(op ports.RetryOperation) error {
+	if op.Sink == "" {
+		return errors.New("worker: full operation sink is empty")
+	}
+	for _, named := range f.sinks {
+		if named.Name != op.Sink {
+			continue
+		}
+		if operationSink, ok := named.Sink.(ports.FullOperationSink); ok {
+			return operationSink.PushAllOperation(op)
+		}
+		return f.PushAllToWithRevalidate(op.Sink, op.Trigger, op.Scope, op.BatchID, op.Instances, op.Revalidate)
+	}
+	return fmt.Errorf("worker: full operation sink %q is not registered", op.Sink)
 }
 
 // Sinks returns the registered sink names in declaration (construction)

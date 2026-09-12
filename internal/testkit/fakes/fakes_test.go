@@ -304,11 +304,11 @@ func TestFakeMetricsRecorderCapturesConcurrentMetrics(t *testing.T) {
 
 func TestFakeEventQueueKeepsHighestReversionAndDrainsSnapshot(t *testing.T) {
 	queue := NewFakeEventQueue()
-	queue.Add(10, []*instance.Instance{
+	queue.AddLegacy(10, []*instance.Instance{
 		sampleInstance("one", 1),
 		sampleInstance("two", 4),
 	})
-	queue.Add(20, []*instance.Instance{
+	queue.AddLegacy(20, []*instance.Instance{
 		sampleInstance("one", 3),
 		sampleInstance("two", 2),
 	})
@@ -316,7 +316,7 @@ func TestFakeEventQueueKeepsHighestReversionAndDrainsSnapshot(t *testing.T) {
 	if got := queue.Len(); got != 2 {
 		t.Fatalf("Len = %d, want 2", got)
 	}
-	events := queue.Drain()
+	events := queue.DrainLegacy()
 	sort.Slice(events, func(i, j int) bool {
 		return events[i].Data[0].InstanceId < events[j].Data[0].InstanceId
 	})
@@ -331,7 +331,7 @@ func TestFakeEventQueueKeepsHighestReversionAndDrainsSnapshot(t *testing.T) {
 	}
 
 	events[0].Data[0].Label["key"] = "returned-mutated"
-	for _, event := range queue.Drain() {
+	for _, event := range queue.DrainLegacy() {
 		if event.Data[0].InstanceId == "one" && event.Data[0].Label["key"] != "value" {
 			t.Fatal("Drain returned internal storage")
 		}
