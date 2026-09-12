@@ -98,29 +98,40 @@ func formatInstance(obj *k8srobot.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
 
 	// set application.name
 	label := formatLableInfo(pod, labels, runtimeConfig.Environments)
+	if label == nil {
+		label = map[string]string{}
+	}
+	if obj != nil && obj.ClusterID != "" {
+		label["sourceCluster"] = obj.ClusterID
+	}
+	if obj != nil && obj.UID != "" {
+		label["sourceKey"] = obj.ClusterID + "/" + string(pod.UID)
+	}
 
 	// convert pod to instance
 	ins = &sv.Instance{
-		InstanceId: pod.Name,
-		Ports:      ports,
-		AppCode:    appCode,
-		EnvCode:    envCode,
-		EnvType:    envType,
-		EnvGroup:   envGroup,
-		Version:    labels["version"],
-		Ip:         pod.Status.PodIP,
-		Enabled:    enabled,
-		State:      state,
-		Provider:   "k8s",
-		Hostname:   pod.Name,
-		Cpu:        runtimeConfig.Cpu,
-		Memory:     runtimeConfig.Memory,
-		Image:      runtimeConfig.Image,
-		Idc:        idc,
-		Cluster:    cluster,
-		Reversion:  reversion,
-		Status:     status,
-		Label:      label,
+		SourceKey:     label["sourceKey"],
+		SourceCluster: label["sourceCluster"],
+		InstanceId:    pod.Name,
+		Ports:         ports,
+		AppCode:       appCode,
+		EnvCode:       envCode,
+		EnvType:       envType,
+		EnvGroup:      envGroup,
+		Version:       labels["version"],
+		Ip:            pod.Status.PodIP,
+		Enabled:       enabled,
+		State:         state,
+		Provider:      "k8s",
+		Hostname:      pod.Name,
+		Cpu:           runtimeConfig.Cpu,
+		Memory:        runtimeConfig.Memory,
+		Image:         runtimeConfig.Image,
+		Idc:           idc,
+		Cluster:       cluster,
+		Reversion:     reversion,
+		Status:        status,
+		Label:         label,
 	}
 
 	return

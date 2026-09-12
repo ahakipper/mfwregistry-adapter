@@ -284,7 +284,7 @@ func (c *consul) extractDiff(old, new providers.CacheIterface) (add []*v2.Instan
 		// add & update events
 		for _, newIns := range new.List() {
 			// new cache has the instance in old cache
-			if oldIns := old.Get(newIns.InstanceId); oldIns != nil {
+			if oldIns := old.Get(providers.IdentityKey(newIns)); oldIns != nil {
 				// update events
 				if newIns.Reversion > oldIns.Reversion {
 					if ver := c.VerifyInstance(newIns); ver == nil {
@@ -308,7 +308,7 @@ func (c *consul) extractDiff(old, new providers.CacheIterface) (add []*v2.Instan
 		// delete events
 		for _, oldIns := range old.List() {
 			// old cache has the instance which not in new cache
-			if newIns := new.Get(oldIns.InstanceId); newIns == nil {
+			if newIns := new.Get(providers.IdentityKey(oldIns)); newIns == nil {
 				// delete events
 				oldIns.Status = providers.InstanceStatusOffline
 				oldIns.Enabled = false
@@ -478,9 +478,13 @@ func (c *consul) CompareAndFlush() {
 			}
 			return
 		}
-		remoteInstances := providers.ListToMap(registryList.GetInstance())
+		remoteInstances, remoteAmbiguous := providers.StrictListToMap(registryList.GetInstance())
 		// pp.Println(remoteInstances)
-		currentProviderInstances := providers.ListToMap(all)
+		currentProviderInstances, providerAmbiguous := providers.StrictListToMap(all)
+		if len(remoteAmbiguous) > 0 || len(providerAmbiguous) > 0 {
+			log.Logger.Errorf("%s: ambiguous instance identities; quarantining compare (remote=%v provider=%v)", c.providerName, remoteAmbiguous, providerAmbiguous)
+			return
+		}
 		log.Logger.Infof("discovery center online ecs instances size :%d  consul online instance size :%d  total :%d", len(remoteInstances), onlineCount, len(currentProviderInstances))
 		//bothExist,k8sExist two flag to notice
 		bothExist := false
@@ -488,7 +492,7 @@ func (c *consul) CompareAndFlush() {
 		registryExist := false
 		for consulKey, consulIns := range currentProviderInstances {
 			// For these instances in both Provider and the discovery center, if the information in Provider is newer, push is performed.
-			if servIns, exist := remoteInstances[consulKey]; exist {
+			if servIns := providers.LookupIdentity(remoteInstances, registryList.GetInstance(), consulIns); servIns != nil {
 				diff := false
 				// The R2 rule of dsca-3 §3.3, applied in nacos-reconcile
 				// mode: reversion is provider-owned monotonic state, not an
@@ -565,7 +569,7 @@ func (c *consul) CompareAndFlush() {
 					bothExist = true
 				}
 				delete(currentProviderInstances, consulKey)
-				delete(remoteInstances, consulKey)
+				delete(remoteInstances, providers.IdentityKey(servIns))
 			} else {
 				// For these instances in both Provider but not in the discovery center, the instance should be added to the discovery center.
 				log.Logger.Infof("consul match much id : %s, status: %d", consulIns.InstanceId, consulIns.Status)

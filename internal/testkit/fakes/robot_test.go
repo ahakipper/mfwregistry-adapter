@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"spotter/pkg/k8srobot"
 )
 
@@ -75,6 +77,44 @@ func TestFakeRobotSnapshotsCloneNestedObjectState(t *testing.T) {
 	again, _ := r.GetByKey(k8srobot.Pods, "ns/pod")
 	if again[0].(*nestedRobotObject).Labels["role"] != "api" {
 		t.Fatal("GetByKey returned internal nested state")
+	}
+}
+
+// TestRobotSameKeyDifferentClustersRemainDistinct protects the multi-cluster
+// lookup seam used by the Kubernetes event path. A same namespace/name is a
+// valid collision across clusters and each lookup must return an independent
+// DeepCopy rather than exposing the fixture's stored pod.
+func TestRobotSameKeyDifferentClustersRemainDistinct(t *testing.T) {
+	r := NewFakeRobot(4)
+	key := "ns/worker"
+	podA := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "worker", UID: "uid-a"}}
+	podB := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "worker", UID: "uid-b"}}
+	if !r.Enqueue(RobotEvent{ClusterID: "cluster-a", Namespace: "ns", Name: "worker", Object: podA, Type: k8srobot.EventAdd}) ||
+		!r.Enqueue(RobotEvent{ClusterID: "cluster-b", Namespace: "ns", Name: "worker", Object: podB, Type: k8srobot.EventAdd}) {
+		t.Fatal("failed to enqueue same-name pods from both clusters")
+	}
+	itemsA, ok := r.GetByClusterKey(k8srobot.Pods, "cluster-a", key)
+	if !ok || len(itemsA) != 1 {
+		t.Fatalf("cluster-a lookup = %#v, %v; want one pod", itemsA, ok)
+	}
+	itemsB, ok := r.GetByClusterKey(k8srobot.Pods, "cluster-b", key)
+	if !ok || len(itemsB) != 1 {
+		t.Fatalf("cluster-b lookup = %#v, %v; want one pod", itemsB, ok)
+	}
+	if got := string(itemsA[0].(*corev1.Pod).UID); got != "uid-a" {
+		t.Fatalf("cluster-a UID = %q, want uid-a", got)
+	}
+	if got := string(itemsB[0].(*corev1.Pod).UID); got != "uid-b" {
+		t.Fatalf("cluster-b UID = %q, want uid-b", got)
+	}
+	itemsA[0].(*corev1.Pod).Labels = map[string]string{"mutated": "true"}
+	itemsA[0].(*corev1.Pod).UID = "mutated"
+	againA, _ := r.GetByClusterKey(k8srobot.Pods, "cluster-a", key)
+	if got := string(againA[0].(*corev1.Pod).UID); got != "uid-a" {
+		t.Fatalf("cluster-a lookup leaked mutation, UID = %q", got)
+	}
+	if _, ok := r.GetByClusterKey(k8srobot.ResourceType("services"), "cluster-a", key); ok {
+		t.Fatal("non-Pod GetByClusterKey unexpectedly returned an object")
 	}
 }
 

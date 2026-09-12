@@ -86,6 +86,36 @@ func TestUnsyncedServiceRecordsQueueDepthBeforeRetry(t *testing.T) {
 	}
 }
 
+func TestRetryKeysDoNotMergeSamePodNameAcrossClusters(t *testing.T) {
+	items := []*instance.Instance{
+		{InstanceId: "pod-a", SourceKey: "cluster-a/uid-a", SourceCluster: "cluster-a", Reversion: 1},
+		{InstanceId: "pod-a", SourceKey: "cluster-b/uid-b", SourceCluster: "cluster-b", Reversion: 1},
+	}
+
+	plain := NewUnsyncedService(context.Background(), &fakes.FakeInstanceSink{PushErr: errors.New("retry")}, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+	plain.Add(1, items, nil)
+	if got := plain.Len(); got != 2 {
+		t.Fatalf("plain retry queue length = %d, want 2 distinct source identities", got)
+	}
+	seen := map[string]bool{}
+	for key, pending := range plain.store {
+		seen[key.InstanceID] = true
+		if pending == nil || pending.Instance == nil {
+			t.Fatalf("plain retry key %v has nil pending instance", key)
+		}
+	}
+	if !seen["cluster-a/uid-a"] || !seen["cluster-b/uid-b"] {
+		t.Fatalf("plain retry keys = %v, want both source keys", seen)
+	}
+
+	fanout := newTestFanout(t, &fakes.FakeInstanceSink{}, &fakes.FakeInstanceSink{PushErr: errors.New("nacos retry")})
+	perSink := NewUnsyncedService(context.Background(), fanout, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+	perSink.Add(1, items, []string{stubSinkNacos})
+	if got := perSink.Len(); got != 2 {
+		t.Fatalf("fanout retry queue length = %d, want 2 distinct source identities", got)
+	}
+}
+
 func TestWorkerPushAllAndGetAllDelegate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -154,6 +154,27 @@ func (r *fakeRobot) GetByKey(resource k8srobot.ResourceType, key string) ([]inte
 	return items, true
 }
 
+func (r *fakeRobot) GetByClusterKey(resource k8srobot.ResourceType, clusterID, key string) ([]interface{}, bool) {
+	if resource != k8srobot.Pods {
+		return nil, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	items, ok := r.byKey[clusterID+"\x00"+key]
+	if !ok || len(items) == 0 {
+		return nil, false
+	}
+	result := make([]interface{}, len(items))
+	for i, item := range items {
+		if pod, ok := item.(*corev1.Pod); ok && pod != nil {
+			result[i] = pod.DeepCopy()
+		} else {
+			result[i] = item
+		}
+	}
+	return result, true
+}
+
 // finishedCount returns the number of Finish calls (locked read).
 func (r *fakeRobot) finishedCount() int {
 	r.mu.Lock()
@@ -497,6 +518,50 @@ func TestPod2InstanceAddProducesInstanceAndCachesIt(t *testing.T) {
 	// A second add of identical data must not be reported: no diff, cache hit.
 	if again := k.pod2Instance(obj); again != nil {
 		t.Fatalf("pod2Instance(repeat add) = %#v, want nil (no diff)", again)
+	}
+}
+
+// TestK8SPod2InstanceUsesEventClusterNotItemsZero protects against
+// cross-cluster same-name collisions. The event's source cluster must select
+// the matching pod even when the other cluster's pod would sort first.
+func TestK8SPod2InstanceUsesEventClusterNotItemsZero(t *testing.T) {
+	podA := newValidPod("msp", "pod-a")
+	podA.UID = "uid-a"
+	podA.Status.PodIP = "172.17.0.10"
+	podB := newValidPod("msp", "pod-a")
+	podB.UID = "uid-b"
+	podB.Status.PodIP = "172.17.0.11"
+	robot := newFakeRobot(map[string][]interface{}{
+		"cluster-a\x00msp/pod-a": {podA},
+		"cluster-b\x00msp/pod-a": {podB},
+	}, nil, false)
+	k := newTestProvider(robot, &fakeWorker{})
+
+	obj := k8srobot.QueueObject{
+		RType:     k8srobot.Pods,
+		ClusterID: "cluster-b",
+		UID:       "uid-b",
+		Key:       "msp/pod-a",
+		Event:     k8srobot.EventAdd,
+	}
+	ins := k.pod2Instance(obj)
+	if ins == nil {
+		t.Fatal("pod2Instance(cluster-b event) = nil, want an instance")
+	}
+	if ins.Ip != podB.Status.PodIP || ins.SourceCluster != "cluster-b" || ins.SourceKey != "cluster-b/uid-b" {
+		t.Fatalf("converted instance = %#v, want cluster-b pod/identity", ins)
+	}
+
+	// A non-Pod object must be rejected without panicking, even when the
+	// lookup itself succeeds.
+	robot.byKey["cluster-c\x00msp/not-a-pod"] = []interface{}{struct{ Name string }{Name: "x"}}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("pod2Instance(non-Pod) panicked: %v", recovered)
+		}
+	}()
+	if got := k.pod2Instance(k8srobot.QueueObject{RType: k8srobot.Pods, ClusterID: "cluster-c", Key: "msp/not-a-pod", Event: k8srobot.EventAdd}); got != nil {
+		t.Fatalf("pod2Instance(non-Pod) = %#v, want nil", got)
 	}
 }
 

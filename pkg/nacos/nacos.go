@@ -669,6 +669,8 @@ const metadataSchemaVersion = "1"
 // upgrade").
 func metadataOf(ins *instance.Instance) map[string]string {
 	metadata := map[string]string{
+		"sourceKey":     ins.SourceKey,
+		"sourceCluster": ins.SourceCluster,
 		"instanceId":    ins.InstanceId,
 		"envType":       ins.EnvType,
 		"envGroup":      ins.EnvGroup,
@@ -713,20 +715,22 @@ func reconstruct(service string, host Host) *instance.Instance {
 		reversion = 0
 	}
 	ins := &instance.Instance{
-		InstanceId: host.Metadata["instanceId"],
-		AppCode:    service,
-		Ip:         host.IP,
-		Ports:      []*instance.PortInfo{{Port: int32(host.Port)}},
-		Provider:   cluster,
-		Cluster:    "", // never synthesized from clusterName (see the doc comment)
-		Enabled:    host.Enabled,
-		EnvType:    host.Metadata["envType"],
-		EnvGroup:   host.Metadata["envGroup"],
-		State:      host.Metadata["state"],
-		Idc:        host.Metadata["idc"],
-		Version:    host.Metadata["version"],
-		Reversion:  reversion,
-		Status:     status,
+		InstanceId:    host.Metadata["instanceId"],
+		SourceKey:     host.Metadata["sourceKey"],
+		SourceCluster: host.Metadata["sourceCluster"],
+		AppCode:       service,
+		Ip:            host.IP,
+		Ports:         []*instance.PortInfo{{Port: int32(host.Port)}},
+		Provider:      cluster,
+		Cluster:       "", // never synthesized from clusterName (see the doc comment)
+		Enabled:       host.Enabled,
+		EnvType:       host.Metadata["envType"],
+		EnvGroup:      host.Metadata["envGroup"],
+		State:         host.Metadata["state"],
+		Idc:           host.Metadata["idc"],
+		Version:       host.Metadata["version"],
+		Reversion:     reversion,
+		Status:        status,
 	}
 	if cpu, err := strconv.ParseFloat(host.Metadata["cpu"], 32); err == nil {
 		ins.Cpu = float32(cpu)

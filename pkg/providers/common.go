@@ -1,117 +1,181 @@
 package providers
 
 import (
-    "fmt"
-    "github.com/pkg/errors"
-    sv "spotter/pkg/beehive/service/v2"
-    "time"
+	"fmt"
+	"github.com/pkg/errors"
+	sv "spotter/pkg/beehive/service/v2"
+	"time"
 )
 
 const (
-    InstanceStatePending    = "pending"    // Instance not scheduled
-    InstanceStateStarting   = "starting"   // Instance is starting
-    InstanceStateProbing    = "probing"    //
-    InstanceStateOOM        = "oom"        // The instance is OOM Killed. This state may exist for a very short time
-    InstanceStateCrash      = "crash"      // Instance exited without code 0
-    InstanceStateRunning    = "running"    // Instance is running
-    InstanceStateError      = "error"      // Instance can not be stated. for instance: the start command path is incorrect
-    InstanceStateFailed     = "failed"     // Instance can not be created due to system error, such as: K8s kubelet cni configuration invalid.
-    InstanceStateTerminated = "terminated" // Instance is deleted.
-    InstanceStateEvicted    = "evicted"    // Instance has been evicted
-    InstanceStateUnknown    = "unknown"    //
+	InstanceStatePending    = "pending"    // Instance not scheduled
+	InstanceStateStarting   = "starting"   // Instance is starting
+	InstanceStateProbing    = "probing"    //
+	InstanceStateOOM        = "oom"        // The instance is OOM Killed. This state may exist for a very short time
+	InstanceStateCrash      = "crash"      // Instance exited without code 0
+	InstanceStateRunning    = "running"    // Instance is running
+	InstanceStateError      = "error"      // Instance can not be stated. for instance: the start command path is incorrect
+	InstanceStateFailed     = "failed"     // Instance can not be created due to system error, such as: K8s kubelet cni configuration invalid.
+	InstanceStateTerminated = "terminated" // Instance is deleted.
+	InstanceStateEvicted    = "evicted"    // Instance has been evicted
+	InstanceStateUnknown    = "unknown"    //
 )
 
 const (
-    InstanceStatusUnknown   = 0
-    InstanceStatusOnline    = 1 // Instance is online
-    InstanceStatusUnhealthy = 2 //
-    InstanceStatusOffline   = 3 // Instance is deleted
+	InstanceStatusUnknown   = 0
+	InstanceStatusOnline    = 1 // Instance is online
+	InstanceStatusUnhealthy = 2 //
+	InstanceStatusOffline   = 3 // Instance is deleted
 )
 
 const (
-    ProtoHTTP      = "http"
-    ProtoGRPC      = "grpc"
-    ProtoWebSocket = "websocket"
-    ProtoDubbo     = "dubbo"
-    PoolBenchSize  = 100
-    PoolExpireTime = 100
+	ProtoHTTP      = "http"
+	ProtoGRPC      = "grpc"
+	ProtoWebSocket = "websocket"
+	ProtoDubbo     = "dubbo"
+	PoolBenchSize  = 100
+	PoolExpireTime = 100
 )
 
 const (
-    ProviderK8s = "k8s"
-    ProviderEcs = "ecs"
+	ProviderK8s = "k8s"
+	ProviderEcs = "ecs"
 )
 
 const (
-    EnvDev     = "dev"
-    EnvTest    = "test"
-    EnvStaging = "staging"
-    EnvProduct = "product"
+	EnvDev     = "dev"
+	EnvTest    = "test"
+	EnvStaging = "staging"
+	EnvProduct = "product"
 )
 
 const (
-    InstanceCompatibilityLabelAosNamespace = "compatibility:aos_namespace"
-    InstanceCompatibilityLabelAosApp       = "compatibility:aos_app"     // Aos and Fengxiao had incompatibility issues with the app field in the label of the generated Pod from the beginning.
-    InstanceCompatibilityLabelAosDrHost    = "compatibility:aos_dr_host" // Used for gateways to generate DestinationRule rules adapted to Aos microservices.
-    InstanceCompatibilityLabelAosMark      = "compatibility:aos_mark"    // Used for Aos WebIDE
-    InstanceCompatibilityLabelEnvSan       = "env:san"
-    InstanceSpringApplicationName          = "spring.application.name"
+	InstanceCompatibilityLabelAosNamespace = "compatibility:aos_namespace"
+	InstanceCompatibilityLabelAosApp       = "compatibility:aos_app"     // Aos and Fengxiao had incompatibility issues with the app field in the label of the generated Pod from the beginning.
+	InstanceCompatibilityLabelAosDrHost    = "compatibility:aos_dr_host" // Used for gateways to generate DestinationRule rules adapted to Aos microservices.
+	InstanceCompatibilityLabelAosMark      = "compatibility:aos_mark"    // Used for Aos WebIDE
+	InstanceCompatibilityLabelEnvSan       = "env:san"
+	InstanceSpringApplicationName          = "spring.application.name"
 )
 
 const (
-    FullPushInterval = 21600 * time.Second
+	FullPushInterval = 21600 * time.Second
 )
 
 type RuntimeConfig struct {
-    Cpu          float32           `json:"cpu"`    // cpu size
-    Memory       int32             `json:"memory"` // memory size
-    Image        map[string]string `json:"image"`
-    Environments map[string]string `json:"environments"`
+	Cpu          float32           `json:"cpu"`    // cpu size
+	Memory       int32             `json:"memory"` // memory size
+	Image        map[string]string `json:"image"`
+	Environments map[string]string `json:"environments"`
 }
 
 type InstanceFilter func(ins *sv.Instance) error
 
 func ListToMap(ins []*sv.Instance) (m map[string]*sv.Instance) {
-    m = make(map[string]*sv.Instance)
-    for _, value := range ins {
-        m[value.InstanceId] = value
-    }
-    return
+	m = make(map[string]*sv.Instance)
+	for _, value := range ins {
+		key := IdentityKey(value)
+		if _, exists := m[key]; !exists {
+			m[key] = value
+		}
+	}
+	return
+}
+
+// StrictListToMap indexes instances by source identity and quarantines keys
+// that occur more than once. Callers that reconcile a provider snapshot must
+// treat the returned ambiguous keys as unsafe to compare.
+func StrictListToMap(ins []*sv.Instance) (map[string]*sv.Instance, []string) {
+	m := make(map[string]*sv.Instance)
+	seen := make(map[string]bool)
+	var ambiguous []string
+	for _, value := range ins {
+		if value == nil {
+			continue
+		}
+		key := IdentityKey(value)
+		if _, exists := m[key]; exists {
+			if !seen[key] {
+				ambiguous = append(ambiguous, key)
+				seen[key] = true
+			}
+			delete(m, key)
+			continue
+		}
+		if !seen[key] {
+			m[key] = value
+		}
+	}
+	return m, ambiguous
+}
+
+// LookupIdentity resolves a source identity and, for legacy snapshots lacking
+// source metadata, falls back to a unique wire InstanceId. The fallback is
+// disabled when either side contains duplicate wire IDs.
+func LookupIdentity(index map[string]*sv.Instance, items []*sv.Instance, target *sv.Instance) *sv.Instance {
+	if target == nil {
+		return nil
+	}
+	if value := index[IdentityKey(target)]; value != nil {
+		return value
+	}
+	if target.InstanceId == "" {
+		return nil
+	}
+	var match *sv.Instance
+	for _, item := range items {
+		if item == nil || item.InstanceId != target.InstanceId {
+			continue
+		}
+		if match != nil {
+			return nil
+		}
+		match = item
+	}
+	if match != nil && !legacyIdentity(target) && !legacyIdentity(match) {
+		return nil
+	}
+	return match
+}
+
+func legacyIdentity(item *sv.Instance) bool {
+	return item == nil || (item.SourceKey == "" && item.SourceCluster == "" &&
+		(item.Label == nil || (item.Label["sourceKey"] == "" && item.Label["sourceCluster"] == "")))
 }
 
 func InitInstanceFilters() (filters []InstanceFilter) {
-    filters = []InstanceFilter{}
-    // Init a default instance filter
-    filters = append(filters, func(ins *sv.Instance) error {
-        if ins == nil {
-            return errors.New("nil resource instance")
-        }
-        // Validate some fields that must not be empty.
-        // Note: Do not valid ins.Version as it may truly be empty.
-        if ins.AppCode == "" {
-            return errors.New("instance has nil appcode")
-        }
-        if ins.EnvType == "" {
-            return errors.New("instance has nil env type")
-        }
-        if ins.Status == InstanceStatusOnline && ins.Ip == "" {
-            return errors.New("instance has nil ip when it on online status")
-        }
-        // The following code block, in principle, should not exist. There is this code block,
-        // the purpose is to filter the scene where the state of the pod is pending in the early stage of creation.
-        // In this scenario, push action is not performed to reduce the pressure on Finder (database deadlock of Finder may occur)
-        if ins.State == InstanceStatePending {
-            return errors.New("instance has nil ip when it on heal check status and pending state")
-        }
-        if ins.Reversion == 0 {
-            return errors.New("instance has nil reversion")
-        }
-        if ins.Status == InstanceStatusUnknown {
-            return errors.New(fmt.Sprintf("instance has status unknown value: %d, may be the format process need to be performed", ins.Status))
-        }
+	filters = []InstanceFilter{}
+	// Init a default instance filter
+	filters = append(filters, func(ins *sv.Instance) error {
+		if ins == nil {
+			return errors.New("nil resource instance")
+		}
+		// Validate some fields that must not be empty.
+		// Note: Do not valid ins.Version as it may truly be empty.
+		if ins.AppCode == "" {
+			return errors.New("instance has nil appcode")
+		}
+		if ins.EnvType == "" {
+			return errors.New("instance has nil env type")
+		}
+		if ins.Status == InstanceStatusOnline && ins.Ip == "" {
+			return errors.New("instance has nil ip when it on online status")
+		}
+		// The following code block, in principle, should not exist. There is this code block,
+		// the purpose is to filter the scene where the state of the pod is pending in the early stage of creation.
+		// In this scenario, push action is not performed to reduce the pressure on Finder (database deadlock of Finder may occur)
+		if ins.State == InstanceStatePending {
+			return errors.New("instance has nil ip when it on heal check status and pending state")
+		}
+		if ins.Reversion == 0 {
+			return errors.New("instance has nil reversion")
+		}
+		if ins.Status == InstanceStatusUnknown {
+			return errors.New(fmt.Sprintf("instance has status unknown value: %d, may be the format process need to be performed", ins.Status))
+		}
 
-        return nil
-    })
+		return nil
+	})
 
-    return filters
+	return filters
 }

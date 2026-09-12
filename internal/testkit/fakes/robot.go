@@ -3,6 +3,7 @@ package fakes
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -88,17 +89,19 @@ func (r *FakeRobot) Enqueue(event RobotEvent) bool {
 	}
 	r.events = append(r.events, event)
 	key := event.Namespace + "/" + event.Name
+	storageKey := event.ClusterID + "\x00" + key
 	if event.Type == k8srobot.EventDelete {
-		delete(r.byKey, key)
+		delete(r.byKey, storageKey)
 	} else if event.Object != nil {
-		r.byKey[key] = []interface{}{cloneRobotObject(event.Object)}
+		r.byKey[storageKey] = []interface{}{cloneRobotObject(event.Object)}
 	} else {
 		// A metadata-only fixture still represents a live object for
 		// GetByKey assertions; production tests can provide a real *Pod via
 		// RobotEvent.Object when conversion is required.
-		r.byKey[key] = []interface{}{event}
+		r.byKey[storageKey] = []interface{}{event}
 	}
 	obj := k8srobot.QueueObject{RType: k8srobot.Pods, Key: key, Event: event.Type, CreateAt: event.CreateAt}
+	obj.ClusterID, obj.UID = event.ClusterID, event.UID
 	if obj.CreateAt.IsZero() {
 		obj.CreateAt = time.Unix(0, int64(len(r.events)))
 	}
@@ -228,8 +231,25 @@ func (r *FakeRobot) Finish(k8srobot.QueueObject) {}
 func (r *FakeRobot) GetByKey(_ k8srobot.ResourceType, key string) ([]interface{}, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	items, ok := r.byKey[key]
-	if !ok {
+	var result []interface{}
+	for stored, items := range r.byKey {
+		if strings.HasSuffix(stored, "\x00"+key) {
+			for _, item := range items {
+				result = append(result, cloneRobotObject(item))
+			}
+		}
+	}
+	return result, len(result) > 0
+}
+
+func (r *FakeRobot) GetByClusterKey(resource k8srobot.ResourceType, clusterID, key string) ([]interface{}, bool) {
+	if resource != k8srobot.Pods {
+		return nil, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	items, ok := r.byKey[clusterID+"\x00"+key]
+	if !ok || len(items) == 0 {
 		return nil, false
 	}
 	result := make([]interface{}, len(items))

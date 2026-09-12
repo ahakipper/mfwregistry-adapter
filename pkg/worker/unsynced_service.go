@@ -99,7 +99,7 @@ func (s *UnsyncedService) Add(triggerTime int64, instances []*instance.Instance,
 			continue
 		}
 		for _, sink := range targets {
-			key := retryKey{InstanceID: item.InstanceId, Sink: sink}
+			key := retryKey{InstanceID: instance.IdentityKey(item), Sink: sink}
 			if old, ok := s.store[key]; ok {
 				if item.Reversion > old.Instance.Reversion {
 					old.Instance = item

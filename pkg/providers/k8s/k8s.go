@@ -266,9 +266,27 @@ func (k *k8s) eventSync(ins *sv.Instance, triggerTime int64) {
 
 func (k *k8s) pod2Instance(obj k8srobot.QueueObject) (ins *sv.Instance) {
 	// get pod info from k8s robot
-	items, ok := k.robot.GetByKey(k8srobot.Pods, obj.Key)
+	items, ok := k.robot.GetByClusterKey(k8srobot.Pods, obj.ClusterID, obj.Key)
+	if obj.ClusterID == "" {
+		items, ok = k.robot.GetByKey(k8srobot.Pods, obj.Key)
+	}
+	if ok && len(items) == 1 && obj.UID != "" {
+		pod, valid := items[0].(*v1.Pod)
+		if !valid || string(pod.UID) != obj.UID {
+			ok = false
+		}
+	}
+	if len(items) > 1 {
+		return nil
+	} // ambiguous legacy lookup must never select another cluster
 	if ok && len(items) > 0 {
-		pod := items[0].(*v1.Pod)
+		if len(items) != 1 {
+			return nil
+		}
+		pod, valid := items[0].(*v1.Pod)
+		if !valid || pod == nil {
+			return nil
+		}
 		instance := formatInstance(&obj, pod)
 		if instance == nil {
 			log.Logger.Errorf("formatting instance to be nil, pod name: %s", pod.Name)
@@ -288,7 +306,7 @@ func (k *k8s) pod2Instance(obj k8srobot.QueueObject) (ins *sv.Instance) {
 		// the offline semantics of the CompareAndFlush case-3 branch, and let the diff flow
 		// deregister the instance that was actually registered.
 		if instance.Status == providers.InstanceStatusOffline && instance.Ip == "" {
-			cached := k.cache.Get(instance.InstanceId)
+			cached := k.cache.Get(providers.IdentityKey(instance))
 			if cached == nil || cached.Ip == "" {
 				log.Logger.Infof("drop offline instance %s with empty ip, nothing was registered downstream", instance.InstanceId)
 				return nil
@@ -300,7 +318,7 @@ func (k *k8s) pod2Instance(obj k8srobot.QueueObject) (ins *sv.Instance) {
 			merged.Reversion = instance.Reversion
 			instance = &merged
 		}
-		cacheInstance := k.cache.Get(instance.InstanceId)
+		cacheInstance := k.cache.Get(providers.IdentityKey(instance))
 		if cacheInstance == nil || k.hasInstanceDiff(cacheInstance, instance) {
 			// put all exist instance to cache, purpose for get cache don't make npe
 			k.ProcessCache(obj.Event, instance)
@@ -319,7 +337,11 @@ func (k *k8s) pod2Instance(obj k8srobot.QueueObject) (ins *sv.Instance) {
 		case k8srobot.EventDelete:
 			instanceId := k.obj2InstanceId(obj)
 			log.Logger.Infof("delete event, instanceid: %s", instanceId)
-			if instance := k.cache.Get(instanceId); instance != nil {
+			key := obj.ClusterID + "/" + obj.UID
+			if obj.ClusterID == "" || obj.UID == "" {
+				key = "k8s:" + instanceId
+			}
+			if instance := k.cache.Get(key); instance != nil {
 				if instance.Status != providers.InstanceStatusOffline {
 					// set instance status
 					instance.Status = providers.InstanceStatusOffline
@@ -441,8 +463,12 @@ func (k *k8s) CompareAndFlush() {
 			list.Instance = instances
 		}
 		// compare
-		servMap := providers.ListToMap(list.GetInstance())
-		k8sMap := providers.ListToMap(all)
+		servMap, servAmbiguous := providers.StrictListToMap(list.GetInstance())
+		k8sMap, k8sAmbiguous := providers.StrictListToMap(all)
+		if len(servAmbiguous) > 0 || len(k8sAmbiguous) > 0 {
+			log.Logger.Errorf("k8s: ambiguous instance identities; quarantining compare (remote=%v provider=%v)", servAmbiguous, k8sAmbiguous)
+			return
+		}
 		log.Logger.Infof("discovery center online k8s instances size :%d  k8s online instance size :%d  total :%d", len(servMap), onlineCount, len(k8sMap))
 		// bothExist,k8sExist two flag to notice
 		bothExist := false
@@ -451,7 +477,7 @@ func (k *k8s) CompareAndFlush() {
 		for k8sKey, k8sIns := range k8sMap {
 			// case1: instance is both in K8s and the discovery center.
 			// Instance data information to be pushed, subject to the data in K8s
-			if servIns, exist := servMap[k8sKey]; exist {
+			if servIns := providers.LookupIdentity(servMap, list.GetInstance(), k8sIns); servIns != nil {
 				diff := k.hasInstanceDiff(servIns, k8sIns)
 				// R2 (dsca-3 §3.3), nacos-reconcile mode only: reversion is
 				// provider-owned monotonic state, not an authority token —
@@ -484,7 +510,7 @@ func (k *k8s) CompareAndFlush() {
 					k.buildAndSendEvent(k8sIns)
 				}
 				delete(k8sMap, k8sKey)
-				delete(servMap, k8sKey)
+				delete(servMap, providers.IdentityKey(servIns))
 			} else {
 				// case2: instance is both in K8s, but not in the discovery center.
 				// Instance is newer than the discovery center, subject to the data in K8s
@@ -550,9 +576,22 @@ func (k *k8s) GetAll() (result []*sv.Instance) {
 	// nil one, so the worker/sink seam observes a well-formed batch.
 	result = []*sv.Instance{}
 	items := k.robot.List(k8srobot.Pods)
+	if source, ok := k.robot.(interface {
+		ListSourceObjects(k8srobot.ResourceType) []k8srobot.SourceObject
+	}); ok {
+		items = nil
+		for _, item := range source.ListSourceObjects(k8srobot.Pods) {
+			items = append(items, item)
+		}
+	}
 	for _, item := range items {
+		var obj *k8srobot.QueueObject
+		if source, ok := item.(k8srobot.SourceObject); ok {
+			obj = &source.QueueObject
+			item = source.Object
+		}
 		pod := item.(*v1.Pod)
-		instance := formatInstance(nil, pod)
+		instance := formatInstance(obj, pod)
 		if instance == nil {
 			continue
 		}

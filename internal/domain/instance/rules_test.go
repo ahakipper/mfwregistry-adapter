@@ -188,6 +188,34 @@ func TestListToMap(t *testing.T) {
 	}
 }
 
+func TestCompareThreeWayLegacyWireIDFallback(t *testing.T) {
+	provider := &Instance{InstanceId: "pod-a", Provider: "k8s", SourceKey: "cluster-a/pod-a"}
+	remote := &Instance{InstanceId: "pod-a"}
+	left, right, changed := CompareThreeWay([]*Instance{provider}, []*Instance{remote}, nil)
+	if len(left) != 0 || len(right) != 0 || len(changed) != 0 {
+		t.Fatalf("unique legacy wire id should match: left=%v right=%v changed=%v", left, right, changed)
+	}
+}
+
+func TestCompareThreeWayQuarantinesDuplicateLegacyWireID(t *testing.T) {
+	provider := &Instance{InstanceId: "pod-a", Provider: "k8s", SourceKey: "cluster-a/pod-a"}
+	remoteA := &Instance{InstanceId: "pod-a"}
+	remoteB := &Instance{InstanceId: "pod-a"}
+	left, right, _ := CompareThreeWay([]*Instance{provider}, []*Instance{remoteA, remoteB}, nil)
+	if len(left) != 1 || left[0] != provider || len(right) != 2 {
+		t.Fatalf("duplicate legacy id must not match: left=%v right=%v", left, right)
+	}
+}
+
+func TestExplicitSourceMismatchDoesNotFallback(t *testing.T) {
+	a := &Instance{InstanceId: "pod-a", SourceKey: "cluster-a/pod-a", SourceCluster: "cluster-a"}
+	b := &Instance{InstanceId: "pod-a", SourceKey: "cluster-b/pod-a", SourceCluster: "cluster-b"}
+	left, right, _ := CompareThreeWay([]*Instance{a}, []*Instance{b}, nil)
+	if len(left) != 1 || len(right) != 1 {
+		t.Fatalf("explicit source mismatch must remain separate: left=%d right=%d", len(left), len(right))
+	}
+}
+
 func TestInitInstanceFilters(t *testing.T) {
 	filters := InitInstanceFilters()
 	if len(filters) != 1 {
