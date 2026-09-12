@@ -584,6 +584,34 @@ func TestLoadNacosAddr(t *testing.T) {
 	}
 }
 
+func TestLoadNacosOptionsAreCarriedAndServerListIsTrimmed(t *testing.T) {
+	got, err := Load("test", Flags{
+		Providers:               []string{"k8s"},
+		NacosAddr:               "http://nacos-primary:8848",
+		NacosServerList:         []string{" nacos-a:8848 ", "", "nacos-b:8848"},
+		NacosNamespace:          "tenant-a",
+		NacosGroup:              "blue",
+		NacosUsername:           "operator",
+		NacosPassword:           "secret",
+		NacosAccessToken:        "token",
+		NacosCAFile:             "/tmp/nacos-ca.pem",
+		NacosServerName:         "nacos.internal",
+		NacosInsecureSkipVerify: true,
+		NacosTimeout:            17,
+	})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !reflect.DeepEqual(got.NacosServerList, []string{"nacos-a:8848", "nacos-b:8848"}) {
+		t.Fatalf("NacosServerList = %v, want trimmed ordered list", got.NacosServerList)
+	}
+	if got.NacosAddr != "http://nacos-primary:8848" || got.NacosNamespace != "tenant-a" || got.NacosGroup != "blue" ||
+		got.NacosUsername != "operator" || got.NacosPassword != "secret" || got.NacosAccessToken != "token" ||
+		got.NacosCAFile != "/tmp/nacos-ca.pem" || got.NacosServerName != "nacos.internal" || !got.NacosInsecureSkipVerify || got.NacosTimeout != 17 {
+		t.Fatalf("Nacos options not carried: %+v", got)
+	}
+}
+
 // TestLoadLocalSourceFlagsKeepPresetWhenEmpty: the additive local-source
 // flags of plan §8.4 — --kubeconfig, --consul-addr, --etcd-endpoints — must
 // be pure overrides: empty (the default) keeps every preset endpoint

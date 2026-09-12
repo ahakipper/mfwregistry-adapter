@@ -1,15 +1,14 @@
-// Package nacos is the Nacos InstanceSink adapter: a hand-rolled HTTP client
-// over the Nacos v1 OpenAPI (decision D4 of docs/nacos-sink-plan.md §7.2)
-// and the Sink that implements internal/ports.InstanceSink over it (§7.3).
-//
-// The client deliberately uses only net/http, net/url and encoding/json —
-// no SDK dependency, matching the repo's discoverycenter precedent: the
-// needed surface is a handful of endpoints, timeouts stay under our control,
-// and an httptest-based mock (internal/testkit/nacosmock) covers the tests.
+// Package nacos is the transitional Nacos InstanceSink adapter. It currently
+// exposes the Nacos v1 OpenAPI compatibility transport used by the migration
+// harness; the production default is scheduled to move to the official
+// nacos-sdk-go facade under remediation gate B3. The Sink implements
+// internal/ports.InstanceSink over that transport (§7.3).
 package nacos
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -30,11 +30,11 @@ const (
 	// RequestTimeout bounds every v1 OpenAPI request, matching the
 	// discoverycenter client precedent (client.go readTimeout).
 	RequestTimeout = 10 * time.Second
-	// DefaultGroup is the fixed group of the sink: serviceName alone
-	// addresses the app-code namespace (plan §7.3).
+	// DefaultGroup is the group used when no explicit ClientConfig group is
+	// supplied (the sink still supports a configured group).
 	DefaultGroup = "DEFAULT_GROUP"
-	// DefaultNamespaceID is the fixed namespace, `public` (non-default
-	// namespaces are a non-goal, plan §10).
+	// DefaultNamespaceID is the namespace used when no explicit ClientConfig
+	// namespace is supplied.
 	DefaultNamespaceID = "public"
 	// DefaultCluster is the cluster Nacos itself assumes when a request
 	// omits clusterName.
@@ -113,11 +113,37 @@ type ServicePage struct {
 	Doms  []string `json:"doms"`
 }
 
-// Client is a small net/http client for the Nacos v1 OpenAPI.
+// Client is the compatibility client for the Nacos v1 OpenAPI. It is kept
+// behind the Sink boundary so the B3 SDK facade can replace it without
+// changing provider/reconcile code.
 type Client struct {
-	baseURL *url.URL
-	http    *http.Client
-	logger  ports.Logger
+	baseURL  *url.URL
+	baseURLs []*url.URL
+	http     *http.Client
+	logger   ports.Logger
+	config   ClientConfig
+}
+
+// ClientConfig controls the HTTP compatibility transport used by the Nacos
+// sink. It is intentionally explicit so authentication and TLS settings are
+// never hidden in process globals or logged.
+type ClientConfig struct {
+	// ServerURL is the legacy single-address setting. When ServerURLs is
+	// non-empty it is ignored; list order is the failover order.
+	ServerURL string
+	// ServerURLs is an ordered list of Nacos addresses. Transport and 5xx
+	// failures advance to the next address; a 4xx is returned immediately.
+	ServerURLs         []string
+	NamespaceID        string
+	GroupName          string
+	Username           string
+	Password           string
+	AccessToken        string
+	CAFile             string
+	ServerName         string
+	InsecureSkipVerify bool
+	Timeout            time.Duration
+	MaxConnsPerHost    int
 }
 
 // Transport tuning constants (dsca-2 DS-2-4, fix design: "construct the
@@ -162,40 +188,99 @@ const (
 // second dials fresh (the measured 425-624 connections for 1000 concurrent
 // registers) and only 2 survive afterwards: connection churn on every
 // burst, re-paid on the next. The explicit transport sizes the idle pool
-// to the push concurrency and caps the total at the same number; the outer
-// RequestTimeout (10s) is preserved unchanged (it covers the body read,
-// which the per-request context does not).
+// to the push concurrency and caps the total at the same number; the
+// RequestTimeout fallback is used only when ClientConfig.Timeout is unset
+// (the configured timeout also covers response-body reads).
 func NewClient(addr string, logger ports.Logger) (*Client, error) {
-	if addr == "" {
+	return NewClientWithConfig(ClientConfig{ServerURL: addr}, logger)
+}
+
+// NewClientWithConfig creates a configured Nacos client. NewClient remains a
+// compatibility wrapper for existing callers.
+func NewClientWithConfig(cfg ClientConfig, logger ports.Logger) (*Client, error) {
+	addresses := append([]string(nil), cfg.ServerURLs...)
+	if len(addresses) == 0 && cfg.ServerURL != "" {
+		addresses = []string{cfg.ServerURL}
+	}
+	if len(addresses) == 0 {
 		return nil, errors.New("nacos: address is required")
 	}
-	if !strings.Contains(addr, "://") {
-		addr = "http://" + addr
-	}
-	parsed, err := url.Parse(addr)
-	if err != nil {
-		return nil, fmt.Errorf("nacos: invalid address %q: %w", addr, err)
-	}
-	if parsed.Scheme == "" || parsed.Host == "" {
-		return nil, fmt.Errorf("nacos: address %q is not an absolute http(s) URL", addr)
+	parsedURLs := make([]*url.URL, 0, len(addresses))
+	for _, address := range addresses {
+		addr := address
+		if !strings.Contains(addr, "://") {
+			addr = "http://" + addr
+		}
+		parsed, err := url.Parse(addr)
+		if err != nil {
+			return nil, fmt.Errorf("nacos: invalid address %q: %w", addr, err)
+		}
+		if parsed.Scheme == "" || parsed.Host == "" {
+			return nil, fmt.Errorf("nacos: address %q is not an absolute http(s) URL", addr)
+		}
+		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+			return nil, fmt.Errorf("nacos: unsupported URL scheme %q", parsed.Scheme)
+		}
+		if parsed.User != nil {
+			return nil, errors.New("nacos: credentials in URL are not allowed; use explicit client config")
+		}
+		for _, key := range []string{"username", "password", "accessToken"} {
+			if parsed.Query().Get(key) != "" {
+				return nil, fmt.Errorf("nacos: credential query parameter %q is not allowed", key)
+			}
+		}
+		parsedURLs = append(parsedURLs, parsed)
 	}
 	if logger == nil {
 		logger = ports.NopLogger{}
 	}
+	maxConns := cfg.MaxConnsPerHost
+	if maxConns < 1 {
+		maxConns = transportMaxConnsPerHost
+	}
+	rootCAs, err := loadRootCAs(cfg.CAFile)
+	if err != nil {
+		return nil, err
+	}
 	transport := &http.Transport{
 		MaxIdleConns:          transportMaxIdleConns,
 		MaxIdleConnsPerHost:   transportMaxIdleConnsPerHost,
-		MaxConnsPerHost:       transportMaxConnsPerHost,
+		MaxConnsPerHost:       maxConns,
 		IdleConnTimeout:       transportIdleConnTimeout,
 		DialContext:           (&net.Dialer{Timeout: transportDialTimeout}).DialContext,
 		TLSHandshakeTimeout:   transportTLSHandshakeTimeout,
 		ExpectContinueTimeout: 1 * time.Second,
+		TLSClientConfig:       &tls.Config{RootCAs: rootCAs, ServerName: cfg.ServerName, InsecureSkipVerify: cfg.InsecureSkipVerify}, // #nosec G402: explicit operator-controlled compatibility option
+	}
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = RequestTimeout
 	}
 	return &Client{
-		baseURL: parsed,
-		http:    &http.Client{Timeout: RequestTimeout, Transport: transport},
-		logger:  logger,
+		baseURL:  parsedURLs[0],
+		baseURLs: parsedURLs,
+		http:     &http.Client{Timeout: timeout, Transport: transport},
+		logger:   logger,
+		config:   cfg,
 	}, nil
+}
+
+func loadRootCAs(path string) (*x509.CertPool, error) {
+	if path == "" {
+		return nil, nil
+	}
+	pem, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("nacos: read CA file: %w", err)
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, errors.New("nacos: CA file contains no certificates")
+	}
+	return pool, nil
 }
 
 // CheckReadiness polls the console readiness endpoint once; it is the
@@ -216,6 +301,79 @@ func CheckReadiness(addr string, timeout time.Duration) error {
 		return fmt.Errorf("nacos: readiness check %s answered status %d", addr, response.StatusCode)
 	}
 	return nil
+}
+
+// CheckReadinessWithConfig performs the read side of the readiness gate with
+// the same configured transport and credentials as sink requests.
+func CheckReadinessWithConfig(cfg ClientConfig, logger ports.Logger) error {
+	c, err := NewClientWithConfig(cfg, logger)
+	if err != nil {
+		return err
+	}
+	var lastErr error
+	for _, base := range c.baseURLsOrPrimary() {
+		request, err := http.NewRequest(http.MethodGet, joinURL(base.String(), pathReadiness), nil)
+		if err != nil {
+			return fmt.Errorf("nacos: readiness request: %w", err)
+		}
+		values := request.URL.Query()
+		c.addAuth(values)
+		request.URL.RawQuery = values.Encode()
+		timeout := c.http.Timeout
+		if timeout <= 0 {
+			timeout = RequestTimeout
+		}
+		ctx, cancel := context.WithTimeout(request.Context(), timeout)
+		response, err := c.http.Do(request.WithContext(ctx))
+		if err != nil {
+			cancel()
+			lastErr = fmt.Errorf("nacos: readiness check via %s: %w", base.Host, err)
+			continue
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
+		_ = response.Body.Close()
+		cancel()
+		if response.StatusCode >= 500 {
+			lastErr = fmt.Errorf("nacos: readiness check via %s answered status %d", base.Host, response.StatusCode)
+			continue
+		}
+		if response.StatusCode != http.StatusOK {
+			return fmt.Errorf("nacos: readiness check answered status %d", response.StatusCode)
+		}
+		// Pin both canary operations to the address that passed the read
+		// probe. Retrying registration/cleanup against another server after a
+		// lost response could leave a canary behind on the first server.
+		probeClient := *c
+		probeClient.baseURL = base
+		probeClient.baseURLs = []*url.URL{base}
+		canary := InstanceParams{
+			ServiceName: fmt.Sprintf("__spotter_readiness_%d", time.Now().UnixNano()),
+			IP:          "127.0.0.1",
+			Port:        1,
+			ClusterName: "spotter-readiness",
+			GroupName:   c.config.GroupName,
+			NamespaceID: c.config.NamespaceID,
+			Enabled:     false,
+			Ephemeral:   false,
+			Metadata:    map[string]string{"spotterOwner": "spotter", "probe": "readiness"},
+		}
+		if err := probeClient.RegisterInstance(canary); err != nil {
+			c.logger.Errorf("nacos: readiness write probe register failed via %s: %s", base.Host, err)
+			return fmt.Errorf("nacos: readiness write probe: %w", err)
+		}
+		if err := probeClient.DeregisterInstance(canary); err != nil {
+			// The probe is persistent. A failed cleanup is both a startup
+			// failure and an operator-visible drift warning; never hide it by
+			// retrying another server where the canary may not exist.
+			c.logger.Warnf("nacos: readiness write probe cleanup failed via %s; persistent canary may remain: %s", base.Host, err)
+			return fmt.Errorf("nacos: readiness write probe cleanup: %w", err)
+		}
+		return nil
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return errors.New("nacos: no configured server addresses")
 }
 
 // RegisterInstance registers (upserts) one persistent instance.
@@ -243,7 +401,8 @@ func (c *Client) DeregisterInstance(params InstanceParams) error {
 // the controller but irrelevant under the NONE checker; they are sent as 0
 // and false. The controller does not read groupName; it is sent anyway to
 // match the client's always-address-the-fixed-group convention.
-// namespaceId is likewise sent explicitly (public). Success answers the same
+// namespaceId is likewise sent explicitly (the configured namespace, or
+// public by default). Success answers the same
 // plain-text "ok" as register, and the call is idempotent: repeating the PUT
 // re-writes the same configuration.
 //
@@ -263,7 +422,8 @@ func (c *Client) UpdateCluster(serviceName, clusterName string) error {
 	return c.doForm(http.MethodPut, pathCluster, values)
 }
 
-// ListInstances returns every instance of one service in DefaultGroup.
+// ListInstances returns every instance of one service in the configured
+// group/namespace (DefaultGroup/public when unset).
 // A service without instances yields an empty slice.
 //
 // Fidelity limit (the F8 root cause): the endpoint HIDES instances with
@@ -286,7 +446,7 @@ func (c *Client) ListInstances(serviceName string) ([]Host, error) {
 }
 
 // ListCatalogInstances returns every instance of one service and cluster in
-// DefaultGroup through the ADMIN catalog view (GET /nacos/v1/ns/catalog/
+// the configured group/namespace through the ADMIN catalog view (GET /nacos/v1/ns/catalog/
 // instances). Unlike ListInstances, the catalog lists instances with
 // enabled=false too, so the PushAll prune can see — and delete — the
 // disabled remote drift the instance list hides (the F8 fix). Pagination
@@ -336,8 +496,8 @@ func (c *Client) ListCatalogInstances(serviceName, clusterName string) ([]Host, 
 		maxServiceListPages, serviceName, clusterName)
 }
 
-// ListServices returns every service name of DefaultGroup, paginating the
-// service list until a short (or empty) page ends the iteration. pageSize
+// ListServices returns every service name of the configured group/namespace,
+// paginating the service list until a short (or empty) page ends the iteration. pageSize
 // is the requested page size (the plan's default loop uses 100).
 func (c *Client) ListServices(pageSize int) ([]string, error) {
 	if pageSize < 1 {
@@ -425,64 +585,124 @@ func (e *APIError) Permanent() bool {
 // query string — including on PUT, whose form body the v1 servlet does not
 // parse (see UpdateCluster).
 func (c *Client) doForm(method, path string, values url.Values) error {
-	target := joinURL(c.baseURL.String(), path)
-	target += "?" + values.Encode()
-
-	request, err := http.NewRequest(method, target, nil)
-	if err != nil {
-		return fmt.Errorf("nacos: build %s %s: %w", method, path, err)
+	c.addAuth(values)
+	var lastErr error
+	for _, base := range c.baseURLsOrPrimary() {
+		target := joinURL(base.String(), path) + "?" + values.Encode()
+		request, err := http.NewRequest(method, target, nil)
+		if err != nil {
+			return fmt.Errorf("nacos: build %s %s: %w", method, path, err)
+		}
+		timeout := c.http.Timeout
+		if timeout <= 0 {
+			timeout = RequestTimeout
+		}
+		ctx, cancel := context.WithTimeout(request.Context(), timeout)
+		response, err := c.http.Do(request.WithContext(ctx))
+		if err != nil {
+			cancel()
+			lastErr = fmt.Errorf("nacos: %s %s via %s: %w", method, path, base.Host, err)
+			continue
+		}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		_ = response.Body.Close()
+		cancel()
+		if readErr != nil {
+			lastErr = fmt.Errorf("nacos: %s %s: read body: %w", method, path, readErr)
+			continue
+		}
+		if response.StatusCode >= 500 {
+			lastErr = &APIError{Method: method, Path: path, Status: response.StatusCode, Body: truncateBody(body)}
+			continue
+		}
+		if response.StatusCode != http.StatusOK {
+			return &APIError{Method: method, Path: path, Status: response.StatusCode, Body: truncateBody(body)}
+		}
+		return nil
 	}
-	ctx, cancel := context.WithTimeout(request.Context(), RequestTimeout)
-	defer cancel()
-	request = request.WithContext(ctx)
-
-	response, err := c.http.Do(request)
-	if err != nil {
-		return fmt.Errorf("nacos: %s %s: %w", method, path, err)
+	if lastErr != nil {
+		return lastErr
 	}
-	defer func() { _ = response.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	if err != nil {
-		return fmt.Errorf("nacos: %s %s: read body: %w", method, path, err)
-	}
-	if response.StatusCode != http.StatusOK {
-		return &APIError{Method: method, Path: path, Status: response.StatusCode, Body: truncateBody(body)}
-	}
-	return nil
+	return errors.New("nacos: no configured server addresses")
 }
 
 // doJSON issues one read request and decodes the JSON response body into
 // out.
 func (c *Client) doJSON(method, path string, values url.Values, out interface{}) error {
-	target := joinURL(c.baseURL.String(), path)
-	if encoded := values.Encode(); encoded != "" {
-		target += "?" + encoded
+	c.addAuth(values)
+	var lastErr error
+	for _, base := range c.baseURLsOrPrimary() {
+		target := joinURL(base.String(), path)
+		if encoded := values.Encode(); encoded != "" {
+			target += "?" + encoded
+		}
+		request, err := http.NewRequest(method, target, nil)
+		if err != nil {
+			return fmt.Errorf("nacos: build %s %s: %w", method, path, err)
+		}
+		timeout := c.http.Timeout
+		if timeout <= 0 {
+			timeout = RequestTimeout
+		}
+		ctx, cancel := context.WithTimeout(request.Context(), timeout)
+		response, err := c.http.Do(request.WithContext(ctx))
+		if err != nil {
+			cancel()
+			lastErr = fmt.Errorf("nacos: %s %s via %s: %w", method, path, base.Host, err)
+			continue
+		}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		_ = response.Body.Close()
+		cancel()
+		if readErr != nil {
+			lastErr = fmt.Errorf("nacos: %s %s: read body: %w", method, path, readErr)
+			continue
+		}
+		if response.StatusCode >= 500 {
+			lastErr = &APIError{Method: method, Path: path, Status: response.StatusCode, Body: truncateBody(body)}
+			continue
+		}
+		if response.StatusCode != http.StatusOK {
+			return &APIError{Method: method, Path: path, Status: response.StatusCode, Body: truncateBody(body)}
+		}
+		if err := json.Unmarshal(body, out); err != nil {
+			return fmt.Errorf("nacos: %s %s: decode response: %w", method, path, err)
+		}
+		return nil
 	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return errors.New("nacos: no configured server addresses")
+}
 
-	request, err := http.NewRequest(method, target, nil)
-	if err != nil {
-		return fmt.Errorf("nacos: build %s %s: %w", method, path, err)
+func (c *Client) baseURLsOrPrimary() []*url.URL {
+	if len(c.baseURLs) > 0 {
+		return c.baseURLs
 	}
-	ctx, cancel := context.WithTimeout(request.Context(), RequestTimeout)
-	defer cancel()
-	request = request.WithContext(ctx)
-
-	response, err := c.http.Do(request)
-	if err != nil {
-		return fmt.Errorf("nacos: %s %s: %w", method, path, err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	if err != nil {
-		return fmt.Errorf("nacos: %s %s: read body: %w", method, path, err)
-	}
-	if response.StatusCode != http.StatusOK {
-		return &APIError{Method: method, Path: path, Status: response.StatusCode, Body: truncateBody(body)}
-	}
-	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("nacos: %s %s: decode response: %w", method, path, err)
+	if c.baseURL != nil {
+		return []*url.URL{c.baseURL}
 	}
 	return nil
+}
+
+func (c *Client) addAuth(values url.Values) {
+	if c.config.NamespaceID != "" {
+		values.Set("namespaceId", c.config.NamespaceID)
+	}
+	if c.config.GroupName != "" {
+		values.Set("groupName", c.config.GroupName)
+	}
+	if c.config.AccessToken != "" {
+		values.Set("accessToken", c.config.AccessToken)
+		return
+	}
+	if c.config.Username != "" {
+		values.Set("username", c.config.Username)
+	}
+	if c.config.Password != "" {
+		values.Set("password", c.config.Password)
+	}
 }
 
 // joinURL concatenates a base address and an endpoint path.

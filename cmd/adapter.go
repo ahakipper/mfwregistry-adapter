@@ -124,6 +124,16 @@ func init() {
 	// empty disables the Nacos sink, so the flag-empty binary behavior is
 	// exactly the pre-F5 one. Every flag above is untouched.
 	adapterCmd.Flags().StringP("nacos-addr", "", "", "the Nacos OpenAPI address, e.g. 127.0.0.1:18848; empty disables the Nacos sink")
+	adapterCmd.Flags().StringSlice("nacos-server-list", nil, "comma-separated Nacos server addresses for failover")
+	adapterCmd.Flags().String("nacos-namespace", "", "Nacos namespace ID")
+	adapterCmd.Flags().String("nacos-group", "", "Nacos group name")
+	adapterCmd.Flags().String("nacos-username", "", "Nacos username")
+	adapterCmd.Flags().String("nacos-password", "", "Nacos password")
+	adapterCmd.Flags().String("nacos-access-token", "", "Nacos access token")
+	adapterCmd.Flags().String("nacos-ca-file", "", "Nacos CA PEM file")
+	adapterCmd.Flags().String("nacos-server-name", "", "Nacos TLS server name")
+	adapterCmd.Flags().Bool("nacos-insecure-skip-verify", false, "skip Nacos TLS verification")
+	adapterCmd.Flags().Int("nacos-timeout", 0, "Nacos request timeout seconds")
 	// --reconcile-source is the additive dsca-3 §3.1 flag: it designates
 	// which registered fanout sink the periodic compare READS (the nacos
 	// sink under "nacos" — the nacos-authoritative reconcile). Empty keeps
@@ -150,20 +160,25 @@ func init() {
 // command line is honored instead of being coerced to the default.
 func adapterFlags(cmd *cobra.Command) infraconfig.Flags {
 	flags := infraconfig.Flags{
-		LogFilePath:        flagString(cmd, "log-file-path"),
-		LogSize:            flagInt(cmd, "log-maxsize"),
-		LogLevel:           flagInt(cmd, "log-level"),
-		LogBackups:         flagInt(cmd, "log-backup-number"),
-		LogAge:             flagInt(cmd, "log-age"),
-		LogToStd:           flagBool(cmd, "log-to-std"),
-		LogEncoding:        flagString(cmd, "log-encoding"),
-		PushAllInterval:    flagInt(cmd, "push-interval"),
-		GrpcAddr:           flagString(cmd, "grpc-addr"),
-		DisablePushWorker:  flagBool(cmd, "disable-worker"),
-		Providers:          flagStringSlice(cmd, "providers"),
-		PushAppCodes:       flagStringSlice(cmd, "appcodes"),
-		MetricsAddr:        flagString(cmd, "metrics-addr"),
-		NacosAddr:          flagString(cmd, "nacos-addr"),
+		LogFilePath:       flagString(cmd, "log-file-path"),
+		LogSize:           flagInt(cmd, "log-maxsize"),
+		LogLevel:          flagInt(cmd, "log-level"),
+		LogBackups:        flagInt(cmd, "log-backup-number"),
+		LogAge:            flagInt(cmd, "log-age"),
+		LogToStd:          flagBool(cmd, "log-to-std"),
+		LogEncoding:       flagString(cmd, "log-encoding"),
+		PushAllInterval:   flagInt(cmd, "push-interval"),
+		GrpcAddr:          flagString(cmd, "grpc-addr"),
+		DisablePushWorker: flagBool(cmd, "disable-worker"),
+		Providers:         flagStringSlice(cmd, "providers"),
+		PushAppCodes:      flagStringSlice(cmd, "appcodes"),
+		MetricsAddr:       flagString(cmd, "metrics-addr"),
+		NacosAddr:         flagString(cmd, "nacos-addr"), NacosServerList: flagStringSlice(cmd, "nacos-server-list"),
+		NacosNamespace: flagString(cmd, "nacos-namespace"), NacosGroup: flagString(cmd, "nacos-group"),
+		NacosUsername: flagString(cmd, "nacos-username"), NacosPassword: flagString(cmd, "nacos-password"),
+		NacosAccessToken: flagString(cmd, "nacos-access-token"), NacosCAFile: flagString(cmd, "nacos-ca-file"),
+		NacosServerName: flagString(cmd, "nacos-server-name"), NacosInsecureSkipVerify: flagBool(cmd, "nacos-insecure-skip-verify"),
+		NacosTimeout:       flagInt(cmd, "nacos-timeout"),
 		ReconcileSource:    flagString(cmd, "reconcile-source"),
 		KubeConfigPathFlag: flagStringSlice(cmd, "kubeconfig"),
 		ConsulAddrFlag:     flagStringSlice(cmd, "consul-addr"),
