@@ -1584,6 +1584,34 @@ func TestBlackboxSinkPruneSkipsForeignOwner(t *testing.T) {
 	}
 }
 
+func TestBlackboxSinkCustomGroupAndNamespaceRoundTripAndPrune(t *testing.T) {
+	server := nacosmock.Start()
+	defer server.Close()
+	sink, err := nacos.NewSinkWithConfig(nacos.ClientConfig{
+		ServerURL: server.URL(), NamespaceID: "tenant-a", GroupName: "blue",
+	}, &fakes.FakeLogger{})
+	if err != nil {
+		t.Fatalf("NewSinkWithConfig() error = %v", err)
+	}
+	server.SetInstancesInNamespace([]nacosmock.Host{{IP: "10.0.0.9", Port: 8080, Enabled: true,
+		Metadata: map[string]string{"instanceId": "stale"}}}, "tenant-a", "blue", "pay-user", "k8s")
+	desired := domainInstance("pod-a", "pay-user", "10.0.0.1", 8080, "k8s", instance.InstanceStatusOnline)
+	if err := sink.PushAll(1, []*instance.Instance{desired}); err != nil {
+		t.Fatalf("PushAll(custom scope) error = %v", err)
+	}
+	if got := server.Instances("pay-user", "k8s"); len(got) != 1 || got[0].IP != "10.0.0.1" {
+		t.Fatalf("custom scope instances = %v, want only desired host", got)
+	}
+	if cfg := server.ClusterConfigInNamespace("tenant-a", "pay-user", "blue", "k8s"); cfg == nil || cfg.HealthCheckerType != "NONE" {
+		t.Fatalf("custom scope cluster config = %+v, want NONE in tenant-a/blue", cfg)
+	}
+	for _, request := range server.Requests() {
+		if request.Query.Get("namespaceId") != "tenant-a" || request.Query.Get("groupName") != "blue" {
+			t.Fatalf("custom scope request %s %s = namespace=%q group=%q, want tenant-a/blue", request.Method, request.Path, request.Query.Get("namespaceId"), request.Query.Get("groupName"))
+		}
+	}
+}
+
 // -----------------------------------------------------------------------------
 // The nacos-authoritative reconcile source (dsca-3 §3.2 / §3.5)
 // -----------------------------------------------------------------------------

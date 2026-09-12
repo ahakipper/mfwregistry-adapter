@@ -131,8 +131,9 @@ func (s *Sink) pushInstances(instances []*instance.Instance) error {
 // cost (drift persists if spotter dies) is bounded by the retry queue and
 // the full-push prune.
 type Sink struct {
-	client *Client
-	logger ports.Logger
+	client    *Client
+	logger    ports.Logger
+	groupName string
 
 	// remembered (AUDIT-B-4) records every (service, cluster) pair the sink
 	// has ever pushed non-offline instances for — the pairs whose remote
@@ -239,13 +240,20 @@ func (s *Sink) PushAllOperation(op ports.RetryOperation) error {
 
 // NewSink creates a Nacos sink bound to addr. A nil logger is defaulted.
 func NewSink(addr string, logger ports.Logger) (*Sink, error) {
-	client, err := NewClient(addr, logger)
+	return NewSinkWithConfig(ClientConfig{ServerURL: addr}, logger)
+}
+
+// NewSinkWithConfig builds a sink with explicit namespace, credentials and
+// TLS settings while retaining the persistent-instance semantics.
+func NewSinkWithConfig(config ClientConfig, logger ports.Logger) (*Sink, error) {
+	client, err := NewClientWithConfig(config, logger)
 	if err != nil {
 		return nil, err
 	}
 	return &Sink{
 		client:            client,
 		logger:            client.logger,
+		groupName:         effectiveGroup(config.GroupName),
 		remembered:        map[clusterKeyOf]bool{},
 		healthCheckDone:   map[clusterKeyOf]bool{},
 		healthCheckClaims: map[clusterKeyOf]bool{},
@@ -332,7 +340,7 @@ func (s *Sink) prune(instances []*instance.Instance) error {
 		}
 		pushedClusters[key.cluster] = true
 		if ins.Status != instance.InstanceStatusOffline {
-			desired[key][compositeID(ins)] = true
+			desired[key][s.compositeID(ins)] = true
 		}
 	}
 
@@ -566,7 +574,7 @@ func (s *Sink) register(ins *instance.Instance) error {
 	if err != nil {
 		return fmt.Errorf("nacos: register %s: %w", ins.InstanceId, err)
 	}
-	s.logger.Infof("nacos: registered instance %s as %s", ins.InstanceId, compositeID(ins))
+	s.logger.Infof("nacos: registered instance %s as %s", ins.InstanceId, s.compositeID(ins))
 	s.ensureClusterHealthCheckDisabled(ins.AppCode, clusterOf(ins))
 	return nil
 }
@@ -681,7 +689,22 @@ func firstPort(ins *instance.Instance) int {
 // (ip#port#cluster#group@@service), the identity the prune compares remote
 // hosts against.
 func compositeID(ins *instance.Instance) string {
-	return fmt.Sprintf("%s#%d#%s#%s@@%s", ins.Ip, firstPort(ins), clusterOf(ins), DefaultGroup, ins.AppCode)
+	return compositeIDWithGroup(ins, DefaultGroup)
+}
+
+func effectiveGroup(group string) string {
+	if group == "" {
+		return DefaultGroup
+	}
+	return group
+}
+
+func compositeIDWithGroup(ins *instance.Instance, group string) string {
+	return fmt.Sprintf("%s#%d#%s#%s@@%s", ins.Ip, firstPort(ins), clusterOf(ins), effectiveGroup(group), ins.AppCode)
+}
+
+func (s *Sink) compositeID(ins *instance.Instance) string {
+	return compositeIDWithGroup(ins, s.groupName)
 }
 
 // metadataSchemaVersion is the metadata schema marker of dsca-5 §4.1

@@ -30,6 +30,16 @@ func newAdapterCommand() *cobra.Command {
 	cmd.Flags().StringSliceP("appcodes", "", []string{}, "only push instances of the appcodes")
 	cmd.Flags().StringP("metrics-addr", "", ":8090", "the Prometheus metrics address")
 	cmd.Flags().StringP("nacos-addr", "", "", "the Nacos OpenAPI address")
+	cmd.Flags().StringSlice("nacos-server-list", nil, "comma-separated Nacos server addresses")
+	cmd.Flags().String("nacos-namespace", "", "Nacos namespace ID")
+	cmd.Flags().String("nacos-group", "", "Nacos group name")
+	cmd.Flags().String("nacos-username", "", "Nacos username")
+	cmd.Flags().String("nacos-password", "", "Nacos password")
+	cmd.Flags().String("nacos-access-token", "", "Nacos access token")
+	cmd.Flags().String("nacos-ca-file", "", "Nacos CA file")
+	cmd.Flags().String("nacos-server-name", "", "Nacos TLS server name")
+	cmd.Flags().Bool("nacos-insecure-skip-verify", false, "skip Nacos TLS verification")
+	cmd.Flags().Int("nacos-timeout", 0, "Nacos timeout seconds")
 	cmd.Flags().StringSliceP("kubeconfig", "", []string{}, "comma-separated kubeconfig paths")
 	cmd.Flags().StringSliceP("consul-addr", "", []string{}, "comma-separated consul addresses")
 	cmd.Flags().StringSliceP("etcd-endpoints", "", []string{}, "comma-separated etcd endpoints")
@@ -61,6 +71,16 @@ func setFlag(t *testing.T, cmd *cobra.Command, name, value string) {
 func TestAdapterFlagsMapsEveryDemoFlag(t *testing.T) {
 	cmd := newAdapterCommand()
 	setFlag(t, cmd, "nacos-addr", "127.0.0.1:18848")
+	setFlag(t, cmd, "nacos-server-list", "nacos-a:8848,nacos-b:8848")
+	setFlag(t, cmd, "nacos-namespace", "tenant-a")
+	setFlag(t, cmd, "nacos-group", "blue")
+	setFlag(t, cmd, "nacos-username", "operator")
+	setFlag(t, cmd, "nacos-password", "secret")
+	setFlag(t, cmd, "nacos-access-token", "token")
+	setFlag(t, cmd, "nacos-ca-file", "/tmp/nacos-ca.pem")
+	setFlag(t, cmd, "nacos-server-name", "nacos.internal")
+	setFlag(t, cmd, "nacos-insecure-skip-verify", "true")
+	setFlag(t, cmd, "nacos-timeout", "17")
 	setFlag(t, cmd, "consul-addr", "127.0.0.1:18500")
 	setFlag(t, cmd, "kubeconfig", "/tmp/soak/kubeconfig")
 	setFlag(t, cmd, "etcd-endpoints", "127.0.0.1:12379")
@@ -78,6 +98,11 @@ func TestAdapterFlagsMapsEveryDemoFlag(t *testing.T) {
 
 	if flags.NacosAddr != "127.0.0.1:18848" {
 		t.Fatalf("NacosAddr = %q, want 127.0.0.1:18848", flags.NacosAddr)
+	}
+	if !reflect.DeepEqual(flags.NacosServerList, []string{"nacos-a:8848", "nacos-b:8848"}) || flags.NacosNamespace != "tenant-a" || flags.NacosGroup != "blue" ||
+		flags.NacosUsername != "operator" || flags.NacosPassword != "secret" || flags.NacosAccessToken != "token" || flags.NacosCAFile != "/tmp/nacos-ca.pem" ||
+		flags.NacosServerName != "nacos.internal" || !flags.NacosInsecureSkipVerify || flags.NacosTimeout != 17 {
+		t.Fatalf("Nacos options not mapped: %+v", flags)
 	}
 	if got := flags.ConsulAddrFlag; !reflect.DeepEqual(got, []string{"127.0.0.1:18500"}) {
 		t.Fatalf("ConsulAddrFlag = %v, want [127.0.0.1:18500]", got)

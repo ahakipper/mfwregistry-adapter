@@ -97,6 +97,45 @@ func TestBlackboxClientRegisterErrorPropagates(t *testing.T) {
 	}
 }
 
+func TestBlackboxClientServerListFailsOverOn5xx(t *testing.T) {
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer first.Close()
+	second := nacosmock.Start()
+	defer second.Close()
+	client, err := nacos.NewClientWithConfig(nacos.ClientConfig{ServerURLs: []string{first.URL, second.URL()}}, &fakes.FakeLogger{})
+	if err != nil {
+		t.Fatalf("NewClientWithConfig() error = %v", err)
+	}
+	if err := client.RegisterInstance(nacos.InstanceParams{ServiceName: "pay-user", IP: "10.0.0.1", Port: 8080, ClusterName: "k8s"}); err != nil {
+		t.Fatalf("RegisterInstance() failover error = %v", err)
+	}
+	if got := len(second.Instances("pay-user", "k8s")); got != 1 {
+		t.Fatalf("failover target instances = %d, want 1", got)
+	}
+}
+
+func TestBlackboxClientServerListStopsOn4xx(t *testing.T) {
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer first.Close()
+	second := nacosmock.Start()
+	defer second.Close()
+	client, err := nacos.NewClientWithConfig(nacos.ClientConfig{ServerURLs: []string{first.URL, second.URL()}}, &fakes.FakeLogger{})
+	if err != nil {
+		t.Fatalf("NewClientWithConfig() error = %v", err)
+	}
+	err = client.RegisterInstance(nacos.InstanceParams{ServiceName: "svc", IP: "10.0.0.1", Port: 80, ClusterName: "k8s"})
+	if err == nil {
+		t.Fatal("RegisterInstance() error = nil, want permanent 4xx")
+	}
+	if len(second.Requests()) != 0 {
+		t.Fatalf("4xx request unexpectedly failed over to second server: %#v", second.Requests())
+	}
+}
+
 func TestBlackboxClientDeregisterUsesCompositeIdParams(t *testing.T) {
 	client, server := newClientAt(t)
 
@@ -653,6 +692,32 @@ func TestBlackboxClientNewClientValidation(t *testing.T) {
 	if client == nil {
 		t.Fatal("NewClient(nil logger) = nil client")
 	}
+	for _, address := range []string{"http://user:pass@127.0.0.1:8848", "http://127.0.0.1:8848?username=u", "http://127.0.0.1:8848?password=p"} {
+		if _, err := nacos.NewClient(address, &fakes.FakeLogger{}); err == nil {
+			t.Fatalf("NewClient(%q) error = nil, want URL credentials rejected", address)
+		}
+	}
+}
+
+func TestClientConfigInjectsNamespaceGroupAndToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		for key, want := range map[string]string{"namespaceId": "tenant-a", "groupName": "blue", "accessToken": "secret-token"} {
+			if q.Get(key) != want {
+				t.Errorf("%s = %q, want %q", key, q.Get(key), want)
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+	c, err := nacos.NewClientWithConfig(nacos.ClientConfig{ServerURL: server.URL, NamespaceID: "tenant-a", GroupName: "blue", AccessToken: "secret-token"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RegisterInstance(nacos.InstanceParams{ServiceName: "svc", IP: "127.0.0.1", Port: 80}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestBlackboxClientNewClientDefaultsScheme(t *testing.T) {
@@ -700,6 +765,151 @@ func TestBlackboxClientDialHealthCheckReadiness(t *testing.T) {
 	}
 	if err := nacos.CheckReadiness("http://127.0.0.1:1", 100*time.Millisecond); err == nil {
 		t.Fatal("CheckReadiness(unreachable) error = nil, want an error")
+	}
+}
+
+func TestBlackboxClientReadinessIncludesWriteProbe(t *testing.T) {
+	server := nacosmock.Start()
+	defer server.Close()
+	if err := nacos.CheckReadinessWithConfig(nacos.ClientConfig{ServerURL: server.URL(), NamespaceID: "tenant-a", GroupName: "blue"}, &fakes.FakeLogger{}); err != nil {
+		t.Fatalf("CheckReadinessWithConfig() error = %v", err)
+	}
+	requests := server.Requests()
+	seenRead, seenRegister, seenDelete := false, false, false
+	canaryService := ""
+	for _, request := range requests {
+		switch {
+		case request.Method == "GET" && request.Path == "/nacos/v1/console/health/readiness":
+			seenRead = true
+		case request.Method == "POST" && request.Path == "/nacos/v1/ns/instance":
+			seenRegister = true
+			canaryService = request.Query.Get("serviceName")
+		case request.Method == "DELETE" && request.Path == "/nacos/v1/ns/instance":
+			seenDelete = true
+		}
+	}
+	if !seenRead || !seenRegister || !seenDelete {
+		t.Fatalf("readiness requests = %#v, want read/register/delete probe", requests)
+	}
+	for _, request := range requests {
+		if request.Method == "POST" || request.Method == "DELETE" {
+			if request.Query.Get("namespaceId") != "tenant-a" || request.Query.Get("groupName") != "blue" {
+				t.Fatalf("write probe scope = namespace=%q group=%q, want tenant-a/blue", request.Query.Get("namespaceId"), request.Query.Get("groupName"))
+			}
+		}
+	}
+	// A successful probe must leave no persistent canary behind.
+	if canaryService == "" {
+		t.Fatal("readiness register request did not include a canary service name")
+	}
+	if hosts := server.Instances(canaryService, ""); len(hosts) != 0 {
+		t.Fatalf("readiness canary remains after cleanup: %+v", hosts)
+	}
+}
+
+func TestBlackboxClientReadinessWriteFailureBlocksStartup(t *testing.T) {
+	server := nacosmock.Start()
+	defer server.Close()
+	server.SetEndpointStatus("/nacos/v1/ns/instance", http.StatusInternalServerError)
+	err := nacos.CheckReadinessWithConfig(nacos.ClientConfig{ServerURL: server.URL(), NamespaceID: "tenant-a", GroupName: "blue", Timeout: 250 * time.Millisecond}, &fakes.FakeLogger{})
+	if err == nil {
+		t.Fatal("CheckReadinessWithConfig() error = nil, want persistent write-probe failure")
+	}
+	requests := server.Requests()
+	if len(requests) != 2 || requests[0].Method != "GET" || requests[1].Method != "POST" {
+		t.Fatalf("readiness failure requests = %#v, want GET readiness then POST canary", requests)
+	}
+}
+
+func TestBlackboxClientReadinessPinsCanaryAddress(t *testing.T) {
+	first := nacosmock.Start()
+	defer first.Close()
+	second := nacosmock.Start()
+	defer second.Close()
+	if err := nacos.CheckReadinessWithConfig(nacos.ClientConfig{ServerURLs: []string{first.URL(), second.URL()}}, &fakes.FakeLogger{}); err != nil {
+		t.Fatalf("CheckReadinessWithConfig() error = %v", err)
+	}
+	firstWrites := 0
+	for _, request := range first.Requests() {
+		if request.Method == "POST" || request.Method == "DELETE" {
+			firstWrites++
+		}
+	}
+	if firstWrites != 2 {
+		t.Fatalf("first server canary writes = %d, want register+deregister", firstWrites)
+	}
+	for _, request := range second.Requests() {
+		if request.Method == "POST" || request.Method == "DELETE" {
+			t.Fatalf("second server received canary write after first passed: %#v", request)
+		}
+	}
+}
+
+func TestBlackboxClientConfigServerURLsTakePrecedence(t *testing.T) {
+	first := nacosmock.Start()
+	defer first.Close()
+	second := nacosmock.Start()
+	defer second.Close()
+	client, err := nacos.NewClientWithConfig(nacos.ClientConfig{ServerURL: second.URL(), ServerURLs: []string{first.URL()}}, &fakes.FakeLogger{})
+	if err != nil {
+		t.Fatalf("NewClientWithConfig() error = %v", err)
+	}
+	if err := client.RegisterInstance(nacos.InstanceParams{ServiceName: "svc", IP: "10.0.0.1", Port: 80, ClusterName: "k8s"}); err != nil {
+		t.Fatalf("RegisterInstance() error = %v", err)
+	}
+	if len(first.Requests()) != 1 || len(second.Requests()) != 0 {
+		t.Fatalf("ServerURLs precedence requests = first:%d second:%d, want 1/0", len(first.Requests()), len(second.Requests()))
+	}
+}
+
+func TestBlackboxClientConfigTimeoutOverridesFallback(t *testing.T) {
+	server := nacosmock.Start()
+	defer server.Close()
+	server.SetDelay(200 * time.Millisecond)
+	client, err := nacos.NewClientWithConfig(nacos.ClientConfig{ServerURL: server.URL(), Timeout: 25 * time.Millisecond}, &fakes.FakeLogger{})
+	if err != nil {
+		t.Fatalf("NewClientWithConfig() error = %v", err)
+	}
+	start := time.Now()
+	err = client.RegisterInstance(nacos.InstanceParams{ServiceName: "svc", IP: "10.0.0.1", Port: 80, ClusterName: "k8s"})
+	if err == nil {
+		t.Fatal("RegisterInstance() error = nil, want configured timeout")
+	}
+	if elapsed := time.Since(start); elapsed > 150*time.Millisecond {
+		t.Fatalf("configured timeout call took %s, want <150ms", elapsed)
+	}
+}
+
+func TestBlackboxClientConfigScopesEveryEndpoint(t *testing.T) {
+	server := nacosmock.Start()
+	defer server.Close()
+	client, err := nacos.NewClientWithConfig(nacos.ClientConfig{ServerURL: server.URL(), NamespaceID: "tenant-a", GroupName: "blue"}, &fakes.FakeLogger{})
+	if err != nil {
+		t.Fatalf("NewClientWithConfig() error = %v", err)
+	}
+	params := nacos.InstanceParams{ServiceName: "svc", IP: "10.0.0.1", Port: 80, ClusterName: "k8s"}
+	if err := client.RegisterInstance(params); err != nil {
+		t.Fatalf("RegisterInstance() error = %v", err)
+	}
+	if err := client.UpdateCluster("svc", "k8s"); err != nil {
+		t.Fatalf("UpdateCluster() error = %v", err)
+	}
+	if _, err := client.ListInstances("svc"); err != nil {
+		t.Fatalf("ListInstances() error = %v", err)
+	}
+	if _, err := client.ListCatalogInstances("svc", "k8s"); err != nil {
+		t.Fatalf("ListCatalogInstances() error = %v", err)
+	}
+	if _, err := client.ListServices(100); err != nil {
+		t.Fatalf("ListServices() error = %v", err)
+	}
+	if err := client.DeregisterInstance(params); err != nil {
+		t.Fatalf("DeregisterInstance() error = %v", err)
+	}
+	for _, request := range server.Requests() {
+		if request.Query.Get("namespaceId") != "tenant-a" || request.Query.Get("groupName") != "blue" {
+			t.Fatalf("endpoint %s %s scope = namespace=%q group=%q, want tenant-a/blue", request.Method, request.Path, request.Query.Get("namespaceId"), request.Query.Get("groupName"))
+		}
 	}
 }
 

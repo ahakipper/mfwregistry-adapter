@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -306,13 +307,17 @@ func (s *Server) startProviders() error {
 	// regression net).
 	sinks := []worker.NamedSink{{Name: worker.AtlasSinkName, Sink: registry}}
 	var nacosSink *nacos.Sink
-	if s.cfg.NacosAddr != "" {
-		if err := nacos.CheckReadiness(s.cfg.NacosAddr, nacos.RequestTimeout); err != nil {
+	if s.cfg.NacosAddr != "" || len(s.cfg.NacosServerList) > 0 {
+		nacosCfg := nacos.ClientConfig{ServerURL: s.cfg.NacosAddr, ServerURLs: s.cfg.NacosServerList, NamespaceID: s.cfg.NacosNamespace, GroupName: s.cfg.NacosGroup, Username: s.cfg.NacosUsername, Password: s.cfg.NacosPassword, AccessToken: s.cfg.NacosAccessToken, CAFile: s.cfg.NacosCAFile, ServerName: s.cfg.NacosServerName, InsecureSkipVerify: s.cfg.NacosInsecureSkipVerify}
+		if s.cfg.NacosTimeout > 0 {
+			nacosCfg.Timeout = time.Duration(s.cfg.NacosTimeout) * time.Second
+		}
+		if err := nacos.CheckReadinessWithConfig(nacosCfg, s.logger); err != nil {
 			cleanup()
 			s.clearStartup(generation, nil)
 			return errors.WithMessage(err, "nacos readiness check")
 		}
-		nacosSink, err = nacos.NewSink(s.cfg.NacosAddr, s.logger)
+		nacosSink, err = nacos.NewSinkWithConfig(nacosCfg, s.logger)
 		if err != nil {
 			cleanup()
 			s.clearStartup(generation, nil)
@@ -322,7 +327,15 @@ func (s *Server) startProviders() error {
 		// and its Close is a no-op; the fanout's cleanup below still calls
 		// registry.Close for the Atlas gRPC connection.
 		sinks = append(sinks, worker.NamedSink{Name: nacos.SinkName, Sink: nacosSink})
-		s.logger.Infof("nacos sink registered at %s (persistent instances, group %s)", s.cfg.NacosAddr, nacos.DefaultGroup)
+		address := s.cfg.NacosAddr
+		if address == "" && len(s.cfg.NacosServerList) > 0 {
+			address = strings.Join(s.cfg.NacosServerList, ",")
+		}
+		group := s.cfg.NacosGroup
+		if group == "" {
+			group = nacos.DefaultGroup
+		}
+		s.logger.Infof("nacos sink registered at %s (persistent instances, group %s)", address, group)
 	}
 	// NewFanoutSinkWithMetrics (not NewFanoutSink): the per-sink e2e
 	// decorator of dsca-2 §6 row 7 observes on the real recorder, so every

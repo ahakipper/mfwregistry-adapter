@@ -174,7 +174,17 @@ type Flags struct {
 	// http://127.0.0.1:18848); empty disables the Nacos sink (plan §7.6).
 	// A plain string: the empty default IS the legal "disabled" value, so
 	// no tri-state distinction is needed.
-	NacosAddr string
+	NacosAddr               string
+	NacosServerList         []string
+	NacosNamespace          string
+	NacosGroup              string
+	NacosUsername           string
+	NacosPassword           string
+	NacosAccessToken        string
+	NacosCAFile             string
+	NacosServerName         string
+	NacosInsecureSkipVerify bool
+	NacosTimeout            int
 	// ReconcileSource is the --reconcile-source flag (dsca-3 §3.1): the
 	// fanout sink NAME whose view the periodic compare reads ("nacos"
 	// designates the nacos sink). A plain string mirroring NacosAddr's
@@ -258,7 +268,17 @@ type Config struct {
 	// NacosAddr is the Nacos v1 OpenAPI base address; empty disables the
 	// Nacos sink, which keeps the pre-F5 behavior exactly (plan §7.6:
 	// --nacos-addr empty = a one-sink fanout, identical error surface).
-	NacosAddr string
+	NacosAddr               string
+	NacosServerList         []string
+	NacosNamespace          string
+	NacosGroup              string
+	NacosUsername           string
+	NacosPassword           string
+	NacosAccessToken        string
+	NacosCAFile             string
+	NacosServerName         string
+	NacosInsecureSkipVerify bool
+	NacosTimeout            int
 
 	// ReconcileSource is the fanout sink name whose view the periodic
 	// compare reads (dsca-3 §3.1); empty keeps the primary (Atlas) — the
@@ -376,6 +396,18 @@ func Load(env string, flags Flags) (Config, error) {
 	// default, no preset involvement), so the flag-empty path is exactly
 	// the pre-F5 configuration.
 	cfg.NacosAddr = strOrDefault(flags.NacosAddr, "")
+	if servers := cleanList(flags.NacosServerList); len(servers) > 0 {
+		cfg.NacosServerList = servers
+	}
+	cfg.NacosNamespace = flags.NacosNamespace
+	cfg.NacosGroup = flags.NacosGroup
+	cfg.NacosUsername = flags.NacosUsername
+	cfg.NacosPassword = flags.NacosPassword
+	cfg.NacosAccessToken = flags.NacosAccessToken
+	cfg.NacosCAFile = flags.NacosCAFile
+	cfg.NacosServerName = flags.NacosServerName
+	cfg.NacosInsecureSkipVerify = flags.NacosInsecureSkipVerify
+	cfg.NacosTimeout = flags.NacosTimeout
 
 	// Reconcile source: additive flag of dsca-3 §3.1 — empty means the
 	// primary (Atlas) stays the compare source (no default, no preset

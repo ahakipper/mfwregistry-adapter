@@ -845,7 +845,7 @@ func TestStartProvidersWiresEmptyIPShellSafely(t *testing.T) {
 func countNacosDeletes(requests []nacosmock.Request) int {
 	count := 0
 	for _, request := range requests {
-		if request.Method == "DELETE" && request.Path == "/nacos/v1/ns/instance" {
+		if request.Method == "DELETE" && request.Path == "/nacos/v1/ns/instance" && !strings.HasPrefix(request.Query.Get("serviceName"), "__spotter_readiness_") {
 			count++
 		}
 	}
@@ -857,7 +857,7 @@ func countNacosDeletes(requests []nacosmock.Request) int {
 func countNacosPosts(requests []nacosmock.Request) int {
 	count := 0
 	for _, request := range requests {
-		if request.Method == "POST" && request.Path == "/nacos/v1/ns/instance" {
+		if request.Method == "POST" && request.Path == "/nacos/v1/ns/instance" && !strings.HasPrefix(request.Query.Get("serviceName"), "__spotter_readiness_") {
 			count++
 		}
 	}
