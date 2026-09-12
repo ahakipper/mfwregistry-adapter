@@ -38,6 +38,12 @@
 `go test -tags=nacos_real ... -run TestNacosReal` 均可执行；后两类真实标签在
 未配置 endpoint 时按设计 SKIP/NOT VERIFIED，不能计作生产 PASS。
 
+尝试补充本地 scratch Nacos：拉取 `nacos/nacos-server:v2.1.0`
+（digest `sha256:dcf04549c6d768b2b7a50989e1c74ba201d28653f05eff58063b03de61216fcd`）
+并以临时容器 `mfw-nacos-gate` 启动；由于当前 Docker host 为 arm64、镜像为
+amd64，QEMU 下 Java 持续高 CPU 超过 5 分钟仍无 readiness 响应。容器已停止并
+删除，未产生残留；该结果归类为 EnvError/NOT VERIFIED，不替代真实 Nacos 证据。
+
 执行过的本地核验：
 
 - `make test-all`：通过。包括 race 单测、blackbox、5 个 smoke 用例和 `-tags=e2e` 测试。
