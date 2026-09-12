@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"spotter/internal/domain/instance"
+	"spotter/pkg/k8srobot"
 )
 
 func TestFakeLoggerAndNotifierCaptureConcurrentCalls(t *testing.T) {
@@ -157,6 +158,53 @@ func TestFakeInstanceSinkRecordsDeepCopiesAndErrors(t *testing.T) {
 	again, _ := sink.GetAll(nil, "")
 	if again.Instance[0].Label["key"] != "value" {
 		t.Fatal("GetAll returned internal storage")
+	}
+}
+
+func TestFakeInstanceSinkScriptAndOperationRecords(t *testing.T) {
+	sink := &FakeInstanceSink{}
+	sink.SetScript(
+		ScriptStep{Operation: SinkOperationPush, Mode: FailureSuccess},
+		ScriptStep{Operation: SinkOperationPushAll, Mode: FailureRetryable5xx},
+		ScriptStep{Operation: SinkOperationPushTo, Mode: FailureTimeout},
+	)
+	if err := sink.Push(1, nil); err != nil {
+		t.Fatalf("scripted Push error = %v, want nil", err)
+	}
+	if err := sink.PushAll(2, nil); err == nil {
+		t.Fatal("scripted PushAll succeeded, want retryable error")
+	}
+	if err := sink.PushTo("nacos", 3, nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("scripted PushTo error = %v, want deadline exceeded", err)
+	}
+	calls := sink.Calls()
+	if got := []SinkOperation{calls[0].Operation, calls[1].Operation, calls[2].Operation}; !reflect.DeepEqual(got, []SinkOperation{SinkOperationPush, SinkOperationPushAll, SinkOperationPushTo}) {
+		t.Fatalf("operations = %#v, want Push/PushAll/PushTo", got)
+	}
+}
+
+func TestFakeInstanceSinkPruneErrorAffectsPushAllOnly(t *testing.T) {
+	sink := &FakeInstanceSink{}
+	pruneErr := errors.New("catalog prune failed")
+	sink.SetPruneError(pruneErr)
+	if err := sink.Push(1, nil); err != nil {
+		t.Fatalf("Push error = %v, want nil", err)
+	}
+	if err := sink.PushAll(2, nil); !errors.Is(err, pruneErr) {
+		t.Fatalf("PushAll error = %v, want prune error", err)
+	}
+}
+
+func TestMultiClusterDeleteRecreateScriptPreservesUIDs(t *testing.T) {
+	events := MultiClusterDeleteRecreateScript("ns", "worker", "a", "b")
+	if len(events) != 6 {
+		t.Fatalf("events = %d, want 6", len(events))
+	}
+	if events[0].ClusterID == events[3].ClusterID || events[0].UID == events[3].UID {
+		t.Fatal("same-name events from different clusters were not distinguished")
+	}
+	if events[1].Type != k8srobot.EventDelete || events[2].Type != k8srobot.EventAdd || events[1].UID == events[2].UID {
+		t.Fatalf("delete/recreate sequence = %#v, want old UID delete then new UID add", events[:3])
 	}
 }
 

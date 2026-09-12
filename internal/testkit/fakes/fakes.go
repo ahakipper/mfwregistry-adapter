@@ -154,8 +154,52 @@ func (c *FakeClock) currentTimeLocked() time.Time {
 
 // InstanceSinkCall is one captured Push or PushAll invocation.
 type InstanceSinkCall struct {
+	Operation   SinkOperation
+	Sink        string
 	TriggerTime int64
 	Instances   []*instance.Instance
+	Err         error
+}
+
+// SinkOperation identifies the outbound operation captured by a fake sink.
+// PushTo is included even though it is a worker retry seam rather than part
+// of ports.InstanceSink; tests can therefore assert that retries preserve the
+// original operation instead of silently degrading to Push.
+type SinkOperation string
+
+const (
+	SinkOperationPush    SinkOperation = "Push"
+	SinkOperationPushAll SinkOperation = "PushAll"
+	SinkOperationPushTo  SinkOperation = "PushTo"
+)
+
+// FailureMode is a deterministic fault script entry for FakeInstanceSink.
+type FailureMode string
+
+const (
+	FailureSuccess      FailureMode = "success"
+	FailurePermanent4xx FailureMode = "4xx"
+	FailureRetryable5xx FailureMode = "5xx"
+	FailureTimeout      FailureMode = "timeout"
+	FailurePruneOnly    FailureMode = "prune-only"
+)
+
+// ScriptError is the typed error emitted by failure scripts. Permanent lets
+// worker retry tests exercise the same classification contract as nacos.APIError.
+type ScriptError struct {
+	Mode FailureMode
+}
+
+func (e ScriptError) Error() string { return fmt.Sprintf("fake sink: %s failure", e.Mode) }
+
+func (e ScriptError) Permanent() bool { return e.Mode == FailurePermanent4xx }
+
+// ScriptStep describes one response in the fake sink's per-operation script.
+// Error is optional; when omitted, a stable error is generated from Mode.
+type ScriptStep struct {
+	Operation SinkOperation
+	Mode      FailureMode
+	Err       error
 }
 
 // InstanceSinkGetAllCall is one captured GetAll invocation.
@@ -172,30 +216,51 @@ type FakeInstanceSink struct {
 	PushAllErr error
 	GetAllErr  error
 	RemoteList *instance.InstanceList
+	Script     []ScriptStep
+	PruneErr   error
 
 	pushCalls    []InstanceSinkCall
 	pushAllCalls []InstanceSinkCall
+	pushToCalls  []InstanceSinkCall
+	allCalls     []InstanceSinkCall
 	getAllCalls  []InstanceSinkGetAllCall
 }
 
 func (s *FakeInstanceSink) Push(triggerTime int64, instances []*instance.Instance) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pushCalls = append(s.pushCalls, InstanceSinkCall{
-		TriggerTime: triggerTime,
-		Instances:   cloneInstances(instances),
-	})
-	return s.PushErr
+	err := s.nextErrorLocked(SinkOperationPush, s.PushErr)
+	call := InstanceSinkCall{Operation: SinkOperationPush, TriggerTime: triggerTime, Instances: cloneInstances(instances), Err: err}
+	s.pushCalls = append(s.pushCalls, call)
+	s.allCalls = append(s.allCalls, call)
+	return err
 }
 
 func (s *FakeInstanceSink) PushAll(triggerTime int64, instances []*instance.Instance) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pushAllCalls = append(s.pushAllCalls, InstanceSinkCall{
-		TriggerTime: triggerTime,
-		Instances:   cloneInstances(instances),
-	})
-	return s.PushAllErr
+	fallback := s.PushAllErr
+	if fallback == nil {
+		fallback = s.PruneErr
+	}
+	err := s.nextErrorLocked(SinkOperationPushAll, fallback)
+	call := InstanceSinkCall{Operation: SinkOperationPushAll, TriggerTime: triggerTime, Instances: cloneInstances(instances), Err: err}
+	s.pushAllCalls = append(s.pushAllCalls, call)
+	s.allCalls = append(s.allCalls, call)
+	return err
+}
+
+// PushTo records a named retry dispatch. It is intentionally additive to the
+// ports.InstanceSink contract so the same fake can be used behind worker's
+// sinkFanout seam.
+func (s *FakeInstanceSink) PushTo(name string, triggerTime int64, instances []*instance.Instance) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err := s.nextErrorLocked(SinkOperationPushTo, nil)
+	call := InstanceSinkCall{Operation: SinkOperationPushTo, Sink: name, TriggerTime: triggerTime, Instances: cloneInstances(instances), Err: err}
+	s.pushToCalls = append(s.pushToCalls, call)
+	s.allCalls = append(s.allCalls, call)
+	return err
 }
 
 func (s *FakeInstanceSink) GetAll(statuses []int32, provider string) (*instance.InstanceList, error) {
@@ -217,6 +282,23 @@ func (s *FakeInstanceSink) SetErrors(pushErr, pushAllErr, getAllErr error) {
 	s.GetAllErr = getAllErr
 }
 
+// SetScript installs a FIFO fault script. Steps are consumed only when their
+// operation matches; unmatched operation calls continue to use SetErrors.
+func (s *FakeInstanceSink) SetScript(steps ...ScriptStep) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Script = append([]ScriptStep(nil), steps...)
+}
+
+// SetPruneError configures the error returned by PushAll after its normal
+// scripted response. It models a catalog/prune-only failure while allowing
+// per-instance Push calls to succeed.
+func (s *FakeInstanceSink) SetPruneError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.PruneErr = err
+}
+
 // SetRemoteList stores an independent copy for later GetAll calls.
 func (s *FakeInstanceSink) SetRemoteList(list *instance.InstanceList) {
 	s.mu.Lock()
@@ -236,6 +318,52 @@ func (s *FakeInstanceSink) PushAllCalls() []InstanceSinkCall {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return cloneSinkCalls(s.pushAllCalls)
+}
+
+// PushToCalls returns independent copies of captured named retry calls.
+func (s *FakeInstanceSink) PushToCalls() []InstanceSinkCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneSinkCalls(s.pushToCalls)
+}
+
+// Calls returns all outbound calls in operation order as observed by this
+// fake. PushTo calls are appended after the dedicated Push/PushAll slices;
+// use the operation field when asserting behavior.
+func (s *FakeInstanceSink) Calls() []InstanceSinkCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneSinkCalls(s.allCalls)
+}
+
+func (s *FakeInstanceSink) nextErrorLocked(operation SinkOperation, fallback error) error {
+	for i, step := range s.Script {
+		if step.Operation != "" && step.Operation != operation {
+			continue
+		}
+		s.Script = append(s.Script[:i], s.Script[i+1:]...)
+		if step.Err != nil {
+			return step.Err
+		}
+		switch step.Mode {
+		case FailureSuccess:
+			return nil
+		case FailurePermanent4xx:
+			return ScriptError{Mode: FailurePermanent4xx}
+		case FailureRetryable5xx:
+			return ScriptError{Mode: FailureRetryable5xx}
+		case FailureTimeout:
+			return context.DeadlineExceeded
+		case FailurePruneOnly:
+			if s.PruneErr != nil {
+				return s.PruneErr
+			}
+			return ScriptError{Mode: FailurePruneOnly}
+		default:
+			return fallback
+		}
+	}
+	return fallback
 }
 
 // GetAllCalls returns independent copies of captured GetAll calls.
@@ -725,8 +853,11 @@ func cloneSinkCalls(calls []InstanceSinkCall) []InstanceSinkCall {
 	result := make([]InstanceSinkCall, len(calls))
 	for i, call := range calls {
 		result[i] = InstanceSinkCall{
+			Operation:   call.Operation,
+			Sink:        call.Sink,
 			TriggerTime: call.TriggerTime,
 			Instances:   cloneInstances(call.Instances),
+			Err:         call.Err,
 		}
 	}
 	return result

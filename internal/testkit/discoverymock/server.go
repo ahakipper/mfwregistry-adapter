@@ -44,16 +44,23 @@ type Server struct {
 
 	responseCode int32
 	responseMsg  string
+	methodCodes  map[string]response
 	instances    []*instance.Instance
 	calls        []Call
+}
+
+type response struct {
+	code int32
+	msg  string
 }
 
 // Start starts an in-memory discovery-center gRPC server.
 func Start() (*Server, error) {
 	codec := &jsonCodec{}
 	server := &Server{
-		listener: bufconn.Listen(bufSize),
-		codec:    codec,
+		listener:    bufconn.Listen(bufSize),
+		codec:       codec,
+		methodCodes: make(map[string]response),
 	}
 	server.grpcServer = grpc.NewServer(grpc.CustomCodec(legacyCodec{codec: codec}))
 	server.grpcServer.RegisterService(&serviceDesc, server)
@@ -78,6 +85,7 @@ func StartTCP(addr string) (*Server, error) {
 	server := &Server{
 		codec:       codec,
 		tcpListener: listener,
+		methodCodes: make(map[string]response),
 	}
 	server.grpcServer = grpc.NewServer(grpc.CustomCodec(legacyCodec{codec: codec}))
 	server.grpcServer.RegisterService(&serviceDesc, server)
@@ -153,6 +161,19 @@ func (s *Server) SetResponseCode(code int32, msg string) {
 	s.responseCode = code
 	s.responseMsg = msg
 	s.mu.Unlock()
+}
+
+// SetMethodResponseCode overrides the response for one RPC method while
+// leaving the other methods on the server-wide response. An empty method or
+// code zero removes the override.
+func (s *Server) SetMethodResponseCode(method string, code int32, msg string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if method == "" || code == 0 {
+		delete(s.methodCodes, method)
+		return
+	}
+	s.methodCodes[method] = response{code: code, msg: msg}
 }
 
 // SetInstances replaces the instances returned by GetAllInstance.
@@ -298,11 +319,11 @@ func getAllInstanceHandler(srv interface{}, ctx context.Context, decode func(int
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(*Server).getAllInstance(request), nil
+		return srv.(*Server).getAllInstance(request)
 	}
 	info := &grpc.UnaryServerInfo{Server: srv, FullMethod: "/service.v2.InstanceService/GetAllInstance"}
 	handler := func(ctx context.Context, request interface{}) (interface{}, error) {
-		return srv.(*Server).getAllInstance(request.(*instance.GetAllInstancesRequest)), nil
+		return srv.(*Server).getAllInstance(request.(*instance.GetAllInstancesRequest))
 	}
 	return interceptor(ctx, request, info, handler)
 }
@@ -314,7 +335,11 @@ func (s *Server) synInstance(request *instance.SynInstancesRequest) *instance.Co
 	}
 	s.mu.Lock()
 	s.calls = append(s.calls, Call{Method: "SynInstance", Instances: cloneInstances(instances)})
-	response := &instance.CommonResponse{Code: s.responseCode, Msg: s.responseMsg}
+	code, msg := s.responseCode, s.responseMsg
+	if override, ok := s.methodCodes["SynInstance"]; ok {
+		code, msg = override.code, override.msg
+	}
+	response := &instance.CommonResponse{Code: code, Msg: msg}
 	s.mu.Unlock()
 	return response
 }
@@ -326,12 +351,16 @@ func (s *Server) synAllInstance(request *instance.SynAllInstancesRequest) *insta
 	}
 	s.mu.Lock()
 	s.calls = append(s.calls, Call{Method: "SynAllInstance", Instances: cloneInstances(instances)})
-	response := &instance.CommonResponse{Code: s.responseCode, Msg: s.responseMsg}
+	code, msg := s.responseCode, s.responseMsg
+	if override, ok := s.methodCodes["SynAllInstance"]; ok {
+		code, msg = override.code, override.msg
+	}
+	response := &instance.CommonResponse{Code: code, Msg: msg}
 	s.mu.Unlock()
 	return response
 }
 
-func (s *Server) getAllInstance(request *instance.GetAllInstancesRequest) *instance.InstanceList {
+func (s *Server) getAllInstance(request *instance.GetAllInstancesRequest) (*instance.InstanceList, error) {
 	var status int32
 	var provider string
 	if request != nil {
@@ -341,6 +370,10 @@ func (s *Server) getAllInstance(request *instance.GetAllInstancesRequest) *insta
 
 	s.mu.Lock()
 	s.calls = append(s.calls, Call{Method: "GetAllInstance", Status: status, Provider: provider})
+	if override, ok := s.methodCodes["GetAllInstance"]; ok && override.code != 0 {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("discoverymock: GetAllInstance injected status %d: %s", override.code, override.msg)
+	}
 	filtered := make([]*instance.Instance, 0, len(s.instances))
 	for _, item := range s.instances {
 		if item == nil || item.Status != status || (provider != "" && item.Provider != provider) {
@@ -349,7 +382,7 @@ func (s *Server) getAllInstance(request *instance.GetAllInstancesRequest) *insta
 		filtered = append(filtered, cloneInstance(item))
 	}
 	s.mu.Unlock()
-	return &instance.InstanceList{Instance: filtered}
+	return &instance.InstanceList{Instance: filtered}, nil
 }
 
 func cloneCalls(calls []Call) []Call {

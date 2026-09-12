@@ -61,6 +61,7 @@ type Host struct {
 	ClusterName string            `json:"clusterName"`
 	ServiceName string            `json:"serviceName"`
 	Metadata    map[string]string `json:"metadata"`
+	NamespaceID string            `json:"namespaceId,omitempty"`
 }
 
 // Instance is one stored instance, the state form of Host. Metadata is never
@@ -74,6 +75,7 @@ type Instance struct {
 	ClusterName string
 	GroupName   string
 	ServiceName string
+	NamespaceID string
 	Metadata    map[string]string
 }
 
@@ -96,6 +98,7 @@ func (i *Instance) host() Host {
 		ClusterName: i.ClusterName,
 		ServiceName: i.ServiceName,
 		Metadata:    cloneStringMap(i.Metadata),
+		NamespaceID: i.NamespaceID,
 	}
 }
 
@@ -111,6 +114,7 @@ func fromHost(group, service string, host Host) *Instance {
 		ClusterName: host.ClusterName,
 		GroupName:   group,
 		ServiceName: service,
+		NamespaceID: defaultNamespaceID,
 		Metadata:    cloneStringMap(host.Metadata),
 	}
 	if instance.ClusterName == "" {
@@ -134,27 +138,35 @@ func fromHost(group, service string, host Host) *Instance {
 // URL-encoded on the query string, exactly like the real v1 API — including
 // on PUT, whose form body the real servlet does not parse.
 type Server struct {
-	mu        sync.RWMutex
-	server    *httptest.Server
-	instances map[string]*Instance // keyed by composite id
-	clusters  map[clusterKey]*ClusterConfig
-	injected  int           // HTTP status injected on every endpoint; 0 = off
-	delay     time.Duration // injected per-request delay
-	requests  []Request
-	closeOnce sync.Once
+	mu             sync.RWMutex
+	server         *httptest.Server
+	instances      map[instanceKey]*Instance // keyed by namespace + composite id
+	clusters       map[clusterKey]*ClusterConfig
+	injected       int           // HTTP status injected on every endpoint; 0 = off
+	delay          time.Duration // injected per-request delay
+	endpointStatus map[string]int
+	endpointDelay  map[string]time.Duration
+	requests       []Request
+	closeOnce      sync.Once
 }
 
 // clusterKey is the (service, group, cluster) identity of one stored cluster
 // configuration.
 type clusterKey struct {
-	service string
-	group   string
-	cluster string
+	namespace string
+	service   string
+	group     string
+	cluster   string
+}
+
+type instanceKey struct {
+	namespace string
+	composite string
 }
 
 // Start starts a Nacos mock on a loopback-only HTTP listener.
 func Start() *Server {
-	s := &Server{instances: make(map[string]*Instance), clusters: make(map[clusterKey]*ClusterConfig)}
+	s := &Server{instances: make(map[instanceKey]*Instance), clusters: make(map[clusterKey]*ClusterConfig), endpointStatus: make(map[string]int), endpointDelay: make(map[string]time.Duration)}
 	s.server = httptest.NewServer(http.HandlerFunc(s.serveHTTP))
 	return s
 }
@@ -176,16 +188,30 @@ func (s *Server) Address() string {
 // several clusters of one service independently (the provider collision
 // shape); other services and clusters are untouched.
 func (s *Server) SetInstances(hosts []Host, group, service string, cluster string) {
-	stored := make(map[string]*Instance, len(hosts))
+	s.SetInstancesInNamespace(hosts, defaultNamespaceID, group, service, cluster)
+}
+
+// SetInstancesInNamespace replaces one scoped service state in a non-public
+// namespace. It is the namespace-aware companion to SetInstances.
+func (s *Server) SetInstancesInNamespace(hosts []Host, namespace, group, service, cluster string) {
+	if namespace == "" {
+		namespace = defaultNamespaceID
+	}
+	if group == "" {
+		group = defaultGroupName
+	}
+	stored := make(map[instanceKey]*Instance, len(hosts))
 	for _, host := range hosts {
 		host.ClusterName = cluster
+		host.NamespaceID = namespace
 		instance := fromHost(group, service, host)
-		stored[instance.InstanceID] = instance
+		instance.NamespaceID = namespace
+		stored[instanceKey{namespace: namespace, composite: instance.InstanceID}] = instance
 	}
 
 	s.mu.Lock()
 	for id, instance := range s.instances {
-		if instance.GroupName == group && instance.ServiceName == service && instance.ClusterName == cluster {
+		if instance.NamespaceID == namespace && instance.GroupName == group && instance.ServiceName == service && instance.ClusterName == cluster {
 			delete(s.instances, id)
 		}
 	}
@@ -234,12 +260,21 @@ func (s *Server) Requests() []Request {
 // (an empty group addresses the DEFAULT_GROUP, like the real server). The
 // snapshot is independent: mutating it does not corrupt the server's state.
 func (s *Server) ClusterConfig(service, group, cluster string) *ClusterConfig {
+	return s.ClusterConfigInNamespace(defaultNamespaceID, service, group, cluster)
+}
+
+// ClusterConfigInNamespace reads a cluster configuration without collapsing
+// same service/group/cluster names from different Nacos namespaces.
+func (s *Server) ClusterConfigInNamespace(namespace, service, group, cluster string) *ClusterConfig {
+	if namespace == "" {
+		namespace = defaultNamespaceID
+	}
 	if group == "" {
 		group = defaultGroupName
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	stored, ok := s.clusters[clusterKey{service: service, group: group, cluster: cluster}]
+	stored, ok := s.clusters[clusterKey{namespace: namespace, service: service, group: group, cluster: cluster}]
 	if !ok {
 		return nil
 	}
@@ -255,11 +290,53 @@ func (s *Server) SetStatus(status int) {
 	s.mu.Unlock()
 }
 
+// SetEndpointStatus injects a response status for one endpoint path. A zero
+// status removes the override and restores the global/default behavior.
+func (s *Server) SetEndpointStatus(path string, status int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if status == 0 {
+		delete(s.endpointStatus, path)
+		return
+	}
+	s.endpointStatus[path] = status
+}
+
+// SetListStatus injects only the instance/list read-view response.
+func (s *Server) SetListStatus(status int) { s.SetEndpointStatus("/nacos/v1/ns/instance/list", status) }
+
+// SetCatalogStatus injects only the catalog/prune read-view response.
+func (s *Server) SetCatalogStatus(status int) {
+	s.SetEndpointStatus("/nacos/v1/ns/catalog/instances", status)
+}
+
+// SetPruneStatus is an explicit alias for catalog failure injection.
+func (s *Server) SetPruneStatus(status int) { s.SetCatalogStatus(status) }
+
 // SetDelay injects a delay before every response, for client timeout tests.
 func (s *Server) SetDelay(delay time.Duration) {
 	s.mu.Lock()
 	s.delay = delay
 	s.mu.Unlock()
+}
+
+// SetEndpointDelay injects a delay for one endpoint path; zero removes it.
+func (s *Server) SetEndpointDelay(path string, delay time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if delay <= 0 {
+		delete(s.endpointDelay, path)
+		return
+	}
+	s.endpointDelay[path] = delay
+}
+
+func (s *Server) SetListDelay(delay time.Duration) {
+	s.SetEndpointDelay("/nacos/v1/ns/instance/list", delay)
+}
+
+func (s *Server) SetCatalogDelay(delay time.Duration) {
+	s.SetEndpointDelay("/nacos/v1/ns/catalog/instances", delay)
 }
 
 // Close stops the server. It is safe to call more than once.
@@ -273,6 +350,12 @@ func (s *Server) serveHTTP(w http.ResponseWriter, request *http.Request) {
 	s.mu.RLock()
 	injected := s.injected
 	delay := s.delay
+	if status, ok := s.endpointStatus[request.URL.Path]; ok {
+		injected = status
+	}
+	if endpointDelay, ok := s.endpointDelay[request.URL.Path]; ok {
+		delay = endpointDelay
+	}
 	s.mu.RUnlock()
 
 	if delay > 0 {
@@ -313,7 +396,7 @@ func (s *Server) serveInstance(w http.ResponseWriter, request *http.Request) {
 			return
 		}
 		s.mu.Lock()
-		s.instances[instance.InstanceID] = instance
+		s.instances[instanceKey{namespace: instance.NamespaceID, composite: instance.InstanceID}] = instance
 		s.mu.Unlock()
 		writeOK(w)
 		return
@@ -325,7 +408,15 @@ func (s *Server) serveInstance(w http.ResponseWriter, request *http.Request) {
 			return
 		}
 		s.mu.Lock()
-		delete(s.instances, id)
+		namespace := values.Get("namespaceId")
+		if namespace == "" {
+			namespace = defaultNamespaceID
+		}
+		for key, stored := range s.instances {
+			if key.composite == id && stored.NamespaceID == namespace {
+				delete(s.instances, key)
+			}
+		}
 		s.mu.Unlock()
 		writeOK(w)
 		return
@@ -408,7 +499,7 @@ func (s *Server) serveCluster(w http.ResponseWriter, request *http.Request) {
 		HealthCheckerType:     checker.Type,
 	}
 	s.mu.Lock()
-	s.clusters[clusterKey{service: service, group: group, cluster: cluster}] = config
+	s.clusters[clusterKey{namespace: namespace, service: service, group: group, cluster: cluster}] = config
 	s.mu.Unlock()
 	writeOK(w)
 }
@@ -433,11 +524,15 @@ func (s *Server) serveInstanceList(w http.ResponseWriter, request *http.Request)
 	if group == "" {
 		group = defaultGroupName
 	}
+	namespace := values.Get("namespaceId")
+	if namespace == "" {
+		namespace = defaultNamespaceID
+	}
 
 	s.mu.RLock()
 	hosts := make([]Host, 0, len(s.instances))
 	for _, instance := range s.instances {
-		if instance.ServiceName != service || instance.GroupName != group {
+		if instance.ServiceName != service || instance.GroupName != group || instance.NamespaceID != namespace {
 			continue
 		}
 		if !instance.Enabled {
@@ -491,11 +586,15 @@ func (s *Server) serveCatalogInstances(w http.ResponseWriter, request *http.Requ
 	if group == "" {
 		group = defaultGroupName
 	}
+	namespace := values.Get("namespaceId")
+	if namespace == "" {
+		namespace = defaultNamespaceID
+	}
 
 	s.mu.RLock()
 	hosts := make([]Host, 0, len(s.instances))
 	for _, instance := range s.instances {
-		if instance.ServiceName != service || instance.GroupName != group || instance.ClusterName != cluster {
+		if instance.ServiceName != service || instance.GroupName != group || instance.ClusterName != cluster || instance.NamespaceID != namespace {
 			continue
 		}
 		hosts = append(hosts, instance.host())
@@ -543,12 +642,16 @@ func (s *Server) serveServiceList(w http.ResponseWriter, request *http.Request) 
 	if group == "" {
 		group = defaultGroupName
 	}
+	namespace := values.Get("namespaceId")
+	if namespace == "" {
+		namespace = defaultNamespaceID
+	}
 
 	s.mu.RLock()
 	names := make([]string, 0, len(s.instances))
 	seen := make(map[string]struct{}, len(s.instances))
 	for _, instance := range s.instances {
-		if instance.GroupName != group {
+		if instance.GroupName != group || instance.NamespaceID != namespace {
 			continue
 		}
 		if _, ok := seen[instance.ServiceName]; ok {
@@ -608,6 +711,10 @@ func parseInstance(values url.Values) (*Instance, error) {
 	if group == "" {
 		group = defaultGroupName
 	}
+	namespace := values.Get("namespaceId")
+	if namespace == "" {
+		namespace = defaultNamespaceID
+	}
 	if group == "" {
 		group = "DEFAULT_GROUP"
 	}
@@ -627,6 +734,7 @@ func parseInstance(values url.Values) (*Instance, error) {
 		ClusterName: cluster,
 		GroupName:   group,
 		ServiceName: service,
+		NamespaceID: namespace,
 		Metadata:    metadata,
 	}
 	instance.InstanceID = instance.CompositeID()
