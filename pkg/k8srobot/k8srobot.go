@@ -17,10 +17,12 @@ package k8srobot
 
 import (
 	"container/list"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -65,16 +67,38 @@ type RN struct {
 
 // Cluster describes one Kubernetes cluster of the multi-cluster set.
 type Cluster struct {
+	ClusterID  string
 	ConfigPath string
 	Resources  []RN
 }
 
+func clusterIdentity(c Cluster) string {
+	if c.ClusterID != "" {
+		return c.ClusterID
+	}
+	path, err := filepath.Abs(c.ConfigPath)
+	if err != nil {
+		path = filepath.Clean(c.ConfigPath)
+	}
+	hash := sha256.Sum256([]byte(path))
+	return fmt.Sprintf("config-%x", hash[:8])
+}
+
 // QueueObject is the unit of work handed out by Pop().
 type QueueObject struct {
-	RType    ResourceType
-	Key      string // "<namespace>/<name>"
-	Event    EventType
-	CreateAt time.Time
+	RType     ResourceType
+	Key       string // "<namespace>/<name>"
+	ClusterID string
+	UID       string
+	Event     EventType
+	CreateAt  time.Time
+}
+
+func (obj QueueObject) identityKey() string {
+	if obj.ClusterID == "" && obj.UID == "" {
+		return obj.Key
+	}
+	return obj.ClusterID + "\x00" + obj.Key + "\x00" + obj.UID
 }
 
 // Robot is the multi-cluster watcher contract consumed by the providers.
@@ -91,6 +115,7 @@ type Robot interface {
 	Finish(obj QueueObject)
 	// GetByKey returns the objects stored under "<namespace>/<name>".
 	GetByKey(resource ResourceType, key string) ([]interface{}, bool)
+	GetByClusterKey(resource ResourceType, clusterID, key string) ([]interface{}, bool)
 	// List returns all objects of the given resource across all clusters.
 	List(resource ResourceType) []interface{}
 	// QueueDepth reports how many DISTINCT KEYS are currently queued — the
@@ -266,8 +291,15 @@ func (w *clusterWatcher) enqueue(event EventType, obj interface{}, queue *coales
 		return
 	}
 	item := QueueObject{
-		RType:    Pods,
-		Key:      pod.Namespace + "/" + pod.Name,
+		RType: Pods,
+		Key:   pod.Namespace + "/" + pod.Name,
+		ClusterID: func() string {
+			if w.cluster.ClusterID != "" {
+				return w.cluster.ClusterID
+			}
+			return clusterIdentity(w.cluster)
+		}(),
+		UID:      string(pod.UID),
 		Event:    event,
 		CreateAt: time.Now(),
 	}
@@ -381,6 +413,50 @@ func (r *robot) GetByKey(resource ResourceType, key string) ([]interface{}, bool
 	return items, true
 }
 
+// GetByClusterKey reads from exactly one source cluster.
+func (r *robot) GetByClusterKey(resource ResourceType, clusterID, key string) ([]interface{}, bool) {
+	if resource != Pods {
+		return nil, false
+	}
+	for _, w := range r.clusters {
+		id := w.cluster.ClusterID
+		if id == "" {
+			id = clusterIdentity(w.cluster)
+		}
+		if id != clusterID {
+			continue
+		}
+		if obj, exists, err := w.informer.GetIndexer().GetByKey(key); err == nil && exists {
+			return []interface{}{obj}, true
+		}
+		return nil, false
+	}
+	return nil, false
+}
+
+type SourceObject struct {
+	QueueObject
+	Object interface{}
+}
+
+// ListSourceObjects keeps cluster/UID identity alongside informer snapshots.
+func (r *robot) ListSourceObjects(resource ResourceType) []SourceObject {
+	if resource != Pods {
+		return nil
+	}
+	var result []SourceObject
+	for _, w := range r.clusters {
+		for _, item := range w.informer.GetIndexer().List() {
+			pod, ok := item.(*corev1.Pod)
+			if !ok {
+				continue
+			}
+			result = append(result, SourceObject{QueueObject: QueueObject{RType: Pods, Key: pod.Namespace + "/" + pod.Name, ClusterID: clusterIdentity(w.cluster), UID: string(pod.UID)}, Object: pod})
+		}
+	}
+	return result
+}
+
 // List returns all pods of every cluster store.
 func (r *robot) List(resource ResourceType) []interface{} {
 	if resource != Pods {
@@ -471,7 +547,7 @@ func newCoalescingQueue(capacity int) *coalescingQueue {
 // under-reports queue wait".
 func (q *coalescingQueue) Offer(item QueueObject) bool {
 	q.mu.Lock()
-	if existing, ok := q.items[item.Key]; ok {
+	if existing, ok := q.items[item.identityKey()]; ok {
 		// Supersede in place: the newest event wins, the FIFO position of
 		// the key is untouched, and the earliest CreateAt is kept.
 		if existing.event.CreateAt.Before(item.CreateAt) {
@@ -502,9 +578,9 @@ func (q *coalescingQueue) Offer(item QueueObject) bool {
 
 // insert places a NEW key's entry at the FIFO tail. Callers hold q.mu.
 func (q *coalescingQueue) insert(item QueueObject) {
-	entry := &queuedItem{key: item.Key, event: item}
+	entry := &queuedItem{key: item.identityKey(), event: item}
 	q.order.PushBack(entry)
-	q.items[item.Key] = entry
+	q.items[item.identityKey()] = entry
 }
 
 // pop dequeues the OLDEST queued key's coalesced event — removed from the
@@ -530,7 +606,7 @@ func (q *coalescingQueue) pop() (QueueObject, bool) {
 	for len(q.recovering) > 0 && len(q.items) < q.capacity {
 		item := q.recovering[0]
 		q.recovering = q.recovering[1:]
-		if _, queued := q.items[item.Key]; queued {
+		if _, queued := q.items[item.identityKey()]; queued {
 			continue // a later event of the key is already queued: skip
 		}
 		q.insert(item)

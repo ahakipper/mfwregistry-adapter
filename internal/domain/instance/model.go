@@ -2,30 +2,32 @@ package instance
 
 // Instance is the provider-independent instance model.
 type Instance struct {
-	InstanceId  string
-	Level       string
-	Ports       []*PortInfo
-	Ip          string
-	EnvCode     string
-	EnvType     string
-	EnvGroup    string
-	Cluster     string
-	Version     string
-	Enabled     bool
-	State       string
-	HealthState string
-	AppCode     string
-	Provider    string
-	Label       map[string]string
-	Hostname    string
-	Cpu         float32
-	Memory      int32
-	Disk        int32
-	Os          string
-	Image       map[string]string
-	Idc         string
-	Reversion   int64
-	Status      int32
+	SourceKey     string `json:"-"`
+	SourceCluster string `json:"-"`
+	InstanceId    string
+	Level         string
+	Ports         []*PortInfo
+	Ip            string
+	EnvCode       string
+	EnvType       string
+	EnvGroup      string
+	Cluster       string
+	Version       string
+	Enabled       bool
+	State         string
+	HealthState   string
+	AppCode       string
+	Provider      string
+	Label         map[string]string
+	Hostname      string
+	Cpu           float32
+	Memory        int32
+	Disk          int32
+	Os            string
+	Image         map[string]string
+	Idc           string
+	Reversion     int64
+	Status        int32
 }
 
 // PortInfo describes a network port exposed by an instance.

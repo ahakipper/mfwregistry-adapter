@@ -68,7 +68,7 @@ func ListToMap(ins []*Instance) map[string]*Instance {
 	m := make(map[string]*Instance)
 	for _, value := range ins {
 		if value != nil {
-			m[value.InstanceId] = value
+			m[IdentityKey(value)] = value
 		}
 	}
 	return m
@@ -146,12 +146,23 @@ func DiffEqualReversion(old, new *Instance) bool {
 func CompareThreeWay(provider, remote []*Instance, diff DiffPolicy) (providerOnly, remoteOnly, changed []*Instance) {
 	remoteByID := ListToMap(remote)
 	providerByID := ListToMap(provider)
+	// Legacy wire snapshots may omit SourceKey/Provider. Permit a fallback by
+	// InstanceId only when that wire id is unique on both sides; duplicates are
+	// quarantined to avoid cross-cluster false matches.
+	legacyRemote := uniqueWireIDs(remote)
+	legacyProvider := uniqueWireIDs(provider)
 
 	for _, current := range provider {
 		if current == nil {
 			continue
 		}
-		other, ok := remoteByID[current.InstanceId]
+		other, ok := remoteByID[IdentityKey(current)]
+		if !ok && legacyProvider[current.InstanceId] == current && legacyRemote[current.InstanceId] != nil {
+			candidate := legacyRemote[current.InstanceId]
+			if isLegacy(current) || isLegacy(candidate) {
+				other, ok = candidate, true
+			}
+		}
 		if !ok {
 			providerOnly = append(providerOnly, current)
 			continue
@@ -164,11 +175,32 @@ func CompareThreeWay(provider, remote []*Instance, diff DiffPolicy) (providerOnl
 		if current == nil {
 			continue
 		}
-		if _, ok := providerByID[current.InstanceId]; !ok {
+		if _, ok := providerByID[IdentityKey(current)]; !ok && !(legacyRemote[current.InstanceId] == current && legacyProvider[current.InstanceId] != nil && (isLegacy(current) || isLegacy(legacyProvider[current.InstanceId]))) {
 			remoteOnly = append(remoteOnly, current)
 		}
 	}
 	return providerOnly, remoteOnly, changed
+}
+
+func isLegacy(item *Instance) bool {
+	return item == nil || (item.SourceKey == "" && item.SourceCluster == "" && (item.Label == nil || (item.Label["sourceKey"] == "" && item.Label["sourceCluster"] == "")))
+}
+
+func uniqueWireIDs(items []*Instance) map[string]*Instance {
+	result := make(map[string]*Instance)
+	duplicates := make(map[string]bool)
+	for _, item := range items {
+		if item == nil || item.InstanceId == "" || duplicates[item.InstanceId] {
+			continue
+		}
+		if _, exists := result[item.InstanceId]; exists {
+			delete(result, item.InstanceId)
+			duplicates[item.InstanceId] = true
+			continue
+		}
+		result[item.InstanceId] = item
+	}
+	return result
 }
 
 // ComposeEnvCode builds the wire-format environment code.
