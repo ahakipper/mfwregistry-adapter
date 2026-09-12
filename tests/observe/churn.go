@@ -178,6 +178,14 @@ func (d *churnDriver) applyBatch(count, batchSize int, issuedAt time.Time) ([]st
 		pods = append(pods, pod{name: name, appCode: d.appCodeOf(idx - 1)})
 	}
 	d.applied += count
+	// Publish the mutation clock before kubectl changes the source. A watch
+	// tick can observe the object immediately after apply returns (or a delete
+	// immediately after the API accepts it); recording the ledger only after
+	// the command created a ledger-before-apply race and lost the tolerance
+	// window for that first tick.
+	for _, p := range pods {
+		d.ledger[p.name] = ledgerEntry{Op: "create", PodName: p.name, AppCode: p.appCode, IssuedAt: issuedAt}
+	}
 	d.mu.Unlock()
 
 	for start := 0; start < len(pods); start += batchSize {
@@ -194,11 +202,6 @@ func (d *churnDriver) applyBatch(count, batchSize int, issuedAt time.Time) ([]st
 			return nil, fmt.Errorf("apply batch (%d pods): %w", end-start, err)
 		}
 	}
-	d.mu.Lock()
-	for _, p := range pods {
-		d.ledger[p.name] = ledgerEntry{Op: "create", PodName: p.name, AppCode: p.appCode, IssuedAt: issuedAt}
-	}
-	d.mu.Unlock()
 	names := make([]string, 0, len(pods))
 	for _, p := range pods {
 		names = append(names, p.name)
@@ -213,9 +216,10 @@ func (d *churnDriver) deletePods(names []string, issuedAt time.Time) error {
 		return nil
 	}
 	args := append([]string{"delete", "pod", "--ignore-not-found=true", "--wait=false", "--"}, names...)
-	if _, err := d.kubectlStdin("", args...); err != nil {
-		return fmt.Errorf("delete pods (%d): %w", len(names), err)
-	}
+	// Publish delete clocks before issuing the API call so a concurrent
+	// observation cannot see the remote extra without its in-flight ledger
+	// entry. The entry remains useful even if kubectl reports an error; the
+	// caller aborts the run and the forensic record retains the attempted time.
 	d.mu.Lock()
 	for _, name := range names {
 		appCode := d.ledger[name].AppCode
@@ -223,6 +227,13 @@ func (d *churnDriver) deletePods(names []string, issuedAt time.Time) error {
 			appCode = d.appCodeOf(0)
 		}
 		d.ledger[name] = ledgerEntry{Op: "delete", PodName: name, AppCode: appCode, IssuedAt: issuedAt}
+	}
+	d.mu.Unlock()
+	if _, err := d.kubectlStdin("", args...); err != nil {
+		return fmt.Errorf("delete pods (%d): %w", len(names), err)
+	}
+	d.mu.Lock()
+	for range names {
 		d.applied--
 	}
 	d.mu.Unlock()

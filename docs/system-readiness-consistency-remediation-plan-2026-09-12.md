@@ -46,7 +46,7 @@
 - Nacos mock 不证明真实服务的 auth、TLS、namespace、Raft leaderless、版本差异和 write readiness。
 - Atlas discoverymock 使用 JSON codec，不证明生产 Atlas 接受 JSON 或接受当前 method path/字段布局。
 - `make test-observe` 默认依赖已存在的 kwok cluster/kubeconfig 和本地 Nacos image；当前 `tests/observe/stack.go` 只负责 Nacos 容器，不负责创建/删除 kwok cluster，不能称为完全自包含栈。
-- `tests/observe` 的 log slice 仍可能解析不到 zap JSON 内的 `ts`；burst ledger-before-apply 竞态已有结果证据但尚未修复。
+- `tests/observe` 的 log slice 曾可能解析不到 zap JSON 内的 `ts`；当前修复已支持 zap 字符串/数值和行首时间戳，并把 apply/delete ledger clock 提前到 API 调用前。完整 2h OBS 仍需在自包含环境重新执行，不能由本地单测替代。
 
 ### 2.3 E2E 是否可以开始
 
@@ -477,6 +477,8 @@ go test -tags=nacos_real -race ./tests/e2e/... -run 'TestNacosReal|TestNacosSDKR
 **验收：** 真实 Atlas 证据通过才可把该项标 PASS；真实验证命令固定为 `go test -tags=atlas_real ./tests/e2e/... -run TestAtlasReal -count=1`；该文件/标签未创建或 endpoint 不可用时，文档和启动日志都保持 NOT VERIFIED。提交 `B4`。
 
 ## 12. C1：补齐测试、边界和 E2E 门禁（P0/P1）
+
+**执行状态（2026-09-13）：** Observe harness 已完成本地 deterministic 修复：`logSlice` 解析 zap JSON `ts`（字符串、数值纳秒精度）及带前缀/普通行首时间戳；churn ledger 在 apply/delete API 调用前发布 mutation clock，避免 tick 先看到 source/remote 变化而没有 ledger。对应 `tests/observe` parser/engine tests 与 `-tags=observe` 编译门禁通过。完整 OBS-mini/OBS-full、kwok/Nacos/Atlas/etcd 自包含运行尚未执行，Consul 规模观察继续为 accepted non-goal。
 
 ### 12.1 新增负向测试矩阵
 
