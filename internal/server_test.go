@@ -20,6 +20,7 @@ import (
 	"spotter/internal/testkit/nacosmock"
 	v2 "spotter/pkg/beehive/service/v2"
 	"spotter/pkg/discoverycenter"
+	"spotter/pkg/nacos"
 	"spotter/pkg/providers"
 	"spotter/pkg/worker"
 )
@@ -655,6 +656,7 @@ func startProvidersWithNacosAddr(t *testing.T, nacosAddr string) (worker.Worker,
 			EnableLeaderElection: true,
 			MetricsAddr:          "127.0.0.1:0",
 			NacosAddr:            nacosAddr,
+			NacosTransport:       string(nacos.TransportHTTPCompat),
 		},
 		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
 			return discoverycenter.NewClient(noopDiscoveryService{}, nil, nil)
@@ -900,6 +902,7 @@ func startProvidersWithReconcileSource(t *testing.T, nacosAddr, reconcileSource 
 			EnableLeaderElection: true,
 			MetricsAddr:          "127.0.0.1:0",
 			NacosAddr:            nacosAddr,
+			NacosTransport:       string(nacos.TransportHTTPCompat),
 			ReconcileSource:      reconcileSource,
 		},
 		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {

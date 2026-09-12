@@ -598,6 +598,7 @@ func TestLoadNacosOptionsAreCarriedAndServerListIsTrimmed(t *testing.T) {
 		NacosServerName:         "nacos.internal",
 		NacosInsecureSkipVerify: true,
 		NacosTimeout:            17,
+		NacosTransport:          "http-compat",
 	})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -607,7 +608,7 @@ func TestLoadNacosOptionsAreCarriedAndServerListIsTrimmed(t *testing.T) {
 	}
 	if got.NacosAddr != "http://nacos-primary:8848" || got.NacosNamespace != "tenant-a" || got.NacosGroup != "blue" ||
 		got.NacosUsername != "operator" || got.NacosPassword != "secret" || got.NacosAccessToken != "token" ||
-		got.NacosCAFile != "/tmp/nacos-ca.pem" || got.NacosServerName != "nacos.internal" || !got.NacosInsecureSkipVerify || got.NacosTimeout != 17 {
+		got.NacosCAFile != "/tmp/nacos-ca.pem" || got.NacosServerName != "nacos.internal" || !got.NacosInsecureSkipVerify || got.NacosTimeout != 17 || got.NacosTransport != "http-compat" {
 		t.Fatalf("Nacos options not carried: %+v", got)
 	}
 }

@@ -356,6 +356,7 @@ type EventQueue interface {
 - `--nacos-ca-file`、`--nacos-insecure-skip-verify=false`；
 - `--nacos-readiness-probe=true|false`，生产默认 true；
 - `--nacos-server-list` 可选多地址，和原 `--nacos-addr` 保持兼容；
+- `--nacos-transport=sdk|http-compat`，默认 `sdk`；`http-compat` 仅限迁移回滚或显式测试；
 - `--reconcile-source nacos` 的配置校验和 owner scope 配置。
 
 ### 9.2 Client 行为
@@ -407,6 +408,10 @@ Nacos 运行状态机与队列动作：
 ### 10.1 已确认事实
 
 官方 Go SDK v2 支持 naming gRPC proxy；`BatchRegisterInstance` 走 gRPC；SDK 根据 `Ephemeral` 选择 persistent HTTP 或 ephemeral gRPC。当前仓库使用 persistent instance，因此直接引入 SDK 不会自动把现有单实例 register 变成 gRPC。SDK 能力存在不等于本仓库已经合规：当前 `pkg/nacos` 仍直接调用裸 HTTP，必须完成统一 SDK facade 和迁移门禁。
+
+**执行状态（2026-09-13，B3 SDK seam）：** 工作树已接入 `github.com/nacos-group/nacos-sdk-go/v2 v2.3.5`，新增 `TransportMode` 和 `sdkNamingFacade`。生产 server wiring 默认选择 `sdk`；`http-compat` 只允许显式测试/回滚。persistent register/deregister、SelectAll（含 disabled）、service list、subscribe/unsubscribe 通过官方 naming SDK；SDK 自动配置 gRPC 端口（server port + 1000）、namespace/group、username/password、TLS 和多 server list。由于该 SDK 未提供 catalog/prune、cluster Admin 和 console readiness 等价接口，这些能力暂时集中在显式、可审计的 HTTP compatibility adapter，不再散落在业务层；该例外仍需真实目标版本 Admin/Maintainer SDK 评估和 B3-G 到期决策。静态 access token 在 SDK 模式下 fail-closed（SDK v2.3.5 没有等价静态 token 配置），避免“配置看似生效但实际未认证”。
+
+**B3 发布判定：** SDK seam 与离线测试已通过，但生产门禁仍为 **NOT VERIFIED / REMAINING**。`go test -tags=nacos_sdk_eval ...` 与 `go test -tags=nacos_real ...` 在未提供 `NACOS_SERVER` 时只会 SKIP；必须在 scratch/pre-production Nacos 2.x 上补齐 query/list、subscribe、batch（persistent 明确不支持时保留 per-instance 证据）、catalog/prune、namespace/group、TLS/auth、重连/重启、错误恢复和最终集合 hash，才能关闭 `ID-NACOS-SDK-MANDATE`。
 
 本工作包的不可变约束：
 

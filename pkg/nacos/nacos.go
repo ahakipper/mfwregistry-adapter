@@ -240,11 +240,15 @@ func (s *Sink) PushAllOperation(op ports.RetryOperation) error {
 
 // NewSink creates a Nacos sink bound to addr. A nil logger is defaulted.
 func NewSink(addr string, logger ports.Logger) (*Sink, error) {
-	return NewSinkWithConfig(ClientConfig{ServerURL: addr}, logger)
+	// Deprecated: retained for legacy tests and the explicit HTTP rollback
+	// adapter. Production wiring uses NewSinkWithConfig with TransportSDK.
+	return NewSinkWithConfig(ClientConfig{ServerURL: addr, TransportMode: TransportHTTPCompat}, logger)
 }
 
 // NewSinkWithConfig builds a sink with explicit namespace, credentials and
-// TLS settings while retaining the persistent-instance semantics.
+// TLS settings while retaining the persistent-instance semantics. An empty
+// TransportMode resolves to the official SDK; callers that need the temporary
+// HTTP path must set TransportHTTPCompat explicitly.
 func NewSinkWithConfig(config ClientConfig, logger ports.Logger) (*Sink, error) {
 	client, err := NewClientWithConfig(config, logger)
 	if err != nil {
@@ -514,6 +518,9 @@ func (s *Sink) GetAll(statuses []int32, provider string) (*instance.InstanceList
 // this is a no-op kept for the construction/cleanup symmetry of the server
 // wiring (plan §6.5); it is safe to call repeatedly.
 func (s *Sink) Close() error {
+	if s.client != nil {
+		return s.client.Close()
+	}
 	return nil
 }
 

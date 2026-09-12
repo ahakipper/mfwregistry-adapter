@@ -40,6 +40,7 @@ func newAdapterCommand() *cobra.Command {
 	cmd.Flags().String("nacos-server-name", "", "Nacos TLS server name")
 	cmd.Flags().Bool("nacos-insecure-skip-verify", false, "skip Nacos TLS verification")
 	cmd.Flags().Int("nacos-timeout", 0, "Nacos timeout seconds")
+	cmd.Flags().String("nacos-transport", "sdk", "Nacos transport")
 	cmd.Flags().StringSliceP("kubeconfig", "", []string{}, "comma-separated kubeconfig paths")
 	cmd.Flags().StringSliceP("consul-addr", "", []string{}, "comma-separated consul addresses")
 	cmd.Flags().StringSliceP("etcd-endpoints", "", []string{}, "comma-separated etcd endpoints")
@@ -81,6 +82,7 @@ func TestAdapterFlagsMapsEveryDemoFlag(t *testing.T) {
 	setFlag(t, cmd, "nacos-server-name", "nacos.internal")
 	setFlag(t, cmd, "nacos-insecure-skip-verify", "true")
 	setFlag(t, cmd, "nacos-timeout", "17")
+	setFlag(t, cmd, "nacos-transport", "http-compat")
 	setFlag(t, cmd, "consul-addr", "127.0.0.1:18500")
 	setFlag(t, cmd, "kubeconfig", "/tmp/soak/kubeconfig")
 	setFlag(t, cmd, "etcd-endpoints", "127.0.0.1:12379")
@@ -101,7 +103,7 @@ func TestAdapterFlagsMapsEveryDemoFlag(t *testing.T) {
 	}
 	if !reflect.DeepEqual(flags.NacosServerList, []string{"nacos-a:8848", "nacos-b:8848"}) || flags.NacosNamespace != "tenant-a" || flags.NacosGroup != "blue" ||
 		flags.NacosUsername != "operator" || flags.NacosPassword != "secret" || flags.NacosAccessToken != "token" || flags.NacosCAFile != "/tmp/nacos-ca.pem" ||
-		flags.NacosServerName != "nacos.internal" || !flags.NacosInsecureSkipVerify || flags.NacosTimeout != 17 {
+		flags.NacosServerName != "nacos.internal" || !flags.NacosInsecureSkipVerify || flags.NacosTimeout != 17 || flags.NacosTransport != "http-compat" {
 		t.Fatalf("Nacos options not mapped: %+v", flags)
 	}
 	if got := flags.ConsulAddrFlag; !reflect.DeepEqual(got, []string{"127.0.0.1:18500"}) {

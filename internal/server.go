@@ -308,7 +308,27 @@ func (s *Server) startProviders() error {
 	sinks := []worker.NamedSink{{Name: worker.AtlasSinkName, Sink: registry}}
 	var nacosSink *nacos.Sink
 	if s.cfg.NacosAddr != "" || len(s.cfg.NacosServerList) > 0 {
-		nacosCfg := nacos.ClientConfig{ServerURL: s.cfg.NacosAddr, ServerURLs: s.cfg.NacosServerList, NamespaceID: s.cfg.NacosNamespace, GroupName: s.cfg.NacosGroup, Username: s.cfg.NacosUsername, Password: s.cfg.NacosPassword, AccessToken: s.cfg.NacosAccessToken, CAFile: s.cfg.NacosCAFile, ServerName: s.cfg.NacosServerName, InsecureSkipVerify: s.cfg.NacosInsecureSkipVerify}
+		transportMode := s.cfg.NacosTransport
+		if transportMode == "" {
+			transportMode = string(nacos.TransportSDK)
+		}
+		if transportMode != string(nacos.TransportSDK) && transportMode != string(nacos.TransportHTTPCompat) {
+			cleanup()
+			s.clearStartup(generation, nil)
+			return fmt.Errorf("unsupported Nacos transport %q (want %q or %q)", transportMode, nacos.TransportSDK, nacos.TransportHTTPCompat)
+		}
+		if transportMode == string(nacos.TransportHTTPCompat) {
+			address := s.cfg.NacosAddr
+			if address == "" && len(s.cfg.NacosServerList) > 0 {
+				address = strings.Join(s.cfg.NacosServerList, ",")
+			}
+			message := fmt.Sprintf("NON_PRODUCTION_COMPAT: Nacos http-compat transport is enabled for %s; use transport=sdk for production", address)
+			s.logger.Warnf("%s", message)
+			if s.notifier != nil {
+				s.notifier.Notify("Nacos compatibility transport enabled", message)
+			}
+		}
+		nacosCfg := nacos.ClientConfig{TransportMode: nacos.TransportMode(transportMode), ServerURL: s.cfg.NacosAddr, ServerURLs: s.cfg.NacosServerList, NamespaceID: s.cfg.NacosNamespace, GroupName: s.cfg.NacosGroup, Username: s.cfg.NacosUsername, Password: s.cfg.NacosPassword, AccessToken: s.cfg.NacosAccessToken, CAFile: s.cfg.NacosCAFile, ServerName: s.cfg.NacosServerName, InsecureSkipVerify: s.cfg.NacosInsecureSkipVerify}
 		if s.cfg.NacosTimeout > 0 {
 			nacosCfg.Timeout = time.Duration(s.cfg.NacosTimeout) * time.Second
 		}
