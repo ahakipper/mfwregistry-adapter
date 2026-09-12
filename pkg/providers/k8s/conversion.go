@@ -66,11 +66,16 @@ func formatInstance(obj *k8srobot.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
 	}
 	// filter appcodes
 	if config.PushAppCodes != nil {
+		allowed := false
 		for _, code := range config.PushAppCodes {
-			if appCode != code {
-				log.Logger.Warnf("invalid instance, the appcode referenced of the pod is not allowed to push, the allowed appcodes is: %s", strings.Join(config.PushAppCodes, ","))
-				return nil
+			if appCode == code {
+				allowed = true
+				break
 			}
+		}
+		if !allowed {
+			log.Logger.Warnf("invalid instance, the appcode referenced of the pod is not allowed to push, the allowed appcodes is: %s", strings.Join(config.PushAppCodes, ","))
+			return nil
 		}
 	}
 	state := formatState(pod)

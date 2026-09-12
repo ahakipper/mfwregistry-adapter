@@ -1,8 +1,8 @@
 # spotter 当前工程就绪度与一致性闭环审计
 
-**审计日期：** 2026-09-12  
+**审计日期：** 2026-09-12（当前状态增量更新至 2026-09-13）
 **仓库：** `/Users/d-robotics/go/src/github.com/ahakipper/mfwregistry-adapter`  
-**分支/提交：** `refactor/all` / `838ad19`  
+**分支/提交：** `refactor/all` / `649ce2c`
 **文档状态：** FINAL（已完成第二轮独立 reviewer 复核）
 
 本文是对当前工程的一次总盘点，作为后续全面优化的主要参考。它把已有设计文档、当前代码、测试结果和已提交的观察产物放在同一份证据链中；结论优先以当前工作树和实际命令输出为准，不以旧文档中的历史基线为准。
@@ -15,6 +15,28 @@
 2. Nacos Sink 的 HTTP 功能、错误与重试、全量清理、鉴权/namespace 边界，以及官方 Go SDK 的 gRPC 能力。
 3. `K8s Watch → k8srobot 队列 → provider cache/diff → worker/Fanout → Sink` 的数据路径和并发/丢失风险。
 4. `CompareAndFlush/PushAll/GetAll` 与 Sink 的闭环，包括新增、更新、删除、漂移、错误和空源场景。
+
+## 当前状态增量（2026-09-13）
+
+以下结论覆盖原始 `838ad19` 审计之后的阶段提交，优先级高于下方保留的
+历史证据表：
+
+| 领域 | 当前判定 | 已完成/仍缺口 |
+|---|---|---|
+| A0–A3 身份、顺序、全量重试 | **IMPLEMENTED / TESTED** | source-aware identity、keyed per-identity gate、typed full retry、revalidation、tombstone scope 已提交；仍需真实 2h/生产观测验证。 |
+| K8s cache/worker | **IMPLEMENTED / RACE-TESTED** | cache pointer swap 与 stop-state 竞态已修复；`--appcodes` 多值 membership、full SyncAll metadata、cross-provider tombstone 已修复；ants pool overload 现在 nonblocking 并计数 drop。 |
+| Nacos naming | **SDK DEFAULT / REAL EVIDENCE PENDING** | 官方 SDK v2.3.5 facade 已接入，生产默认 `sdk`；catalog/prune、cluster Admin、readiness 仍是有 owner/expiry 的 HTTP compatibility exceptions。 |
+| Atlas wire | **NOT VERIFIED (P1)** | JSON mirror + guarded `atlas_real` harness；真实 protobuf/JSON、TLS/auth/method path 仍待 scratch。 |
+| Observe | **HARNESS FIXED / 2H NOT RUN** | zap `ts` 解析和 ledger-before-apply/delete 已修复；完整自包含 2h OBS 仍待执行。 |
+| DDD / notice | **NOT DONE (P1/P2)** | providers/elector/conversion 仍引用 legacy globals；appcenter 实际 HTTP/API 告警尚未提供，当前仍 log-only；aggregate 仍 scaffolding。 |
+| Consul scale | **ACCEPTED NON-GOAL** | 当前无机器部署场景；重新启用 ECS/机器部署时再开同等规模门禁。 |
+| Static quality | **PASS** | `go vet ./...` 已在 `eb6bf0c` 清零原两条诊断。 |
+
+本次增量验证命令：`go test ./...`、`go test -race ./...`、`go test -cover ./...`、
+`go vet ./...`、`make test-all`、`go test -tags=observe` parser/engine 单测、
+`go test -tags=atlas_real ... -run TestAtlasReal` 和
+`go test -tags=nacos_real ... -run TestNacosReal` 均可执行；后两类真实标签在
+未配置 endpoint 时按设计 SKIP/NOT VERIFIED，不能计作生产 PASS。
 
 执行过的本地核验：
 
@@ -29,18 +51,18 @@
 
 | 项目 | 当前判定 | 结论依据 | 文档是否已过时 |
 |---|---|---|---|
-| Burst delete race | **NOT DONE / P1** | 25 分钟 burst 结果仍有 18/151 个 DIVERGENT tick，4/8 收敛 leg 超过 60s；生产代码仍没有 sink tombstone 或 push 执行前重读校验 | 否；`dsca-delivery.md` 已明确列为 deferred |
-| Observe `logSlice` + ledger/apply 竞态 | **PARTIAL / P2** | ledger、tracker、每 tick 双向比对已存在；但 zap JSON 时间戳解析仍只尝试行首时间，ledger 在 kubectl apply 返回后写入，tick 可能读到“已落地但无 ledger”的窗口 | 否；文档仍准确记录缺口 |
+| Burst delete race | **IMPLEMENTED / TESTED; REAL OBS PENDING** | keyed per-identity gate、trusted full revalidation、scoped tombstone 和 typed full retry 已提交；真实长时 burst/生产延迟仍需重跑观察 | 部分过时：原始 burst 结果保留为历史证据，当前实现状态见增量章节 |
+| Observe `logSlice` + ledger/apply 竞态 | **HARNESS FIXED; 2H PENDING** | zap JSON `ts`/行首时间解析和 apply/delete 前 ledger clock 已修复并有 deterministic tests；完整自包含 2h 观察尚未执行 | 是：旧缺口已修复，长时证据仍缺 |
 | Consul 同等规模观察 | **ACCEPTED NON-GOAL** | 2h/1000 观察只启动 `--providers k8s`；当前没有机器部署场景，按本次范围暂不展开 | 否；范围边界已明确 |
-| Nacos HTTP Sink | **FUNCTIONAL PASS / ARCHITECTURE NON-CONFORMANT / PRODUCTION PARTIAL** | HTTP register/deregister/catalog/list、PushAll prune、4xx/5xx 分类、连接池和本地/e2e 测试均存在；但当前 `pkg/nacos` 是裸 `net/http` 客户端，没有通过官方 SDK，且鉴权、可配置 namespace、生产 HA/TLS/写入就绪、PushAll 失败重试语义仍有边界 | 否；功能结论仍成立，但“直接裸 HTTP”现在明确列为必须整改的架构缺陷 |
-| Nacos 官方 SDK gRPC 能力 | **SUPPORTED BY SDK, NOT IN THIS REPO** | 官方 Go SDK v2 有 `naming_grpc`、`RegisterInstance`、`DeregisterInstance`、`BatchRegisterInstance`；但 persistent instance 在 v2.3.5 的 delegate 中走 HTTP，ephemeral/batch 才走 gRPC | 部分过时：旧计划把“官方 SDK/gRPC”统一写成非目标，当前应改成“能力存在，且必须纳入生产路径” |
-| Nacos SDK 统一接入约束 | **NOT DONE / P1（Nacos 启用时为 release blocker）** | 生产代码直接调用 Nacos v1 HTTP OpenAPI；没有 SDK adapter、SDK 认证/重连/版本兼容层，也没有禁止新增裸 HTTP 的静态门禁和完整 SDK 回放测试 | 否；这是本次新增的强制整改项，不能继续作为“可选 POC” |
+| Nacos HTTP/SDK Sink | **SDK DEFAULT / HTTP EXCEPTIONS / REAL PARTIAL** | naming lifecycle/query/subscribe 走官方 SDK；catalog/prune、cluster Admin、readiness 由有 owner/expiry 的集中 compatibility adapter 承担；真实 Nacos 2.x/auth/TLS/HA 证据仍缺 | 是：当前默认已从裸 HTTP 迁移到 SDK seam |
+| Nacos 官方 SDK gRPC 能力 | **SUPPORTED BY SDK AND WIRED** | v2.3.5 naming facade 已接入；persistent register/deregister 按 SDK 设计走 HTTP，ephemeral/batch 走 gRPC；真实 server round-trip 仍待执行 | 是 |
+| Nacos SDK 统一接入约束 | **CODE PASS / RELEASE NOT VERIFIED (P1)** | `TransportSDK` 默认、`http-compat` 显式回滚、静态 raw-HTTP allowlist 和 exception registry 已存在；真实 query/list/subscribe/batch/reconnect/auth/TLS 证据仍缺 | 是：代码门禁已落地，发布证据未闭环 |
 | Atlas 真实 protobuf wire | **NOT VERIFIED / P1** | 本仓库模型是普通 Go struct；生产 `Dial` 强制 JSON codec，只有本地 discoverymock/e2e 证明 JSON 链路；未证明真实 Atlas 接受该 codec | 否；限制说明准确 |
 | Notice / appcenter 告警 | **PARTIAL / P1** | composition 已有注入式 `Notifier`，但 providers/election 等仍直接调用 `pkg/notice.Notice`；`appcenternotice` 实现只写本地日志，不是已验证的真实告警投递 | 否 |
 | DDD 目标架构 | **NOT DONE / P1** | `pkg/log.Logger`、`pkg/notice.Noticer`、`config.*` 仍被生产包读取；`cmd/adapter.go` 仍执行 legacy globals bridge；`pkg/providers/aggregate/controller.go` 仍是注释 scaffolding | 否 |
-| `go vet ./...` | **NOT DONE / P2** | 当前实测只剩 `tools/cache/cache.go:52` 和 `pkg/providers/k8s/k8s.go:68` 两条；旧文档中的“20+ 条”是历史基线 | 是：数量已明显收敛，应更新为当前两条 |
+| `go vet ./...` | **PASS** | `eb6bf0c` 修复 cache printf 和 K8s unkeyed literal；当前命令退出 0 | 是 |
 
-**总体判定：** 业务主路径已经达到“可构建、可测试、可在本地 Nacos 2.1 形状运行”的阶段，但还不是“生产一致性闭环已证明”。最重要的未闭环问题是事件乱序/全量快照竞态、全量失败重试降级、空源保护语义、所有权边界，以及 Nacos 生产路径绕过官方 SDK 的架构缺陷。Consul 大规模观察按当前没有机器部署场景处理为 accepted non-goal，不影响本次 K8s 主路径结论；一旦重新启用 ECS/机器部署，必须单独打开该验证项。
+**总体判定：** 业务主路径已经达到“可构建、可测试、可在本地 Nacos 2.1 形状运行”的阶段；身份、顺序、全量重试、空源 ownership、Nacos naming SDK、K8s cache swap 和 vet 缺陷已有代码修复与离线/竞态证据，但还不是“生产一致性闭环已证明”。仍未闭环的是真实 Nacos/Atlas 协议与 HA/TLS/auth 证据、完整 2h Observe、DDD globals、真实 appcenter 告警，以及集中 HTTP Admin/Catalog/readiness 例外的最终替换。Consul 大规模观察按当前没有机器部署场景处理为 accepted non-goal，不影响本次 K8s 主路径结论；一旦重新启用 ECS/机器部署，必须单独打开该验证项。
 
 ## 3. Nacos Sink 审计
 
@@ -68,6 +90,11 @@
 - **生产就绪：否，当前只能判 PARTIAL。** 仍有第 3.2 节中的闭环、身份和运维边界，且生产真实 Nacos/Atlas/TLS/HA 尚未作为本仓库证据。
 
 ### 3.2 当前 Sink 的一致性风险
+
+> **版本说明：** 本节 R1–R7 的代码行号和“尚未修复”描述来自原始
+> `838ad19` 快照，保留用于问题 provenance；不得直接当作 `649ce2c` 当前
+> 状态。R1/R2/R3 的实现闭环已在 A2/A3/B1/B2 及后续提交中补齐，当前
+> 未验证项和仍开放项见本文“当前状态增量”表。
 
 #### R1：`PushAll` 失败后重试会丢失“全量清理”语义（P1）
 
@@ -131,7 +158,8 @@
 
 ### 3.3 官方 Go SDK 与 gRPC 结论
 
-**结论：官方 Go SDK 支持 Nacos 2.x gRPC，但当前仓库没有使用它。**
+**结论：官方 Go SDK 支持 Nacos 2.x gRPC，当前仓库已通过 facade 接入；真实
+目标版本证据仍未提供。**
 
 本地核验 `github.com/nacos-group/nacos-sdk-go/v2@v2.3.5`：
 
@@ -164,7 +192,7 @@ SDK 并不意味着可以直接替换当前 Sink：
 | G3 | 验证 SDK batch、persistent 生命周期、catalog/prune/Admin SDK 覆盖；不能覆盖的接口必须形成带期限的例外决策 | 目标版本兼容、部分失败可定位、重试不丢 operation type；无未分类裸 HTTP |
 | G4 | SDK 默认路径灰度；HTTP 只保留受控回滚开关；按 Sink 指标观察 | 连续运行和故障注入达标后，才允许删除 HTTP fallback |
 
-不建议未经验证直接把 `nacos-sdk-go/v2` 替换进主路径：它会同时改变传输协议、连接生命周期、缓存/redo 机制和可能的 persistent 行为。但“必须通过 SDK”是发布约束，不能再将 SDK 迁移长期放在可选 POC 状态；必须先完成 adapter、兼容性回放和完整测试，再切换默认路径。
+当前 `TransportSDK` 已是 server wiring 默认路径，`http-compat` 仅显式回滚/测试；但真实 scratch/pre-production 回放（包括上述 G0/G2/G3/G4 证据）仍是发布约束，不能把离线 facade 测试视为生产 PASS。
 
 ## 4. K8s Watch → Cache → Diff → Sink 审计
 
@@ -176,7 +204,7 @@ client-go informer callbacks
   → single Pop loop
   → GetByKey + formatInstance + VerifyInstance
   → providers.Cache diff / ReplaceOrInsert
-  → ants pool (100; Submit is blocking by default)
+  → ants pool (100; production providers use nonblocking Submit and count overload drops)
   → worker.Handle(Sync)
   → FanoutSink.Push (Atlas and optional Nacos)
   → Nacos register/deregister or Atlas gRPC
@@ -211,17 +239,19 @@ client-go informer callbacks
 
 这是多集群架构下的身份设计问题，不是测试未覆盖的小分支。应让事件携带 cluster identity，并让 cache/diff 主键至少为 `sourceCluster + namespace + pod UID`；如果外部协议必须保持现有 `InstanceId`，应另设不可碰撞的内部 identity key。
 
-#### K2：Pop loop 仍可能因下游慢而阻塞（P1）
+#### K2：Pop loop 下游背压（MITIGATED / OVERFLOW POLICY REMAINS P1）
 
-`ants.NewPool` 没有启用 nonblocking；当 100 个 worker 被 Nacos/Atlas 慢请求占满时，`Submit` 会阻塞唯一 Pop loop：`pkg/providers/k8s/k8s.go:217-220`。队列虽能记录 drop，但 recovery buffer 也只保存最多 4096 条：`pkg/k8srobot/k8srobot.go:445-466`。超过该容量的 dropped keys 只能等 full-push，不能保证毫秒级或短窗口恢复。
+生产 K8s/Consul ants pool 已启用 nonblocking，Submit overload 会显式记录 drop，避免唯一 Pop loop 被下游慢请求永久阻塞；但当前 overflow 仍依赖 bounded drop/full-push 恢复，不能保证短窗口内零丢失。应继续把 overflow 进入有界、按 key 合并且可重放的应用队列。
 
 这是“可观测的降级”，不是已经证明的必然数据丢失；但对高峰故障仍是 P1 风险。应采用非阻塞提交 + 按实例 key 的 overflow queue，或把 provider 事件流完全交给有界、可观测的应用队列。
 
-#### K3：all-clusters sync gate 和错误重试不可取消（P1/P2）
+#### K3：all-clusters sync gate 和错误重试（PARTIAL）
 
-`monitor` 在 `HasSynced()` 未完成时使用 `time.Sleep(15s)`，Pop 错误时使用 `time.Sleep(1s)`：`pkg/providers/k8s/k8s.go:170-177,195-202`。leader 丢失时 server 取消 provider context，但这些 sleep/gate 不会立即响应；一个永久失联 cluster 会使 provider 生命周期拖尾甚至旧 provider 与新 provider 重叠。
+`HasSynced()` 等待已改为 context-cancellable timer；Pop 错误路径仍有 legacy sleep/重试和 global lifecycle 依赖，需在 C2 继续收口，避免永久失联 cluster 的 provider 生命周期拖尾。
 
-#### K4：`--appcodes` 过滤实现只允许列表首项（P1）
+#### K4：`--appcodes` 多值过滤（FIXED / TESTED）
+
+`formatInstance` 已改为 membership 判定，不再对首个不匹配项提前 return；多 app-code allow-list 回归测试已加入 K8s whitebox。
 
 `formatInstance` 中的循环在第一个不相等项就 return：`pkg/providers/k8s/conversion.go:68-75`。当允许列表为 `[a,b]` 且 appcode 为 `b` 时，会在比较 `a` 时提前丢弃。该逻辑应改为“遍历直到命中，遍历结束仍未命中才丢弃”。这是当前可直接修复的确定性 bug。
 
@@ -348,4 +378,12 @@ Reviewer 确认：
 
 本次定稿已据此完成：Consul 项目状态改为 accepted non-goal，新增触发条件；本次用户补充约束进一步将 Nacos SDK 统一接入列为 P1 强制整改和 Nacos 启用时的 release blocker；其余技术风险和整改优先级保持不变。
 
-**Reviewer 状态：** PASS
+**Reviewer 状态：** PASS（仅表示原始审计/计划的一致性复核完成，不表示当前生产发布门禁关闭）。
+
+**后续实现复核（2026-09-13）：** 已关闭并提交：Nacos naming SDK seam、B2 scoped readiness、
+Atlas/Observe fail-closed gates、K8s cache pointer/stop-state race、multi-appcode
+membership、normal SyncAll metadata propagation、cross-provider tombstone scope、
+nonblocking provider pool submission 和 `go vet` 两条诊断。仍为 P1/P2 REMAINING：真实
+Nacos/Atlas/2h Observe 证据、DDD legacy globals、真实 appcenter 告警，以及 Nacos
+catalog/prune/cluster/readiness 的有期限 HTTP compatibility exceptions；这些不能由
+本地 mock、tagged skip 或计划 reviewer PASS 代替。

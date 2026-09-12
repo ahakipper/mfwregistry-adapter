@@ -119,7 +119,7 @@ func NewConsulProvider(ctx context.Context, worker worker.Worker, pushInterval i
 		cache:    providers.NewCache(8),
 	}
 	// Create pool for sending instance events to the discovery center
-	p, _ := ants.NewPool(providers.PoolBenchSize, withExpiryDuration(time.Second*providers.PoolExpireTime))
+	p, _ := ants.NewPool(providers.PoolBenchSize, withExpiryDuration(time.Second*providers.PoolExpireTime), ants.WithNonblocking(true))
 	consulProvider.pool = p
 	// Init instance fiter
 	consulProvider.filters = providers.InitInstanceFilters()
@@ -682,7 +682,7 @@ func consulClusterOf(nacosReconcile bool, ins *sv.Instance) string {
 }
 
 func (c *consul) buildAndSendEvent(instance *sv.Instance) { // if instance status is 0 , don't send event
-	c.pool.Submit(func() {
+	if err := c.pool.Submit(func() {
 		if instance.Status == 0 {
 			return
 		}
@@ -697,7 +697,9 @@ func (c *consul) buildAndSendEvent(instance *sv.Instance) { // if instance statu
 			Operate: worker.OperateTypeSync,
 		}
 		c.worker.Handle(event)
-	})
+	}); err != nil {
+		log.Logger.Warnf("consul reconcile worker pool rejected instance %s: %v", instance.InstanceId, err)
+	}
 }
 
 // withExpiryDuration sets up the interval time of cleaning up goroutines.

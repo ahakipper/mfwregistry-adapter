@@ -238,6 +238,7 @@ type orderedSink struct {
 	keyLocks        map[string]*keyLockEntry
 	latestMu        sync.Mutex
 	latest          map[string]identityRevision
+	identityScope   map[string]string
 	closed          bool
 	lastFullScope   string
 	lastFullBatchID string
@@ -303,7 +304,11 @@ func (s *orderedSink) PushAllOperation(op ports.RetryOperation) error {
 	}
 	s.lastFullScope = op.Scope
 	s.lastFullBatchID = op.BatchID
-	return s.runLocked(op.Trigger, op.Instances, true, true, &op)
+	// A complete snapshot is destructive only when its provider scope is
+	// explicit. Treat a missing scope as an untrusted full push: it may still
+	// update present identities, but it must not tombstone every identity from
+	// another provider.
+	return s.runLocked(op.Trigger, op.Instances, true, op.Scope != "", &op)
 }
 
 func (s *orderedSink) GetAll(statuses []int32, provider string) (*instance.InstanceList, error) {
@@ -383,6 +388,9 @@ func (s *orderedSink) runLocked(trigger int64, items []*instance.Instance, full 
 	s.latestMu.Lock()
 	if s.latest == nil {
 		s.latest = make(map[string]identityRevision)
+	}
+	if s.identityScope == nil {
+		s.identityScope = make(map[string]string)
 	}
 	filtered := make([]*instance.Instance, 0, len(items))
 	accepted := make(map[string]identityRevision, len(items))
@@ -465,6 +473,9 @@ func (s *orderedSink) runLocked(trigger int64, items []*instance.Instance, full 
 				if state.tombstone {
 					continue
 				}
+				if operation != nil && operation.Scope != "" && s.identityScope[key] != operation.Scope {
+					continue
+				}
 				if _, present := seen[key]; !present {
 					s.latest[key] = identityRevision{revision: state.revision, tombstone: true}
 				}
@@ -472,6 +483,9 @@ func (s *orderedSink) runLocked(trigger int64, items []*instance.Instance, full 
 		}
 		for key, state := range accepted {
 			s.latest[key] = state
+			if operation != nil && operation.Scope != "" {
+				s.identityScope[key] = operation.Scope
+			}
 		}
 		s.latestMu.Unlock()
 	}
@@ -487,6 +501,7 @@ func (s *orderedSink) Close() error {
 	s.closed = true
 	s.latestMu.Lock()
 	s.latest = nil
+	s.identityScope = nil
 	s.latestMu.Unlock()
 	s.keysMu.Lock()
 	s.keyLocks = nil
@@ -769,7 +784,27 @@ func (f *FanoutSink) PushAllToWithRevalidate(name string, triggerTime int64, sco
 // PushAllOperation preserves the typed retry metadata at the fanout boundary.
 func (f *FanoutSink) PushAllOperation(op ports.RetryOperation) error {
 	if op.Sink == "" {
-		return errors.New("worker: full operation sink is empty")
+		// Normal provider SyncAll events target every sink. Preserve the
+		// operation metadata while broadcasting so an empty-confirmed source
+		// can reach Nacos's scoped tombstone/prune path instead of being
+		// downgraded to the legacy PushAll API.
+		results := make([]error, len(f.sinks))
+		var wg sync.WaitGroup
+		for i, named := range f.sinks {
+			wg.Add(1)
+			go func(i int, named NamedSink) {
+				defer wg.Done()
+				perSink := op
+				perSink.Sink = named.Name
+				if operationSink, ok := named.Sink.(ports.FullOperationSink); ok {
+					results[i] = operationSink.PushAllOperation(perSink)
+					return
+				}
+				results[i] = named.Sink.PushAll(perSink.Trigger, perSink.Instances)
+			}(i, named)
+		}
+		wg.Wait()
+		return f.collectFailures("pushAll", results)
 	}
 	for _, named := range f.sinks {
 		if named.Name != op.Sink {

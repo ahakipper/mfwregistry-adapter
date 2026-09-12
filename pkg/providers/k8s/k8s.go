@@ -90,7 +90,7 @@ func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int,
 		interval:     pushInterval,
 		cache:        providers.NewCache(2),
 	}
-	p, _ := ants.NewPool(providers.PoolBenchSize, withExpiryDuration(time.Second*providers.PoolExpireTime))
+	p, _ := ants.NewPool(providers.PoolBenchSize, withExpiryDuration(time.Second*providers.PoolExpireTime), ants.WithNonblocking(true))
 	k.pool = p
 	k.filters = providers.InitInstanceFilters()
 
@@ -120,6 +120,16 @@ func (k *k8s) SetQueueDepthReporter(metrics ports.MetricsRecorder) {
 	k.Lock()
 	k.queueDepthMetrics = metrics
 	k.Unlock()
+}
+
+func (k *k8s) reportDroppedEvent(detail string) {
+	k.Lock()
+	recorder := k.queueDepthMetrics
+	k.Unlock()
+	log.Logger.Warnf("k8s event worker pool rejected %s", detail)
+	if recorder != nil {
+		recorder.IncEventsDropped(k.providerName)
+	}
 }
 
 // NacosReconcileSwitch is the k8s leg's wiring seam for the nacos
@@ -175,7 +185,19 @@ func (k *k8s) monitor() {
 			// Notice handling
 			log.Logger.Warnf("the robot has not synced yet")
 			notice.Notice("robot failed to sync the K8s clusters", "While the robot is syncing the K8s clusters, the K8s clusters are not fully synced")
-			time.Sleep(15 * time.Second)
+			timer := time.NewTimer(15 * time.Second)
+			select {
+			case <-timer.C:
+				// retry HasSynced
+			case <-k.ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return
+			}
 		}
 	}
 	log.Logger.Infof("the robot has finished synced of all the k8s data, start to compare and sync instanes")
@@ -216,9 +238,11 @@ func (k *k8s) monitor() {
 				continue
 			}
 			// rsync
-			k.pool.Submit(func() {
+			if err := k.pool.Submit(func() {
 				k.eventSync(ins, triggerTime)
-			})
+			}); err != nil {
+				k.reportDroppedEvent(fmt.Sprintf("%s: %v", obj.Key, err))
+			}
 			k.robot.Finish(obj)
 		}
 	}()
@@ -639,7 +663,7 @@ func (k *k8s) CompareAndFlush() {
 
 func (k *k8s) buildAndSendEvent(instance *sv.Instance) {
 	// if instance status is 0 , don't send event
-	k.pool.Submit(func() {
+	if err := k.pool.Submit(func() {
 		if instance.Status == 0 {
 			return
 		}
@@ -654,7 +678,9 @@ func (k *k8s) buildAndSendEvent(instance *sv.Instance) {
 			Operate: worker.OperateTypeSync,
 		}
 		k.worker.Handle(event)
-	})
+	}); err != nil {
+		k.reportDroppedEvent(fmt.Sprintf("instance %s: %v", instance.InstanceId, err))
+	}
 }
 
 func (k *k8s) GetAll() (result []*sv.Instance) {

@@ -65,7 +65,18 @@ func (w *DefaultWorker) InitEventHandlers() {
 	})
 	w.AddEventHandler(OperateTypeSyncAll, func(e *Event) error {
 		var err error
-		if gated, ok := w.pusher.(interface {
+		if operationSink, ok := w.pusher.(ports.FullOperationSink); ok {
+			err = operationSink.PushAllOperation(ports.RetryOperation{
+				Operate:        ports.OperateTypeSyncAll,
+				Scope:          e.Scope,
+				BatchID:        e.BatchID,
+				Sequence:       e.Sequence,
+				Trigger:        e.Trigger,
+				Instances:      e.Data,
+				Revalidate:     e.Revalidate,
+				EmptyConfirmed: e.EmptyConfirmed,
+			})
+		} else if gated, ok := w.pusher.(interface {
 			PushAllWithRevalidate(int64, []*instance.Instance, func() ([]*instance.Instance, bool)) error
 		}); ok {
 			err = gated.PushAllWithRevalidate(e.Trigger, e.Data, e.Revalidate)

@@ -666,17 +666,26 @@ Expiry/revisit trigger:
 
 **计划结论：** 先执行 A0→A1→A2→A3，关闭身份、乱序和全量重试三项一致性风险；再执行 B1/B2 明确 Nacos 生产边界；B3 官方 SDK 迁移是 Nacos 启用时的强制发布门禁，B4 负责 Atlas 协议能力验证；最后用 C1/C2/C3 把测试、E2E、DDD、通知和静态质量收口。任何阶段都不能用当前 2h K8s 观察结果替代未验证的 Nacos/Atlas/Consul 生产结论。
 
-## 17. 最终 reviewer 结论
+## 17. Reviewer 结论与发布边界
 
-**Reviewer：** `final_plan_reviewer_v3`  
-**结论：** **PASS**  
-**复核范围：** v6 全文、A2/A3 接口与迁移/回滚、B1/B2/B3 状态机、C1 mock/real 与 E2E/OBS 门禁、版本追踪。  
-**复核结果：** 未发现遗留 P0、P1 或 P2 阻塞项。Reviewer 特别确认：
+**Reviewer：** `final_remediation_review`（2026-09-13）
+**代码/计划复核结论：** **PASS（离线实现门禁）**；**生产发布结论：NOT VERIFIED / REMAINING**。
+**复核范围：** 当前 `refactor/all` HEAD、A0–A3/B1–B4/C1/C3 变更、K8s
+watch/cache/worker/reconcile 链路、Nacos SDK/HTTP 例外、Atlas/Observe/DDD/通知状态，
+以及 `go test`/race/vet/tagged harness。Reviewer 未发现新的离线 P0；以下 P1/P2
+仍是发布阻塞或后续 work package：真实 Nacos/Atlas/2h Observe 证据、C2 DDD globals
+与真实 appcenter 告警、Nacos Admin/Catalog/readiness 例外替换、SDK static-token
+能力，以及 provider overflow queue/Pop retry 全面可取消化。
+
+Reviewer 特别确认：
 
 - `make test-e2e` 与 `make test-observe` 的 build-tag 契约已明确，未带 tag 的直接命令不计入门禁；
 - A3 的双写 shadow window、`operation_*` 计数、replay hash、quiescent-point 切换和 `retry_migration_blocked` 回滚条件可执行；
 - A2/A3 的 `Event`、`RetryOperation`、`EventQueue`、`PushTo/PushAllTo` 责任和兼容行为已在计划内闭合；
 - B1 的 owner/空源回滚触发与恢复条件、B2 的 Nacos 错误状态机、C1 的 mock-pass/real-pass/cleanup 判定已具备机器可判定的验收规则。
 - B3 已将官方 Nacos SDK/facade 设为强制生产路径，`http-compat` 仅限迁移期回滚；operation coverage、persistent/ephemeral、gRPC/Admin/Catalog、重连和最终一致性测试均列为发布门禁。
+
+因此，本节的 PASS 只表示代码与计划的离线一致性复核通过，不能把 tagged test
+在无 endpoint 时的 SKIP、mock JSON codec 或本地 log-only notifier 提升为生产 PASS。
 
 该文档现在是后续实现批次的主计划；实现过程中若新增风险，必须先更新本计划和对应 Decision ID，再进入代码变更。
