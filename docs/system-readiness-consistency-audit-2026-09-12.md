@@ -53,7 +53,11 @@ amd64，QEMU 下 Java 持续高 CPU 超过 5 分钟仍无 readiness 响应。容
 - 只读检查 `git status --short --branch`：工作树干净；测试生成的 `build/` 已被忽略。
 - 官方资料和 SDK 源码核验：下载并检查 `github.com/nacos-group/nacos-sdk-go/v2@v2.3.5`，同时查阅 Nacos 官方 Go SDK、Open API 和 SDK proto 资料。
 
-## 2. 先给结论：当前状态矩阵
+## 2. 先给结论：当前状态矩阵（历史基线保留）
+
+本节原始表格保留 2026-09-12 的证据 provenance；上方“当前状态增量”是
+`refactor/all` 最新实现的权威状态。涉及 SDK、DDD、通知、vet、K8s pool 等
+项目时，以增量表和 remediation plan 为准。
 
 | 项目 | 当前判定 | 结论依据 | 文档是否已过时 |
 |---|---|---|---|
@@ -64,8 +68,8 @@ amd64，QEMU 下 Java 持续高 CPU 超过 5 分钟仍无 readiness 响应。容
 | Nacos 官方 SDK gRPC 能力 | **SUPPORTED BY SDK AND WIRED** | v2.3.5 naming facade 已接入；persistent register/deregister 按 SDK 设计走 HTTP，ephemeral/batch 走 gRPC；真实 server round-trip 仍待执行 | 是 |
 | Nacos SDK 统一接入约束 | **CODE PASS / RELEASE NOT VERIFIED (P1)** | `TransportSDK` 默认、`http-compat` 显式回滚、静态 raw-HTTP allowlist 和 exception registry 已存在；真实 query/list/subscribe/batch/reconnect/auth/TLS 证据仍缺 | 是：代码门禁已落地，发布证据未闭环 |
 | Atlas 真实 protobuf wire | **NOT VERIFIED / P1** | 本仓库模型是普通 Go struct；生产 `Dial` 强制 JSON codec，只有本地 discoverymock/e2e 证明 JSON 链路；未证明真实 Atlas 接受该 codec | 否；限制说明准确 |
-| Notice / appcenter 告警 | **PARTIAL / P1** | composition 已有注入式 `Notifier`，但 providers/election 等仍直接调用 `pkg/notice.Notice`；`appcenternotice` 实现只写本地日志，不是已验证的真实告警投递 | 否 |
-| DDD 目标架构 | **NOT DONE / P1** | `pkg/log.Logger`、`pkg/notice.Noticer`、`config.*` 仍被生产包读取；`cmd/adapter.go` 仍执行 legacy globals bridge；`pkg/providers/aggregate/controller.go` 仍是注释 scaffolding | 否 |
+| Notice / appcenter 告警 | **CODE PARTIAL / REAL DELIVERY PENDING** | active graph 已使用注入式 `Notifier`，新增 HTTP adapter、重试、失败计数、redaction 和 fail-closed；真实 appcenter endpoint/payload/auth/SLA 尚未验证 | 是 |
+| DDD 目标架构 | **CODE PARTIAL / SHIM RETIREMENT PENDING** | active provider/elector/conversion/metrics graph 已使用显式依赖；legacy constructors/bridge 保留兼容，aggregate 已由 `legacyaggregate` build tag 隔离 | 是 |
 | `go vet ./...` | **PASS** | `eb6bf0c` 修复 cache printf 和 K8s unkeyed literal；当前命令退出 0 | 是 |
 
 **总体判定：** 业务主路径已经达到“可构建、可测试、可在本地 Nacos 2.1 形状运行”的阶段；身份、顺序、全量重试、空源 ownership、Nacos naming SDK、K8s cache swap 和 vet 缺陷已有代码修复与离线/竞态证据，但还不是“生产一致性闭环已证明”。仍未闭环的是真实 Nacos/Atlas 协议与 HA/TLS/auth 证据、完整 2h Observe、DDD globals、真实 appcenter 告警，以及集中 HTTP Admin/Catalog/readiness 例外的最终替换。Consul 大规模观察按当前没有机器部署场景处理为 accepted non-goal，不影响本次 K8s 主路径结论；一旦重新启用 ECS/机器部署，必须单独打开该验证项。

@@ -638,7 +638,9 @@ OBS_DURATION=30m OBS_SCALE=100 make test-observe
 5. 至少一个真实 scratch 或兼容性证据（P2 文档项可明确标记未验证）；
 6. 指标、日志和错误分类可回答“发生了什么、影响哪个 sink/scope、是否恢复”；
 7. 运行树、容器、临时 kubeconfig、日志目录清理完成；
-8. reviewer 明确回复 **PASS，且没有 P0/P1/P2 remaining**；
+8. reviewer 对本批次范围明确回复 **PASS，且没有该范围内的 P0/P1/P2 remaining**；
+   跨批次或依赖外部 endpoint/生产证据的 release blocker 必须显式保留为
+   `NOT VERIFIED/REMAINING`，不得通过缩小 reviewer 范围伪装关闭；
 9. 记录 commit、测试命令、关键输出、artifact hash 和回滚方法。
 
 ## 16. 风险与决策记录模板
