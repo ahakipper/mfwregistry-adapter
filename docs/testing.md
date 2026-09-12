@@ -8,6 +8,15 @@ per tier, and specifies the exact Makefile targets that will implement the
 matrix. It is the implementation brief for the test work that follows; it does
 not change any code by itself.
 
+**Current status (2026-09-13, baseline `eb6bf0c`):** the default unit, full and
+race suites are green and `go vet ./...` is clean. The Nacos naming path is
+SDK-backed by default; `http-compat` is an explicit test/rollback mode. The
+`atlas_real`, `nacos_real` and `nacos_sdk_eval` tags compile and skip without a
+declared scratch endpoint, so they are not production evidence. Observe's
+timestamp/ledger harness defects are fixed, but a complete self-contained 2h
+run remains unverified. Consul scale observation remains an accepted non-goal
+until ECS/machine deployment is re-enabled.
+
 Companion documents: [architecture.md](architecture.md) (design),
 [data-model.md](data-model.md) (the `Instance` model),
 [operations.md](operations.md) (runbook). See [README.md](README.md) for the
@@ -36,15 +45,10 @@ errors):
   `[no test files]`, none fail. 116 test functions exist in total.
 - `go test -race -count=1` over the same 14 tested packages — **exit 0**, no
   data races.
-- `go test -cover ./...` — **exit 1**, with `FAIL spotter/tools/cache [build
-  failed]`. Root cause: a `go vet` printf diagnostic at
-  `tools/cache/cache.go:52` (`fmt.Sprintf call has arguments but no formatting
-  directives`; the call passes `table.cleanupInterval` to a format string with
-  no verb). The plain `go test ./...` run does not build the test-free
-  `tools/cache` package, so it passes; the `-cover` run instruments it, which
-  builds (and vets) it and fails. Fixing that one line is a prerequisite for
-  any `./...`-wide coverage target; until then the matrix uses an explicit
-  package allowlist (see section 5).
+- `go test -cover ./...` — **exit 0** on the current baseline; the historical
+  `tools/cache` printf diagnostic was fixed in `eb6bf0c`, so coverage no longer
+  needs a package allowlist for that reason. Real scratch gates remain
+  separately tagged and are not implied by this offline result.
 
 ### 2.1 Coverage per package
 
@@ -311,9 +315,9 @@ endpoints, race-clean, and each case bounded by a timeout.
 ```make
 # --- Test matrix -----------------------------------------------------------
 
-# Packages under test. Explicit allowlist: untested legacy packages cannot
-# break the matrix, and spotter/tools/cache currently fails vet under -cover
-# (fmt.Sprintf with arguments but no formatting directives, cache.go:52).
+# Packages under test. The historical allowlist was retained for legacy
+# package coverage; tools/cache now passes vet after eb6bf0c and may be added
+# to a future coverage expansion.
 TEST_PKGS := ./internal/... \
 	./pkg/discoverycenter \
 	./pkg/worker \
@@ -423,9 +427,9 @@ Supporting work (not tests, prerequisite): fix
   (`172.16.130.71:50051`). Tests inject `dialDiscovery` or use the testkit
   mocks; the only exception is smoke case 5, which deliberately hits the etcd
   dial timeout and asserts the resulting message.
-- **`tools/cache` vet failure** currently breaks any `./...` coverage run;
-  the matrix allowlists packages, and the one-line printf fix removes the
-  constraint for future `./...` adoption.
+- **`tools/cache` vet failure** is resolved in `eb6bf0c`; keep the package in
+  coverage expansion reviews rather than hiding future diagnostics behind an
+  allowlist.
 - **Legacy globals**: the consul and k8s providers log through `pkg/log` and
   notify through `pkg/notice` globals; tests that run `Run()` or
   `CompareAndFlush` must either initialize the globals in setup
