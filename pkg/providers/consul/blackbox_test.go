@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/consul/api"
+	"github.com/panjf2000/ants/v2"
 
 	"spotter/config"
 	"spotter/internal/testkit/consulmock"
@@ -40,6 +41,43 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+func TestBuildAndSendEventRequeuesLatestAfterPoolSaturation(t *testing.T) {
+	block := make(chan struct{})
+	pool, err := ants.NewPool(1, ants.WithNonblocking(true))
+	if err != nil {
+		t.Fatalf("NewPool() error = %v", err)
+	}
+	if err := pool.Submit(func() { <-block }); err != nil {
+		t.Fatalf("occupy pool: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := &fakeWorker{}
+	c := &consul{providerName: "consul", ctx: ctx, worker: w, pool: pool}
+	c.buildAndSendEvent(&sv.Instance{InstanceId: "srv-a", Provider: providers.ProviderEcs, Status: providers.InstanceStatusOnline, Reversion: 1})
+	c.buildAndSendEvent(&sv.Instance{InstanceId: "srv-a", Provider: providers.ProviderEcs, Status: providers.InstanceStatusOnline, Reversion: 2})
+	c.overflowMu.Lock()
+	depth := c.overflow.Len()
+	c.overflowMu.Unlock()
+	if depth != 1 {
+		t.Fatalf("overflow depth = %d, want one identity-keyed task", depth)
+	}
+	close(block)
+	defer c.shutdown()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		events := w.handleSnapshot()
+		if len(events) > 0 {
+			if len(events) != 1 || len(events[0].Data) != 1 || events[0].Data[0].Reversion != 2 {
+				t.Fatalf("replayed events = %#v, want latest revision 2", events)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("overflow task was not replayed after pool capacity returned")
 }
 
 // The black-box tier for package consul exercises the public contracts of
