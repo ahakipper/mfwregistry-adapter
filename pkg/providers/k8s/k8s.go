@@ -68,8 +68,8 @@ func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int,
 			ConfigPath: path,
 			Resources: []k8srobot.RN{
 				{
-					k8srobot.Pods,
-					"",
+					Resource:  k8srobot.Pods,
+					Namespace: "",
 				},
 			},
 		}
