@@ -52,6 +52,18 @@ func TestNacosReal(t *testing.T) {
 	if _, err := client.ListCatalogInstances(service, "spotter-real"); err != nil {
 		t.Fatalf("catalog compatibility query: %v", err)
 	}
+	if _, err := client.ListInstances(service); err != nil {
+		t.Fatalf("SDK SelectAll query: %v", err)
+	}
+	if _, err := client.ListServices(100); err != nil {
+		t.Fatalf("SDK service list: %v", err)
+	}
+	if err := client.Subscribe(service, os.Getenv("NACOS_GROUP"), nil, func([]nacos.Host, error) {}); err != nil {
+		t.Fatalf("SDK subscribe: %v", err)
+	}
+	if err := client.Unsubscribe(service, os.Getenv("NACOS_GROUP"), nil, func([]nacos.Host, error) {}); err != nil {
+		t.Fatalf("SDK unsubscribe: %v", err)
+	}
 	if err := client.DeregisterInstance(params); err != nil {
 		t.Fatalf("official SDK persistent deregister: %v", err)
 	}
