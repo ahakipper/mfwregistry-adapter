@@ -3,6 +3,7 @@ package worker
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -73,7 +74,14 @@ func failedSinkNames(err error, known []string) []string {
 	}
 	var fanoutErr FanoutError
 	if errors.As(err, &fanoutErr) && len(fanoutErr) > 0 {
-		return fanoutErr.FailedSinks()
+		var sinks []string
+		for _, failure := range fanoutErr {
+			if errors.Is(failure.Err, errStaleFullPush) {
+				continue
+			}
+			sinks = append(sinks, failure.Sink)
+		}
+		return sinks
 	}
 	return known
 }
@@ -208,10 +216,252 @@ func newFanoutSink(logger ports.Logger, metrics ports.MetricsRecorder, sinks ...
 		// the nested-fanout GetAll chain) goes through the decorator.
 		owned[i] = NamedSink{
 			Name: named.Name,
-			Sink: &recordingSink{name: named.Name, inner: named.Sink, metrics: metrics},
+			Sink: &orderedSink{inner: &recordingSink{name: named.Name, inner: named.Sink, metrics: metrics}},
 		}
 	}
 	return &FanoutSink{sinks: owned, logger: logger, metrics: metrics}, nil
+}
+
+// orderedSink is the per-sink write gate. Providers and retry workers may
+// call Push concurrently; Nacos has no compare-and-swap on instance writes,
+// so serializing the complete operation prevents a late register from
+// overtaking a newer deregister/update. The latest revision table also drops
+// work that was already superseded before it reached the network.
+type orderedSink struct {
+	inner ports.InstanceSink
+	// fullGate allows independent identities to proceed concurrently while
+	// making a full snapshot an exclusive operation.
+	fullGate sync.RWMutex
+	keysMu   sync.Mutex
+	keyLocks map[string]*keyLockEntry
+	latestMu sync.Mutex
+	latest   map[string]identityRevision
+	closed   bool
+}
+
+type keyLockEntry struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// identityRevision records the last accepted revision and whether the
+// identity was explicitly removed by a trusted complete snapshot. Tombstones
+// keep late pre-delete events from resurrecting an instance while allowing a
+// subsequent complete snapshot to omit the already-deleted identity.
+type identityRevision struct {
+	revision  int64
+	tombstone bool
+}
+
+var errStaleFullPush = errors.New("worker: stale full push rejected")
+
+func (s *orderedSink) Push(trigger int64, items []*instance.Instance) error {
+	return s.run(trigger, items, false)
+}
+
+func (s *orderedSink) PushAll(trigger int64, items []*instance.Instance) error {
+	return s.run(trigger, items, true)
+}
+
+// PushAllWithRevalidate obtains this sink's write gate before rebuilding the
+// snapshot. This closes the window in which an incremental write could land
+// after revalidation but before PushAll, then be pruned by the old snapshot.
+func (s *orderedSink) PushAllWithRevalidate(trigger int64, items []*instance.Instance, revalidate func() ([]*instance.Instance, bool)) error {
+	s.fullGate.Lock()
+	defer s.fullGate.Unlock()
+	if s.closed {
+		return errors.New("worker: sink is closed")
+	}
+	if revalidate != nil {
+		fresh, ok := revalidate()
+		if !ok {
+			return nil
+		}
+		items = fresh
+	}
+	return s.runLocked(trigger, items, true, true)
+}
+
+func (s *orderedSink) GetAll(statuses []int32, provider string) (*instance.InstanceList, error) {
+	return s.inner.GetAll(statuses, provider)
+}
+
+func (s *orderedSink) run(trigger int64, items []*instance.Instance, full bool) error {
+	if full {
+		s.fullGate.Lock()
+		defer s.fullGate.Unlock()
+		return s.runLocked(trigger, items, true, false)
+	}
+	s.fullGate.RLock()
+	defer s.fullGate.RUnlock()
+	keys := identityKeys(items)
+	unlock := s.lockKeys(keys)
+	defer unlock()
+	return s.runLocked(trigger, items, false, false)
+}
+
+func identityKeys(items []*instance.Instance) []string {
+	seen := make(map[string]struct{}, len(items))
+	keys := make([]string, 0, len(items))
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		key := instance.IdentityKey(item)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func (s *orderedSink) lockKeys(keys []string) func() {
+	entries := make([]*keyLockEntry, 0, len(keys))
+	s.keysMu.Lock()
+	if s.keyLocks == nil {
+		s.keyLocks = make(map[string]*keyLockEntry)
+	}
+	for _, key := range keys {
+		entry := s.keyLocks[key]
+		if entry == nil {
+			entry = &keyLockEntry{}
+			s.keyLocks[key] = entry
+		}
+		entry.refs++
+		entries = append(entries, entry)
+	}
+	s.keysMu.Unlock()
+	for _, entry := range entries {
+		entry.mu.Lock()
+	}
+	return func() {
+		for i := len(entries) - 1; i >= 0; i-- {
+			entries[i].mu.Unlock()
+		}
+		s.keysMu.Lock()
+		for i, key := range keys {
+			entries[i].refs--
+			if entries[i].refs == 0 && s.keyLocks[key] == entries[i] {
+				delete(s.keyLocks, key)
+			}
+		}
+		s.keysMu.Unlock()
+	}
+}
+
+func (s *orderedSink) runLocked(trigger int64, items []*instance.Instance, full bool, trustedComplete bool) error {
+	if s.closed {
+		return errors.New("worker: sink is closed")
+	}
+	s.latestMu.Lock()
+	if s.latest == nil {
+		s.latest = make(map[string]identityRevision)
+	}
+	filtered := make([]*instance.Instance, 0, len(items))
+	accepted := make(map[string]identityRevision, len(items))
+	seen := make(map[string]struct{}, len(items))
+	stale := false
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		key := instance.IdentityKey(item)
+		if full {
+			if _, exists := seen[key]; exists {
+				s.latestMu.Unlock()
+				return fmt.Errorf("worker: duplicate identity %q in full push", key)
+			}
+			seen[key] = struct{}{}
+		}
+		rev := item.Reversion
+		if rev == 0 {
+			rev = trigger
+		}
+		if previous, ok := s.latest[key]; ok {
+			if (previous.tombstone && rev <= previous.revision) || (!previous.tombstone && rev < previous.revision) {
+				stale = true
+				continue
+			}
+		}
+		accepted[key] = identityRevision{revision: rev}
+		filtered = append(filtered, item)
+	}
+	// A regular full push is only a safe prune snapshot when it contains every
+	// identity this gate has already accepted. A missing key may be a newer
+	// incremental write whose identity was omitted by a stale provider tick;
+	// forwarding that subset would let the sink prune the live remote entry.
+	// Revalidated snapshots are trusted to represent the provider's complete
+	// current state and may legitimately omit identities (deletes).
+	if full && !trustedComplete {
+		for key, state := range s.latest {
+			if state.tombstone {
+				continue
+			}
+			if _, present := seen[key]; !present {
+				s.latestMu.Unlock()
+				return errStaleFullPush
+			}
+		}
+	}
+	// A full push is a complete desired-state snapshot. Passing a silently
+	// filtered subset to a sink that performs pruning can delete newer remote
+	// instances. Reject the batch so the event's revalidation/retry path can
+	// obtain a fresh snapshot instead.
+	if full && stale {
+		s.latestMu.Unlock()
+		return errStaleFullPush
+	}
+	if len(filtered) == 0 && len(items) != 0 {
+		s.latestMu.Unlock()
+		return nil
+	}
+	s.latestMu.Unlock()
+	var err error
+	if full {
+		err = s.inner.PushAll(trigger, filtered)
+	} else {
+		err = s.inner.Push(trigger, filtered)
+	}
+	if err == nil {
+		s.latestMu.Lock()
+		if full && trustedComplete {
+			for key, state := range s.latest {
+				if state.tombstone {
+					continue
+				}
+				if _, present := seen[key]; !present {
+					s.latest[key] = identityRevision{revision: state.revision, tombstone: true}
+				}
+			}
+		}
+		for key, state := range accepted {
+			s.latest[key] = state
+		}
+		s.latestMu.Unlock()
+	}
+	return err
+}
+
+func (s *orderedSink) Close() error {
+	s.fullGate.Lock()
+	defer s.fullGate.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	s.latestMu.Lock()
+	s.latest = nil
+	s.latestMu.Unlock()
+	s.keysMu.Lock()
+	s.keyLocks = nil
+	s.keysMu.Unlock()
+	if c, ok := s.inner.(interface{ Close() error }); ok {
+		return c.Close()
+	}
+	return nil
 }
 
 // recordingSink is the per-sink e2e timing decorator of dsca-2 §3: it
@@ -249,6 +499,13 @@ func (s *recordingSink) PushAll(triggerTime int64, instances []*instance.Instanc
 
 func (s *recordingSink) GetAll(statuses []int32, provider string) (*instance.InstanceList, error) {
 	return s.inner.GetAll(statuses, provider)
+}
+
+func (s *recordingSink) Close() error {
+	if c, ok := s.inner.(interface{ Close() error }); ok {
+		return c.Close()
+	}
+	return nil
 }
 
 // observe records one e2e observation for this sink with the outcome
@@ -299,6 +556,22 @@ func (f *FanoutSink) Push(triggerTime int64, instances []*instance.Instance) err
 	return f.collectFailures("push", results)
 }
 
+// Close stops all ordered sinks and releases their latest-revision state.
+func (f *FanoutSink) Close() error {
+	var failures []error
+	for _, named := range f.sinks {
+		if c, ok := named.Sink.(interface{ Close() error }); ok {
+			if err := c.Close(); err != nil {
+				failures = append(failures, fmt.Errorf("%s: %w", named.Name, err))
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return errors.Join(failures...)
+	}
+	return nil
+}
+
 // PushAll fans a full push out exactly like Push (concurrently, one
 // goroutine per sink), over each sink's own PushAll: the reconcile
 // semantics — including the Nacos prune sweep of plan §7.4, landed with F5
@@ -313,6 +586,29 @@ func (f *FanoutSink) PushAll(triggerTime int64, instances []*instance.Instance) 
 		wg.Add(1)
 		go func(i int, named NamedSink) {
 			defer wg.Done()
+			results[i] = named.Sink.PushAll(triggerTime, instances)
+		}(i, named)
+	}
+	wg.Wait()
+	return f.collectFailures("pushAll", results)
+}
+
+// PushAllWithRevalidate lets each ordered sink rebuild the snapshot while
+// holding its own write gate, preventing an incremental update from racing a
+// full-push prune.
+func (f *FanoutSink) PushAllWithRevalidate(triggerTime int64, instances []*instance.Instance, revalidate func() ([]*instance.Instance, bool)) error {
+	results := make([]error, len(f.sinks))
+	var wg sync.WaitGroup
+	for i, named := range f.sinks {
+		wg.Add(1)
+		go func(i int, named NamedSink) {
+			defer wg.Done()
+			if gated, ok := named.Sink.(interface {
+				PushAllWithRevalidate(int64, []*instance.Instance, func() ([]*instance.Instance, bool)) error
+			}); ok {
+				results[i] = gated.PushAllWithRevalidate(triggerTime, instances, revalidate)
+				return
+			}
 			results[i] = named.Sink.PushAll(triggerTime, instances)
 		}(i, named)
 	}

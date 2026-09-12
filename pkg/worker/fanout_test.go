@@ -245,35 +245,49 @@ func TestFanoutPushReachesEverySinkConcurrently(t *testing.T) {
 	}
 }
 
-// TestFanoutPushParallelSinksBoundWallClock pins the DS-2-2 core: a slow
-// FIRST sink (atlas, 100ms) does not delay the second's push — the fan-out
-// completes in ~the slow sink's duration, not the SUM of both legs. The
-// sequential fan-out added the primary's latency 1:1 to every secondary
-// (measured 1:1 by dsca-2 §4-c; the worst case was the Atlas 10s gRPC
-// timeout gating a healthy nacos). The bound is generous (200ms = 2x the
-// slow leg) to stay CI-stable while still failing the sequential shape
-// (100ms + 50ms + margin > 200ms is asserted by the nacos leg's delay
-// being half the atlas delay).
+// TestFanoutPushParallelSinksBoundWallClock pins the DS-2-2 core with a
+// barrier, avoiding scheduler-dependent wall-clock thresholds.
 func TestFanoutPushParallelSinksBoundWallClock(t *testing.T) {
-	atlas := &delaySink{delay: 100 * time.Millisecond}
-	nacos := &delaySink{delay: 50 * time.Millisecond}
+	barrier := make(chan struct{})
+	atlas := &barrierSink{entered: make(chan struct{}, 1), release: barrier}
+	nacos := &barrierSink{entered: make(chan struct{}, 1), release: barrier}
 	fanout := newTestFanout(t, atlas, nacos)
-
-	start := time.Now()
-	if err := fanout.Push(1, nil); err != nil {
-		t.Fatalf("Push() error = %v, want nil", err)
+	done := make(chan error, 1)
+	go func() { done <- fanout.Push(1, nil) }()
+	select {
+	case <-atlas.entered:
+	case <-time.After(time.Second):
+		t.Fatal("atlas did not enter")
 	}
-	elapsed := time.Since(start)
-
-	// Parallel: max(100ms, 50ms) + scheduling overhead. Sequential:
-	// 150ms + overhead. The bound sits between, closer to the slow leg.
-	if elapsed >= 150*time.Millisecond {
-		t.Fatalf("Push() wall clock = %v, want < 150ms (the slow leg's 100ms dominates, not the 150ms sum — the sequential shape)", elapsed)
+	select {
+	case <-nacos.entered:
+	case <-time.After(time.Second):
+		t.Fatal("nacos did not enter concurrently")
+	}
+	close(barrier)
+	if err := <-done; err != nil {
+		t.Fatalf("Push() error = %v, want nil", err)
 	}
 	if !atlas.pushed() || !nacos.pushed() {
 		t.Fatal("a sink did not receive the push (the parallel dispatch must attempt every sink)")
 	}
 }
+
+type barrierSink struct {
+	entered chan struct{}
+	release <-chan struct{}
+	ran     atomic.Bool
+}
+
+func (s *barrierSink) Push(int64, []*instance.Instance) error {
+	s.entered <- struct{}{}
+	<-s.release
+	s.ran.Store(true)
+	return nil
+}
+func (s *barrierSink) PushAll(int64, []*instance.Instance) error              { return s.Push(0, nil) }
+func (s *barrierSink) GetAll([]int32, string) (*instance.InstanceList, error) { return nil, nil }
+func (s *barrierSink) pushed() bool                                           { return s.ran.Load() }
 
 // delaySink sleeps its delay on every Push/PushAll and records that it ran.
 type delaySink struct {
@@ -984,6 +998,16 @@ func TestFailedSinkNamesResolvesFanoutAndLegacyErrors(t *testing.T) {
 	}
 }
 
+func TestFailedSinkNamesSkipsStaleFullPushButKeepsOtherFailure(t *testing.T) {
+	err := FanoutError{
+		{Sink: "atlas", Err: fmt.Errorf("wrapped: %w", errStaleFullPush)},
+		{Sink: "nacos", Err: errors.New("timeout")},
+	}
+	if got, want := failedSinkNames(err, []string{"atlas", "nacos"}), []string{"nacos"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("failedSinkNames(mixed stale/failure) = %v, want %v", got, want)
+	}
+}
+
 // -----------------------------------------------------------------------------
 // The per-sink e2e recording decorator (dsca-2 §3 / §6 row 7)
 // -----------------------------------------------------------------------------
@@ -1308,5 +1332,125 @@ func TestFanoutReconcileSourceErrorPropagatesUnchanged(t *testing.T) {
 	}
 	if got := len(atlas.GetAllCalls()); got != 0 {
 		t.Fatalf("primary GetAll calls = %d, want 0 (a designated error does not fall back)", got)
+	}
+}
+
+func TestFanoutSinkSkipsStaleRevisionPerSink(t *testing.T) {
+	inner := &fakes.FakeInstanceSink{}
+	fanout := newTestFanout(t, inner, &fakes.FakeInstanceSink{})
+	newer := &instance.Instance{InstanceId: "same", Provider: "k8s", Reversion: 2}
+	older := &instance.Instance{InstanceId: "same", Provider: "k8s", Reversion: 1}
+	if err := fanout.Push(2, []*instance.Instance{newer}); err != nil {
+		t.Fatalf("newer push: %v", err)
+	}
+	if err := fanout.Push(1, []*instance.Instance{older}); err != nil {
+		t.Fatalf("stale push: %v", err)
+	}
+	calls := inner.PushCalls()
+	if len(calls) != 1 || calls[0].Instances[0].Reversion != 2 {
+		t.Fatalf("calls = %#v, want only newest revision", calls)
+	}
+}
+
+func TestFanoutPushAllRejectsDuplicateAndStaleBatch(t *testing.T) {
+	inner := &fakes.FakeInstanceSink{}
+	fanout := newTestFanout(t, inner, &fakes.FakeInstanceSink{})
+	dup := []*instance.Instance{{InstanceId: "same", Provider: "k8s", Reversion: 2}, {InstanceId: "same", Provider: "k8s", Reversion: 2}}
+	if err := fanout.PushAll(2, dup); err == nil {
+		t.Fatal("PushAll duplicate batch error = nil, want rejection")
+	}
+	if got := len(inner.PushAllCalls()); got != 0 {
+		t.Fatalf("duplicate PushAll calls = %d, want 0 (batch must not reach sink)", got)
+	}
+	if err := fanout.Push(3, []*instance.Instance{{InstanceId: "same", Provider: "k8s", Reversion: 3}}); err != nil {
+		t.Fatalf("newer Push() error = %v", err)
+	}
+	if err := fanout.PushAll(2, []*instance.Instance{{InstanceId: "same", Provider: "k8s", Reversion: 2}}); err == nil {
+		t.Fatal("stale PushAll error = nil, want rejection")
+	}
+	if got := len(inner.PushAllCalls()); got != 0 {
+		t.Fatalf("stale PushAll calls = %d, want 0 (partial snapshot must not reach sink)", got)
+	}
+}
+
+type serialProbeSink struct {
+	mu      sync.Mutex
+	active  int
+	maxSeen int
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *serialProbeSink) enter() {
+	s.mu.Lock()
+	s.active++
+	if s.active > s.maxSeen {
+		s.maxSeen = s.active
+	}
+	s.mu.Unlock()
+	s.entered <- struct{}{}
+	<-s.release
+	s.mu.Lock()
+	s.active--
+	s.mu.Unlock()
+}
+func (s *serialProbeSink) Push(int64, []*instance.Instance) error    { s.enter(); return nil }
+func (s *serialProbeSink) PushAll(int64, []*instance.Instance) error { s.enter(); return nil }
+func (s *serialProbeSink) GetAll([]int32, string) (*instance.InstanceList, error) {
+	return &instance.InstanceList{}, nil
+}
+
+func TestFanoutSerializesMixedPushAndPushAllPerIdentity(t *testing.T) {
+	probe := &serialProbeSink{entered: make(chan struct{}, 2), release: make(chan struct{}, 2)}
+	fanout := newTestFanout(t, probe, &fakes.FakeInstanceSink{})
+	item := &instance.Instance{InstanceId: "same", Provider: "k8s", Reversion: 1}
+	done := make(chan struct{}, 2)
+	go func() { _ = fanout.Push(1, []*instance.Instance{item}); done <- struct{}{} }()
+	waitForSignal(t, probe.entered, "first serialized push")
+	go func() { _ = fanout.PushAll(1, []*instance.Instance{item}); done <- struct{}{} }()
+	select {
+	case <-probe.entered:
+		t.Fatal("mixed Push/PushAll entered sink concurrently")
+	case <-time.After(50 * time.Millisecond):
+	}
+	probe.release <- struct{}{}
+	waitForSignal(t, probe.entered, "second serialized push")
+	probe.release <- struct{}{}
+	waitForSignal(t, done, "first mixed operation")
+	waitForSignal(t, done, "second mixed operation")
+	probe.mu.Lock()
+	maxSeen := probe.maxSeen
+	probe.mu.Unlock()
+	if maxSeen != 1 {
+		t.Fatalf("maximum concurrent sink operations = %d, want 1", maxSeen)
+	}
+}
+
+type closeCountingSink struct {
+	mu     sync.Mutex
+	closes int
+}
+
+func (s *closeCountingSink) Push(int64, []*instance.Instance) error    { return nil }
+func (s *closeCountingSink) PushAll(int64, []*instance.Instance) error { return nil }
+func (s *closeCountingSink) GetAll([]int32, string) (*instance.InstanceList, error) {
+	return &instance.InstanceList{}, nil
+}
+func (s *closeCountingSink) Close() error { s.mu.Lock(); s.closes++; s.mu.Unlock(); return nil }
+
+func TestFanoutCloseIsIdempotentAndClosesUnderlyingOnce(t *testing.T) {
+	inner := &closeCountingSink{}
+	fanout := newTestFanout(t, inner, &fakes.FakeInstanceSink{})
+	if err := fanout.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+	if err := fanout.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	inner.mu.Lock()
+	closes := inner.closes
+	inner.mu.Unlock()
+	if closes != 1 {
+		t.Fatalf("underlying Close calls = %d, want exactly 1", closes)
 	}
 }
