@@ -29,6 +29,10 @@ func newAdapterCommand() *cobra.Command {
 	cmd.Flags().BoolP("disable-worker", "w", false, "disable push worker")
 	cmd.Flags().StringSliceP("appcodes", "", []string{}, "only push instances of the appcodes")
 	cmd.Flags().StringP("metrics-addr", "", ":8090", "the Prometheus metrics address")
+	cmd.Flags().String("appcenter-notice-endpoint", "", "appcenter notice endpoint")
+	cmd.Flags().String("appcenter-notice-auth-token", "", "appcenter notice token")
+	cmd.Flags().Int("appcenter-notice-timeout", 0, "appcenter notice timeout")
+	cmd.Flags().Int("appcenter-notice-retries", 0, "appcenter notice retries")
 	cmd.Flags().StringP("nacos-addr", "", "", "the Nacos OpenAPI address")
 	cmd.Flags().StringSlice("nacos-server-list", nil, "comma-separated Nacos server addresses")
 	cmd.Flags().String("nacos-namespace", "", "Nacos namespace ID")
@@ -83,6 +87,10 @@ func TestAdapterFlagsMapsEveryDemoFlag(t *testing.T) {
 	setFlag(t, cmd, "nacos-insecure-skip-verify", "true")
 	setFlag(t, cmd, "nacos-timeout", "17")
 	setFlag(t, cmd, "nacos-transport", "http-compat")
+	setFlag(t, cmd, "appcenter-notice-endpoint", "https://notice.example.test/api")
+	setFlag(t, cmd, "appcenter-notice-auth-token", "notice-secret")
+	setFlag(t, cmd, "appcenter-notice-timeout", "4")
+	setFlag(t, cmd, "appcenter-notice-retries", "2")
 	setFlag(t, cmd, "consul-addr", "127.0.0.1:18500")
 	setFlag(t, cmd, "kubeconfig", "/tmp/soak/kubeconfig")
 	setFlag(t, cmd, "etcd-endpoints", "127.0.0.1:12379")
@@ -105,6 +113,9 @@ func TestAdapterFlagsMapsEveryDemoFlag(t *testing.T) {
 		flags.NacosUsername != "operator" || flags.NacosPassword != "secret" || flags.NacosAccessToken != "token" || flags.NacosCAFile != "/tmp/nacos-ca.pem" ||
 		flags.NacosServerName != "nacos.internal" || !flags.NacosInsecureSkipVerify || flags.NacosTimeout != 17 || flags.NacosTransport != "http-compat" {
 		t.Fatalf("Nacos options not mapped: %+v", flags)
+	}
+	if flags.AppCenterNoticeEndpoint != "https://notice.example.test/api" || flags.AppCenterNoticeAuthToken != "notice-secret" || flags.AppCenterNoticeTimeout != 4 || flags.AppCenterNoticeRetries != 2 {
+		t.Fatalf("appcenter notice options not mapped: %+v", flags)
 	}
 	if got := flags.ConsulAddrFlag; !reflect.DeepEqual(got, []string{"127.0.0.1:18500"}) {
 		t.Fatalf("ConsulAddrFlag = %v, want [127.0.0.1:18500]", got)
