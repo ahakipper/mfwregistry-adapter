@@ -30,7 +30,8 @@ type consul struct {
 	interval      int                        // the time interval for full synchronization. default 7200s(2h)
 	filters       []providers.InstanceFilter // filters is a collection of functions used to filter invalid instances
 	cache         providers.CacheIterface    // consul endpoint cache
-	pool          *ants.Pool                 // goroutine pool
+	generation    uint64
+	pool          *ants.Pool // goroutine pool
 	initDone      bool
 
 	// sourceErr records the error of the last GetAll when the consul source
@@ -157,8 +158,6 @@ func (c *consul) syncInstance() (err error) {
 	defer c.Unlock()
 	oldCache := c.cache
 	newCache := providers.NewCache(8)
-	// Init cache
-	c.cache = providers.NewCache(8)
 	// Get all services from consul
 	currentInss := c.GetAll()
 	// Here, we assume that the consul data is impossible to be empty. Once it is empty,
@@ -178,6 +177,7 @@ func (c *consul) syncInstance() (err error) {
 	c.EventsSync(addEvents, updateEvents, deleteEvents)
 	// Update cache
 	c.cache = newCache
+	c.generation++
 
 	return err
 }
@@ -432,12 +432,8 @@ func (c *consul) ProcessIntervalFullPush() {
 // already holds this lock across the worker.GetAll RPC (a strictly wider
 // footprint), so no new lock-ordering surface is introduced.
 func (c *consul) emitSyncAll() {
-	c.Lock()
-	all := c.GetAll()
-	err := c.sourceErr
-	c.Unlock()
-	if err != nil {
-		log.Logger.Warnf("consul source read failed, skipping the SyncAll emission this tick (an error-time empty full-sync would assert a false vanished state to every sink): %s", err.Error())
+	all, generation, valid := c.snapshotForFullPush()
+	if !valid {
 		return
 	}
 	// Tick-time origin + ns unit (dsca-2 §3 Option (b), §6 origin semantics).
@@ -445,7 +441,30 @@ func (c *consul) emitSyncAll() {
 		Trigger: time.Now().UnixNano(),
 		Data:    all,
 		Operate: worker.OperateTypeSyncAll,
+		Revalidate: func() ([]*v2.Instance, bool) {
+			latest, current, ok := c.snapshotForFullPush()
+			if !ok {
+				return nil, false
+			}
+			if current != generation {
+				return latest, true
+			}
+			return all, true
+		},
 	})
+}
+
+func (c *consul) snapshotForFullPush() ([]*v2.Instance, uint64, bool) {
+	c.Lock()
+	defer c.Unlock()
+	if c.sourceErr != nil {
+		return nil, c.generation, false
+	}
+	all := c.cache.List()
+	if all == nil {
+		all = []*v2.Instance{}
+	}
+	return all, c.generation, true
 }
 
 // CompareAndFlush compare and find diff instances then flush
@@ -465,6 +484,7 @@ func (c *consul) CompareAndFlush() {
 				onlineCount++
 			}
 		}
+		c.generation++
 		// compare diffs and sync incrementally
 		registryList, err := c.worker.GetAll([]int32{providers.InstanceStatusOnline}, providers.ProviderEcs)
 		if err != nil {

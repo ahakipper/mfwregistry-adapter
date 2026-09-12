@@ -638,6 +638,41 @@ func TestBlackboxConsulIntervalFullPushSkipsSyncAllWhenSourceErrors(t *testing.T
 	}
 }
 
+func TestBlackboxConsulSyncInstanceSourceErrorRetainsOldCache(t *testing.T) {
+	server := consulmock.Start()
+	defer server.Close()
+	server.SetServices(map[string][]string{"pay-user": {"microservice"}})
+	server.SetEntries("pay-user", []*api.ServiceEntry{{
+		Node: &api.Node{Node: "node-1", Address: "10.0.0.1"},
+		Service: &api.AgentService{ID: "srv-a", Service: "pay-user", Port: 8081, Tags: []string{"microservice"}, Meta: map[string]string{
+			"app-code": "pay-user", "env-type": providers.EnvTest, "version": "v1",
+		}},
+	}})
+	c := newBlackboxConsulProvider(t, server, &fakeWorker{}, 0, context.Background())
+	old := &sv.Instance{InstanceId: "old", Provider: "ecs", Reversion: 7, Status: providers.InstanceStatusOnline}
+	c.cache.ReplaceOrInsert(old)
+	failing := &flippingMonitor{fails: true}
+	c.monitor = failing
+	if err := c.syncInstance(); err == nil {
+		t.Fatal("syncInstance() error = nil, want source failure")
+	}
+	if got := c.cache.Get("old"); got == nil || got.Reversion != old.Reversion {
+		t.Fatalf("cache after source error = %#v, want old snapshot retained", got)
+	}
+}
+
+func TestBlackboxConsulEmitSyncAllSourceErrorSafeFail(t *testing.T) {
+	c := &consul{cache: providers.NewCache(8), worker: &fakeWorker{}, ctx: context.Background()}
+	c.cache.ReplaceOrInsert(&sv.Instance{InstanceId: "old", Provider: "ecs", Reversion: 1})
+	c.Lock()
+	c.sourceErr = errors.New("source unavailable")
+	c.Unlock()
+	c.emitSyncAll()
+	if got := len(c.worker.(*fakeWorker).syncAllEvents()); got != 0 {
+		t.Fatalf("SyncAll events = %d, want 0 when source read failed", got)
+	}
+}
+
 // flippingMonitor is a Monitor double whose GetServices error state can be
 // flipped concurrently: it alternates between answering an empty catalog
 // (legit empty) and a connection-shaped error (source read failure). It

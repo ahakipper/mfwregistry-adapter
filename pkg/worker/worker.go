@@ -64,13 +64,72 @@ func (w *DefaultWorker) InitEventHandlers() {
 		return nil
 	})
 	w.AddEventHandler(OperateTypeSyncAll, func(e *Event) error {
-		if err := w.pusher.PushAll(e.Trigger, e.Data); err != nil {
+		var err error
+		if gated, ok := w.pusher.(interface {
+			PushAllWithRevalidate(int64, []*instance.Instance, func() ([]*instance.Instance, bool)) error
+		}); ok {
+			err = gated.PushAllWithRevalidate(e.Trigger, e.Data, e.Revalidate)
+		} else {
+			if e.Revalidate != nil {
+				data, valid := e.Revalidate()
+				if !valid {
+					return nil
+				}
+				e.Data = data
+			}
+			err = w.pusher.PushAll(e.Trigger, e.Data)
+		}
+		// A full snapshot rejected as stale must never be queued: retrying the
+		// same snapshot can prune newer remote state forever. Revalidate once and
+		// submit only the latest complete snapshot.
+		if errors.Is(err, errStaleFullPush) && e.Revalidate != nil && !hasNonStaleFanoutFailure(err) {
+			if gated, ok := w.pusher.(interface {
+				PushAllWithRevalidate(int64, []*instance.Instance, func() ([]*instance.Instance, bool)) error
+			}); ok {
+				err = gated.PushAllWithRevalidate(time.Now().UnixNano(), e.Data, e.Revalidate)
+			} else if data, valid := e.Revalidate(); valid {
+				e.Data = data
+				err = w.pusher.PushAll(time.Now().UnixNano(), data)
+			}
+			if err == nil {
+				return nil
+			}
+			if errors.Is(err, errStaleFullPush) {
+				w.logger.Warnf("dropping stale full push after revalidation; snapshot will be rebuilt on the next tick")
+				return nil
+			}
+		}
+		// A stale full snapshot has no safe retry representation when the
+		// producer cannot revalidate it. Queuing the same partial/stale batch
+		// would let a later retry prune newer remote state. Drop it and wait
+		// for the next provider full snapshot instead.
+		if errors.Is(err, errStaleFullPush) && !hasNonStaleFanoutFailure(err) {
+			w.logger.Warnf("dropping stale full push without revalidation; snapshot will be rebuilt on the next tick")
+			return nil
+		}
+		if err != nil {
 			w.logger.Errorf("wokderService syncAll failed, instance: %v", e.Data)
 			w.unsyncedService.Add(e.Trigger, e.Data, w.queuedSinks(err))
 			return err
 		}
 		return nil
 	})
+}
+
+// hasNonStaleFanoutFailure keeps a mixed fan-out error retryable. A stale
+// full snapshot can be discarded, but a sibling sink's timeout or other
+// transient failure still needs to enter the per-sink retry queue.
+func hasNonStaleFanoutFailure(err error) bool {
+	var fanoutErr FanoutError
+	if !errors.As(err, &fanoutErr) {
+		return false
+	}
+	for _, failure := range fanoutErr {
+		if !errors.Is(failure.Err, errStaleFullPush) {
+			return true
+		}
+	}
+	return false
 }
 
 // queuedSinks resolves which sinks a failed push queues retries for

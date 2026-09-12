@@ -31,7 +31,8 @@ type k8s struct {
 	interval     int                        // the time interval for full synchronization. default 600s(10m)
 	filters      []providers.InstanceFilter // filters is a collection of functions used to filter invalid instances
 	cache        providers.CacheIterface    // pod cache
-	pool         *ants.Pool                 // goroutine pool
+	generation   uint64
+	pool         *ants.Pool // goroutine pool
 	// queueDepthMetrics publishes the robot's coalescing-queue depth on the
 	// k8s_queue_depth gauge (dsca-1 DS-1-1 fix item 1: "plus a queueDepth
 	// gauge"). Nil disables publication — the in-package tests construct the
@@ -232,6 +233,8 @@ func (k *k8s) monitor() {
 }
 
 func (k *k8s) ProcessCache(event k8srobot.EventType, ins *sv.Instance) {
+	k.Lock()
+	defer k.Unlock()
 	switch event {
 	case k8srobot.EventAdd:
 		k.cache.ReplaceOrInsert(ins)
@@ -240,6 +243,17 @@ func (k *k8s) ProcessCache(event k8srobot.EventType, ins *sv.Instance) {
 	case k8srobot.EventDelete:
 		k.cache.ReplaceOrInsert(ins)
 	}
+	k.generation++
+}
+
+func (k *k8s) snapshotForFullPush() ([]*sv.Instance, uint64, bool) {
+	k.Lock()
+	defer k.Unlock()
+	all := k.cache.List()
+	if all == nil {
+		all = []*sv.Instance{}
+	}
+	return all, k.generation, true
 }
 
 // VerifyInstance checks wether the instance is valid
@@ -396,10 +410,14 @@ func (k *k8s) flushInstances() {
 	if all := k.GetAll(); all != nil && len(all) > 0 {
 		// flush the original cache and fill it
 		before := time.Now()
-		k.cache.Clear()
+		newCache := providers.NewCache(2)
 		for _, ins := range all {
-			k.cache.ReplaceOrInsert(ins)
+			newCache.ReplaceOrInsert(ins)
 		}
+		k.Lock()
+		k.cache = newCache
+		k.generation++
+		k.Unlock()
 		log.Logger.Infof("flush k8s cache spend time: %s", unit.RelTime(before, time.Now(), "", ""))
 		// push all. Origin is tick-time (time.Now at Event construction),
 		// not CreateAt — the documented full-push origin semantics of
@@ -417,14 +435,18 @@ func (k *k8s) CompareAndFlush() {
 	log.Logger.Infof("%s: trying to compare and find diff instances then flush", k.providerName)
 	if all := k.GetAll(); all != nil && len(all) > 0 {
 		// process the cache
-		k.cache.Clear()
+		newCache := providers.NewCache(2)
 		onlineCount := 0
 		for _, item := range all {
-			k.cache.ReplaceOrInsert(item)
+			newCache.ReplaceOrInsert(item)
 			if item.Status == 1 {
 				onlineCount++
 			}
 		}
+		k.Lock()
+		k.cache = newCache
+		k.generation++
+		k.Unlock()
 		// compare diffs and sync incrementally
 		// the worker is exactly what communicates with Atlas (fetch from the discovery center, push data)
 		list, err := k.worker.GetAll([]int32{providers.InstanceStatusOnline, providers.InstanceStatusUnhealthy}, providers.ProviderK8s)
@@ -652,7 +674,10 @@ func (k *k8s) ProcessIntervalFullPush() {
 // exactly that cluster whose desired set went empty — the provider's
 // vanished services, never another provider's.
 func (k *k8s) emitSyncAll() {
-	all := k.GetAll()
+	all, generation, valid := k.snapshotForFullPush()
+	if !valid {
+		return
+	}
 	// Tick-time origin + ns unit (dsca-2 §3 Option (b), §6 origin semantics):
 	// a PushAll observation measures "age of the full push at completion",
 	// not event age.
@@ -660,6 +685,16 @@ func (k *k8s) emitSyncAll() {
 		Trigger: time.Now().UnixNano(),
 		Data:    all,
 		Operate: worker.OperateTypeSyncAll,
+		Revalidate: func() ([]*sv.Instance, bool) {
+			latest, current, ok := k.snapshotForFullPush()
+			if !ok {
+				return nil, false
+			}
+			if current != generation {
+				return latest, true
+			}
+			return all, true
+		},
 	})
 }
 

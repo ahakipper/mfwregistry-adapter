@@ -4,11 +4,117 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 
 	"spotter/internal/domain/instance"
 	"spotter/internal/testkit/fakes"
 )
+
+type staleSequenceSink struct {
+	mu    sync.Mutex
+	calls []*instance.Instance
+	n     int
+}
+
+func (s *staleSequenceSink) Push(int64, []*instance.Instance) error { return nil }
+func (s *staleSequenceSink) PushAll(_ int64, items []*instance.Instance) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(items) > 0 {
+		copy := *items[0]
+		s.calls = append(s.calls, &copy)
+	}
+	s.n++
+	if s.n == 1 {
+		return errStaleFullPush
+	}
+	return nil
+}
+func (s *staleSequenceSink) GetAll([]int32, string) (*instance.InstanceList, error) {
+	return &instance.InstanceList{}, nil
+}
+
+func (s *staleSequenceSink) snapshots() []*instance.Instance {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*instance.Instance(nil), s.calls...)
+}
+
+func TestWorkerSyncAllStaleWithoutRevalidateIsDropped(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sink := &fakes.FakeInstanceSink{PushAllErr: errStaleFullPush}
+	w, err := NewResourceWorker(ctx, sink, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+	if err != nil {
+		t.Fatalf("NewResourceWorker() error = %v", err)
+	}
+	w.Handle(&Event{Trigger: 1, Data: []*instance.Instance{{InstanceId: "full", Reversion: 1}}, Operate: OperateTypeSyncAll})
+	if got := w.unsyncedService.Len(); got != 0 {
+		t.Fatalf("stale SyncAll queue depth = %d, want 0 (stale snapshot must be discarded)", got)
+	}
+}
+
+func TestWorkerSyncAllStaleRevalidatesLatestSnapshot(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sink := &staleSequenceSink{}
+	w, err := NewResourceWorker(ctx, sink, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+	if err != nil {
+		t.Fatalf("NewResourceWorker() error = %v", err)
+	}
+	latest := []*instance.Instance{{InstanceId: "full", Reversion: 2}}
+	stale := []*instance.Instance{{InstanceId: "full", Reversion: 1}}
+	var revalidations int
+	w.Handle(&Event{
+		Trigger: 1,
+		Data:    []*instance.Instance{{InstanceId: "full", Reversion: 1}},
+		Operate: OperateTypeSyncAll,
+		Revalidate: func() ([]*instance.Instance, bool) {
+			revalidations++
+			if revalidations == 1 {
+				return stale, true
+			}
+			return latest, true
+		},
+	})
+	if got := w.unsyncedService.Len(); got != 0 {
+		t.Fatalf("queue depth after successful revalidated SyncAll = %d, want 0", got)
+	}
+	calls := sink.snapshots()
+	if len(calls) != 2 || calls[0].Reversion != 1 || calls[1].Reversion != 2 {
+		t.Fatalf("PushAll snapshots = %#v, want stale then latest revisions", calls)
+	}
+}
+
+func TestWorkerSyncAllMixedStaleAndTransientQueuesTransientSinkOnly(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fanout, err := NewFanoutSink(
+		&fakes.FakeLogger{},
+		NamedSink{Name: "atlas", Sink: &fakes.FakeInstanceSink{PushAllErr: errStaleFullPush}},
+		NamedSink{Name: "nacos", Sink: &fakes.FakeInstanceSink{PushAllErr: errors.New("timeout")}},
+	)
+	if err != nil {
+		t.Fatalf("NewFanoutSink() error = %v", err)
+	}
+	w, err := NewResourceWorker(ctx, fanout, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+	if err != nil {
+		t.Fatalf("NewResourceWorker() error = %v", err)
+	}
+	w.Handle(&Event{Trigger: 1, Operate: OperateTypeSyncAll,
+		Data: []*instance.Instance{{InstanceId: "mixed", Reversion: 1}}})
+	w.unsyncedService.RLock()
+	defer w.unsyncedService.RUnlock()
+	if len(w.unsyncedService.store) != 1 {
+		t.Fatalf("queued retry entries = %d, want 1", len(w.unsyncedService.store))
+	}
+	for key := range w.unsyncedService.store {
+		if key.Sink != "nacos" {
+			t.Fatalf("queued sink = %q, want nacos", key.Sink)
+		}
+	}
+}
 
 func TestNewResourceWorkerRejectsNilPusher(t *testing.T) {
 	worker, err := NewResourceWorker(context.Background(), nil, nil, nil)

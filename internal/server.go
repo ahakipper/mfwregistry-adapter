@@ -283,10 +283,15 @@ func (s *Server) startProviders() error {
 		return errors.WithMessage(err, "new discovery center")
 	}
 	var cleanupOnce sync.Once
+	var fanout *worker.FanoutSink
 	cleanup := func() {
 		cleanupOnce.Do(func() {
 			wcancel()
-			if closeErr := registry.Close(); closeErr != nil {
+			if fanout != nil {
+				if closeErr := fanout.Close(); closeErr != nil {
+					s.logger.Errorf("close sink fanout: %s", closeErr)
+				}
+			} else if closeErr := registry.Close(); closeErr != nil {
 				s.logger.Errorf("close discovery center client: %s", closeErr)
 			}
 		})
@@ -323,7 +328,7 @@ func (s *Server) startProviders() error {
 	// decorator of dsca-2 §6 row 7 observes on the real recorder, so every
 	// Push/PushAll/PushTo (including every 5s retry) produces one
 	// event_to_store_e2e_duration_seconds observation in production.
-	fanout, err := worker.NewFanoutSinkWithMetrics(s.logger, s.metrics, sinks...)
+	fanout, err = worker.NewFanoutSinkWithMetrics(s.logger, s.metrics, sinks...)
 	if err != nil {
 		cleanup()
 		s.clearStartup(generation, nil)

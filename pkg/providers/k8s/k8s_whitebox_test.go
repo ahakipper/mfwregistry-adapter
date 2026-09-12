@@ -863,6 +863,57 @@ func TestProcessCacheReplaceOrInsertOnAddUpdateDelete(t *testing.T) {
 	}
 }
 
+func TestK8sSyncAllRevalidateReturnsCompleteConcurrentCache(t *testing.T) {
+	w := &fakeWorker{}
+	k := newTestProvider(newFakeRobot(nil, nil, false), w)
+	k.ProcessCache(k8srobot.EventAdd, &sv.Instance{InstanceId: "a", Provider: "k8s", Reversion: 1, Status: providers.InstanceStatusOnline})
+	k.ProcessCache(k8srobot.EventAdd, &sv.Instance{InstanceId: "c", Provider: "k8s", Reversion: 1, Status: providers.InstanceStatusOnline})
+	k.emitSyncAll()
+	allEvents := w.handleSnapshot()
+	var events []*worker.Event
+	for _, event := range allEvents {
+		if event.Operate == worker.OperateTypeSyncAll {
+			events = append(events, event)
+		}
+	}
+	if len(events) != 1 || events[0].Revalidate == nil {
+		t.Fatalf("SyncAll events = %#v, want one revalidatable event", events)
+	}
+	initialGeneration := k.generation
+	var wg sync.WaitGroup
+	for _, event := range []struct {
+		typ k8srobot.EventType
+		ins *sv.Instance
+	}{
+		{k8srobot.EventUpdate, &sv.Instance{InstanceId: "a", Provider: "k8s", Reversion: 2, Status: providers.InstanceStatusOnline}},
+		{k8srobot.EventAdd, &sv.Instance{InstanceId: "b", Provider: "k8s", Reversion: 1, Status: providers.InstanceStatusOnline}},
+		{k8srobot.EventDelete, &sv.Instance{InstanceId: "c", Provider: "k8s", Reversion: 2, Status: providers.InstanceStatusOffline}},
+	} {
+		wg.Add(1)
+		go func(event k8srobot.EventType, ins *sv.Instance) { defer wg.Done(); k.ProcessCache(event, ins) }(event.typ, event.ins)
+	}
+	wg.Wait()
+	latest, ok := events[0].Revalidate()
+	if !ok {
+		t.Fatal("Revalidate() ok = false, want complete cache snapshot")
+	}
+	byID := make(map[string]*sv.Instance, len(latest))
+	for _, ins := range latest {
+		byID[ins.InstanceId] = ins
+	}
+	for _, id := range []string{"a", "b", "c"} {
+		if byID[id] == nil {
+			t.Fatalf("Revalidate() missing %q from complete cache: %#v", id, latest)
+		}
+	}
+	if byID["a"].Reversion != 2 || byID["c"].Status != providers.InstanceStatusOffline {
+		t.Fatalf("Revalidate() returned stale/partial values: %#v", byID)
+	}
+	if k.generation != initialGeneration+3 {
+		t.Fatalf("generation = %d, want monotonic increment to %d", k.generation, initialGeneration+3)
+	}
+}
+
 // -----------------------------------------------------------------------------
 // eventSync
 // -----------------------------------------------------------------------------
