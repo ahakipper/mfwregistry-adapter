@@ -78,6 +78,9 @@ func TestNacosSDKPersistentLifecycle(t *testing.T) {
 			status = "failed"
 		}
 		t.Logf("NACOS_SDK_EVAL_BATCH cleanup_attempted=%t status=%s error=%v residual_unknown=%t", batchAttempted, status, cleanupErr, cleanupErr != nil)
+		if cleanupErr != nil {
+			t.Errorf("Nacos SDK batch cleanup failed (residual_unknown=true): %v", cleanupErr)
+		}
 	}()
 	if err := client.BatchRegisterEphemeral(batchParam); err != nil {
 		t.Fatalf("SDK ephemeral batch register: %v", err)
