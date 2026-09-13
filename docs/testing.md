@@ -542,6 +542,8 @@ contract checks should run with `bash scripts/observe_lifecycle_test.sh` (and
 kwokctl/docker/nc and occupied ports remain explicit EnvError/InfraError.
 The 2h/1000+ real run remains `NOT VERIFIED` when kwokctl or its prerequisites
 are unavailable.
+The owned lifecycle writes state before creation and uses an EXIT cleanup trap;
+state hashes and residual markers permit safe retry after partial failure.
 When `OBS_KUBECONFIG` is set, `make test-observe` runs only read-only
 `TestObserveUnit` cases and exits before any apply/delete driver operation.
 ### Nacos SDK startup capability gate

@@ -40,7 +40,7 @@ capacity=$(kubectl --kubeconfig "$kc" get node "$node" -o jsonpath='{.status.all
 [[ "$capacity" =~ ^[0-9]+$ && "$capacity" -ge "$scale" ]] || { echo "InfraError: node pod capacity $capacity below $scale" >&2; exit 3; }
 cpu=$(kubectl --kubeconfig "$kc" get node "$node" -o jsonpath='{.status.allocatable.cpu}')
 memory=$(kubectl --kubeconfig "$kc" get node "$node" -o jsonpath='{.status.allocatable.memory}')
-[[ -n "$cpu" && -n "$memory" ]] || { echo "InfraError: node CPU/memory capacity unavailable" >&2; exit 3; }
+[[ "$cpu" =~ ^[0-9]+m?$ && "$memory" =~ ^[0-9]+(Ki|Mi|Gi|Ti)?$ ]] || { echo "InfraError: invalid node CPU/memory capacity cpu=$cpu memory=$memory" >&2; exit 3; }
 kubectl --kubeconfig "$kc" wait --for=condition=Ready "node/$node" --timeout=30s >/dev/null || { echo "InfraError: kwok node not Ready" >&2; exit 3; }
 echo "state=ready" >> "$out/observe-state"
 sha256sum "$out/observe-state" > "$out/observe-state.sha256"
