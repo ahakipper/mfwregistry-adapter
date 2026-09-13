@@ -37,13 +37,13 @@ func TestNacosReal(t *testing.T) {
 	}
 	service := "__spotter_real_" + time.Now().UTC().Format("20060102T150405.000000000")
 	params := nacos.InstanceParams{ServiceName: service, IP: "127.0.0.1", Port: 1, ClusterName: "spotter-real", GroupName: cfg.client.GroupName, NamespaceID: cfg.client.NamespaceID, Enabled: true, Ephemeral: false}
-	registered := true // SDK transport errors may be ambiguous after server-side apply.
+	writeAttempted := false // SDK transport errors may be ambiguous after server-side apply.
 	cleanupAttempted := false
 	cleanupStatus := "not_needed"
 	var cleanupElapsed time.Duration
 	defer func() {
 		var cleanupErr error
-		if registered {
+		if writeAttempted {
 			cleanupAttempted = true
 			cleanupStatus = "passed"
 			cleanupStart := time.Now()
@@ -59,6 +59,7 @@ func TestNacosReal(t *testing.T) {
 			t.Errorf("Nacos client close failed: %v", closeErr)
 		}
 	}()
+	writeAttempted = true
 	if err := client.RegisterInstance(params); err != nil {
 		t.Fatalf("official SDK persistent register: %v", err)
 	}
@@ -85,6 +86,5 @@ func TestNacosReal(t *testing.T) {
 	}
 	cleanupElapsed = time.Since(cleanupStart)
 	cleanupStatus = "passed"
-	registered = false
 	t.Logf("NACOS_REAL PASS: endpoint=%s transport=sdk lifecycle=register,catalog,list,services,subscribe,unsubscribe,deregister latency_ms=%d service=%s", cfg.endpoint, time.Since(started).Milliseconds(), service)
 }
