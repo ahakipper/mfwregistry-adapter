@@ -23,6 +23,18 @@ func TestDockerErrorClassificationDistinguishesNotFound(t *testing.T) {
 	}
 }
 
+func TestNacosPortMappings(t *testing.T) {
+	p, err := nacosPortMappings(28848)
+	if err != nil || p.http != 28848 || p.grpc != 29848 || p.control != 29849 {
+		t.Fatalf("mapping=%+v err=%v", p, err)
+	}
+	for _, port := range []int{0, 1023, 64535, 65535} {
+		if _, err := nacosPortMappings(port); err == nil {
+			t.Fatalf("port %d accepted", port)
+		}
+	}
+}
+
 func TestObserveCommandHelpersHonorCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

@@ -127,6 +127,10 @@ func nacosHostPort(addr string) string {
 // port. It fails fast when the image is missing (the harness does not
 // silently substitute a mock for the real server).
 func dockerRunNacos(hostPort int) error {
+	ports, err := nacosPortMappings(hostPort)
+	if err != nil {
+		return err
+	}
 	image := nacosImage
 	if override := strings.TrimSpace(os.Getenv("OBS_NACOS_IMAGE")); override != "" {
 		image = override
@@ -152,11 +156,20 @@ func dockerRunNacos(hostPort int) error {
 	out, err := runCommand("docker", "run", "-d", "--name", observeNacosContainer,
 		"--platform", nacosPlatform,
 		"-e", "MODE=standalone", "-e", "JVM_XMS=512m", "-e", "JVM_XMX=512m",
-		"-p", fmt.Sprintf("%d:8848", hostPort), canonical)
+		"-p", fmt.Sprintf("%d:8848", hostPort), "-p", fmt.Sprintf("%d:9848", ports.grpc), "-p", fmt.Sprintf("%d:9849", ports.control), canonical)
 	if err != nil {
 		return fmt.Errorf("observe: docker run nacos: %w: %s", err, strings.TrimSpace(out))
 	}
 	return nil
+}
+
+type nacosPorts struct{ http, grpc, control int }
+
+func nacosPortMappings(hostPort int) (nacosPorts, error) {
+	if hostPort < 1024 || hostPort > 64534 {
+		return nacosPorts{}, fmt.Errorf("observe: EnvError invalid Nacos host port %d", hostPort)
+	}
+	return nacosPorts{http: hostPort, grpc: hostPort + 1000, control: hostPort + 1001}, nil
 }
 
 func validateNacosImage(image string) (string, error) {
