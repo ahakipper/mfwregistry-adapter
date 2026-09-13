@@ -24,6 +24,7 @@ import (
 	"spotter/internal"
 	"spotter/internal/composition"
 	infraconfig "spotter/internal/infra/config"
+	"spotter/internal/infra/legacycompat"
 	"spotter/pkg/log"
 	"spotter/pkg/notice"
 	"spotter/pkg/providers"
@@ -242,30 +243,51 @@ func assignLegacyGlobals(cfg infraconfig.Config) {
 // environment preset of the resolved config.
 func applyLegacyGlobals(cfg infraconfig.Config) {
 	config.EtcdEndpoints = cfg.Endpoints.EtcdEndpoints
+	legacycompat.RecordWrite()
 	config.CertFile = cfg.Endpoints.CertFile
+	legacycompat.RecordWrite()
 	config.KeyFile = cfg.Endpoints.KeyFile
+	legacycompat.RecordWrite()
 	config.CAFile = cfg.Endpoints.CAFile
+	legacycompat.RecordWrite()
 	config.KubeConfigPath = cfg.Endpoints.KubeConfigPath
+	legacycompat.RecordWrite()
 	config.ConsulAddress = cfg.Endpoints.ConsulAddress
+	legacycompat.RecordWrite()
 	config.LockCampaignKey = cfg.Endpoints.LockCampaignKey
+	legacycompat.RecordWrite()
 	// log
 	config.LogFilePath = cfg.LogFilePath
+	legacycompat.RecordWrite()
 	config.LogSize = cfg.LogSize
+	legacycompat.RecordWrite()
 	config.LogLevel = cfg.LogLevel
+	legacycompat.RecordWrite()
 	config.LogBackups = cfg.LogBackups
+	legacycompat.RecordWrite()
 	config.LogAge = cfg.LogAge
+	legacycompat.RecordWrite()
 	config.LogToStd = cfg.LogToStd
+	legacycompat.RecordWrite()
 	config.LogEncoding = cfg.LogEncoding
+	legacycompat.RecordWrite()
 	// push
 	config.PushAllInterval = cfg.PushAllInterval
+	legacycompat.RecordWrite()
 	// grpc
 	config.GrpcAddr = cfg.GrpcAddr
+	legacycompat.RecordWrite()
 	// disable push worker action
 	config.DisablePushWorker = cfg.DisablePushWorker
+	legacycompat.RecordWrite()
 	config.Providers = cfg.Providers
+	legacycompat.RecordWrite()
 	config.PushAppCodes = cfg.PushAppCodes
+	legacycompat.RecordWrite()
 	config.EnableLeaderElection = cfg.EnableLeaderElection
+	legacycompat.RecordWrite()
 	config.MetricsAddr = cfg.MetricsAddr
+	legacycompat.RecordWrite()
 }
 
 // flag helpers: they read the named flag and fall back to the zero value,

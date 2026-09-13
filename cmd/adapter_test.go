@@ -14,6 +14,7 @@ import (
 
 	"spotter/config"
 	infraconfig "spotter/internal/infra/config"
+	"spotter/internal/infra/legacycompat"
 )
 
 // newAdapterCommand builds a fresh adapter command with the same flags the
@@ -270,6 +271,8 @@ func TestFlagMappingResolvesConfigAndLegacyGlobals(t *testing.T) {
 	// applyLegacyGlobals (NOT assignLegacyGlobals: that one also runs
 	// LoggerInit/notice init, which touch the filesystem and network-side
 	// globals) must mirror the resolved config into the legacy globals.
+	legacycompat.ResetAccessCounts()
+	t.Cleanup(legacycompat.ResetAccessCounts)
 	applyLegacyGlobals(cfg)
 	if got := config.EtcdEndpoints; !reflect.DeepEqual(got, []string{"127.0.0.1:12379"}) {
 		t.Fatalf("legacy config.EtcdEndpoints = %v, want [127.0.0.1:12379]", got)
@@ -300,5 +303,8 @@ func TestFlagMappingResolvesConfigAndLegacyGlobals(t *testing.T) {
 	}
 	if config.LockCampaignKey != "/paas/spotter-test" {
 		t.Fatalf("legacy config.LockCampaignKey = %q, want the test preset /paas/spotter-test", config.LockCampaignKey)
+	}
+	if counts := legacycompat.AccessCountsSnapshot(); counts.Writes == 0 {
+		t.Fatalf("legacy bridge recorded no writes: %+v", counts)
 	}
 }
