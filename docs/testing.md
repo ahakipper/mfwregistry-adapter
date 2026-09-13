@@ -580,7 +580,9 @@ been executed here because `kwokctl` is unavailable. OBS-mini may use
 Run `scripts/observe_lifecycle_test.sh` for fake-PATH failure and cleanup
 coverage.
 
-Plain Chinese terminology: Nacos batch 是一次提交多个临时实例；cluster-admin
+Plain Chinese terminology: Nacos 协议 batch 是一次请求提交多个实例，当前
+目标服务端只验证到临时实例路径；Spotter application batch 则是按同一应用
+分组、每批最多 100 条，再用官方 SDK 逐条写入持久实例。cluster-admin
 health-check 是 Nacos 服务器主动探测实例健康的管理开关；AppCenter
 endpoint/payload/auth/SLA 分别是告警地址、消息格式、认证信息和时效承诺；
 legacy shim/globals 是为旧调用方保留的兼容包装和进程级全局变量。

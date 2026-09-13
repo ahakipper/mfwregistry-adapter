@@ -814,6 +814,15 @@ Each phase ends with a green build and a green `pkg/providers/k8s` test run
 
 ## 6. Testability Map
 
+> **Current status (2026-09-14, Task 10):** The active composition graph now
+> receives logger and configuration values through explicit dependencies; new
+> production paths do not read package-level logger/config globals. The
+> remaining `internal/infra/legacycompat` bridge and deprecated constructors
+> are retained only for compatibility. Their final removal requires evidence
+> that external callers have migrated and that CLI, environment, and metrics
+> behavior has been replayed. This is an external migration gate, not evidence
+> that the active graph still depends on globals.
+
 | Target module | Test mode | How |
 | --- | --- | --- |
 | `internal/domain/instance` (all of it: diff, compare, filters, state mapping) | **pure unit tests** | table tests; no mocks at all |

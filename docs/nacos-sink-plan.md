@@ -1022,11 +1022,14 @@ That response remains explicit `NOT VERIFIED/unsupported` evidence and is not a
 claim that Spotter cannot batch its work.
 
 For a full persistent snapshot, Spotter groups by namespace/group/service/
-cluster/operation, partitions each application into batches of at most 100
-items, serializes batches within one application scope, and applies a bounded
-global concurrency across official SDK single-instance persistent
-register/deregister calls. Prune starts only after every batch succeeds; a
-failed batch is retried with its operation scope and sequence metadata intact.
+cluster/operation and application identity, partitions each application into
+batches of at most 100 items, serializes batches within one application scope,
+and applies a bounded global concurrency of 8 across official SDK
+single-instance persistent register/deregister calls. Prune starts only after
+every batch succeeds; a failed batch is retried with its operation scope and
+sequence metadata intact. This is application-level scheduling; it does not
+claim that Nacos accepts one protocol request containing 100 persistent
+instances.
 The guarded real gate is `TestNacosRealPersistentApplicationBatch` and must
 record the final catalog hash plus `residual_unknown=false` before being called
 scratch PASS.

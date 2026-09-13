@@ -12,6 +12,14 @@
 **分支/提交：** `refactor/all` / `c986632` (implementation baseline; docs synced after)
 **文档状态：** FINAL（已完成第二轮独立 reviewer 复核）
 
+> **Task 10 current status (2026-09-14):** Initial full sync and retry use
+> application-level persistent batches: one application scope per batch, at
+> most 100 items, batches are serialized within each application scope, and
+> item SDK calls run with global concurrency capped at 8. Each persistent item still uses the official SDK
+> single-instance operation. The Nacos 2.1.0 protocol batch probe returned
+> `RequestHandler Not Found`; this leaves protocol capability target-dependent
+> and does not invalidate Spotter application batching.
+
 > **当前状态增补（2026-09-13，实现基线 `c986632`）：** 生产 Nacos 默认仍为 SDK-only，但因当前 pinned Nacos SDK pseudo-version `0024865` 没有 cluster-admin health-check update，启动在 readiness/canary 前 **BLOCKED / NOT VERIFIED**；`http-compat` 仅测试/回滚。Nacos real/sdk-eval harness 已加入 TLS/CA/server-name/auth guards、redacted evidence 和 write-attempt cleanup，本地 scratch 目标已补充但不能宣称生产协议 PASS。Atlas 仍是普通 Go struct + JSON codec 的 discoverymock stand-in，真实 protobuf/TLS/auth/method compatibility **NOT VERIFIED**。Observe harness 的命令、健康检查和 teardown 已 context-bounded，clean host 缺外部依赖会显式 `NOT VERIFIED: EnvError/InfraError` skip；完整 2h OBS 未运行。Nacos GetAll 只返回 `spotterOwner` 自有条目；Cache Delete/GetAll 已修复 nil、深拷贝、空 provider 和 legacy 唯一匹配。Notifier 有 owned context/Close/retry/fail-closed 生命周期，但真实 AppCenter endpoint/payload/auth/SLA 未提供。DDD active graph 使用显式 ports，legacy bridge 集中于 `internal/infra/legacycompat`；Consul 同规模观察按当前无机器部署列为 accepted non-goal。`go vet ./...`、相关 race/unit/tagged gates 已通过；真实 Nacos/Atlas/OBS-full 证据仍保持 NOT VERIFIED。
 
 > Nacos exported `NewClient`/`NewSink` now default to SDK; raw HTTP is
