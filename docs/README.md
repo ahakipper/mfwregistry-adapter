@@ -14,6 +14,7 @@ the discovery center ("Atlas") over gRPC.
 | [system-readiness-consistency-remediation-plan-2026-09-12.md](system-readiness-consistency-remediation-plan-2026-09-12.md) | v6 remediation plan: mandatory official Nacos SDK/facade adoption, ordered P0/P1/P2 work packages, complete SDK test matrix, E2E gates, migration/rollback rules and release blockers. |
 | [atlas-wire-compatibility.md](atlas-wire-compatibility.md) | Atlas gRPC wire-compatibility gate: current JSON mirror limitations, mock-versus-real evidence boundary, and the guarded `atlas_real` round-trip test. |
 | [evidence/nacos-arm64-scratch-2026-09-13.md](evidence/nacos-arm64-scratch-2026-09-13.md) | Real ARM64 local Nacos SDK lifecycle evidence with immutable image, port mappings, cleanup status, and explicit production evidence limits. |
+| [nacos-sdk-provenance.md](nacos-sdk-provenance.md) | Pinned upstream SDK race fix provenance, expiry, and lifecycle CI gate. |
 
 Start with [architecture.md](architecture.md) for the big picture; see the
 [project README](../README.md) for build and usage basics.
