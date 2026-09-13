@@ -195,7 +195,7 @@ type Flags struct {
 	// NacosTransport selects the Nacos SDK facade ("sdk") or the temporary
 	// HTTP compatibility adapter ("http-compat"). Empty is resolved to SDK
 	// by server wiring; the compatibility value is intended only for tests or
-	// an explicitly approved rollback window.
+	// an explicitly approved rollback window and is rejected for Env=product.
 	NacosTransport string
 	// ReconcileSource is the --reconcile-source flag (dsca-3 §3.1): the
 	// fanout sink NAME whose view the periodic compare reads ("nacos"

@@ -138,7 +138,7 @@ func init() {
 	adapterCmd.Flags().String("nacos-server-name", "", "Nacos TLS server name")
 	adapterCmd.Flags().Bool("nacos-insecure-skip-verify", false, "skip Nacos TLS verification")
 	adapterCmd.Flags().Int("nacos-timeout", 0, "Nacos request timeout seconds")
-	adapterCmd.Flags().String("nacos-transport", "sdk", "Nacos transport: sdk (production) or http-compat (migration rollback)")
+	adapterCmd.Flags().String("nacos-transport", "sdk", "Nacos transport: sdk (required in product) or http-compat (test/approved migration rollback only)")
 	// --reconcile-source is the additive dsca-3 §3.1 flag: it designates
 	// which registered fanout sink the periodic compare READS (the nacos
 	// sink under "nacos" — the nacos-authoritative reconcile). Empty keeps

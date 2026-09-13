@@ -1,11 +1,11 @@
 package nacos
 
-// This file is the seam for the official Nacos Go SDK.  Naming operations are
+// This file is the seam for the official Nacos Go SDK. Naming operations are
 // deliberately kept behind a tiny interface so the sink does not depend on
 // SDK concrete types and unit tests can prove operation routing without a
-// running Nacos server.  Catalog/admin endpoints are not exposed by the
-// official naming client; those calls remain in client.go's explicitly named
-// HTTP compatibility adapter until an official catalog SDK is verified.
+// running Nacos server. The naming SDK's SelectAllInstances and
+// GetAllServicesInfo methods are also used for catalog/prune and service-list
+// reads; no production operation falls back to a hand-written HTTP request.
 
 import (
 	"errors"
@@ -21,9 +21,16 @@ import (
 	"github.com/nacos-group/nacos-sdk-go/v2/vo"
 )
 
+// ErrUnsupportedOperation is returned by the SDK-only path when the pinned
+// official naming client does not expose an operation (for example, the
+// cluster health-check admin update).  Callers must surface this error as a
+// release/configuration failure; they must not silently fall back to a raw
+// HTTP request.
+var ErrUnsupportedOperation = errors.New("nacos sdk: unsupported operation")
+
 // TransportMode selects the Nacos wire adapter. SDK is the production path;
-// HTTPCompat is a temporary migration/rollback path for catalog endpoints and
-// legacy tests. An empty mode is resolved to SDK by NewClientWithConfig.
+// HTTPCompat is a temporary migration/rollback path for legacy Admin fixtures
+// and tests. An empty mode is resolved to SDK by NewClientWithConfig.
 type TransportMode string
 
 const (
@@ -31,8 +38,8 @@ const (
 	TransportHTTPCompat TransportMode = "http-compat"
 )
 
-// HTTPCompatibilityException records the only operations that are currently
-// outside the official naming SDK surface. Keeping this registry next to the
+// HTTPCompatibilityException records operations retained solely by the
+// explicit migration/test HTTP adapter. Keeping this registry next to the
 // facade prevents an accidental, unowned expansion of raw HTTP usage.
 type HTTPCompatibilityException struct {
 	Operation       string
@@ -45,10 +52,14 @@ type HTTPCompatibilityException struct {
 // date is an expiry, not a promise that the exception is production-safe: the
 // operation remains a release blocker until its removal criteria are met.
 var HTTPCompatibilityExceptions = []HTTPCompatibilityException{
-	{Operation: "catalog/prune", Owner: "spotter-maintainers", ExpiresOn: "2026-10-31", RemovalCriteria: "official Nacos Admin/Maintainer SDK equivalent verified against target version"},
 	{Operation: "cluster-health-check-update", Owner: "spotter-maintainers", ExpiresOn: "2026-10-31", RemovalCriteria: "official Nacos Admin/Maintainer SDK equivalent verified against target version"},
-	{Operation: "console-readiness-probe", Owner: "spotter-maintainers", ExpiresOn: "2026-10-31", RemovalCriteria: "official Nacos Admin/Maintainer SDK equivalent verified against target version"},
 }
+
+// SDKUnsupportedOperations is the explicit production gap in the pinned
+// official SDK.  The sink reports this operation as a typed error in SDK mode
+// and never substitutes a raw HTTP request.  It remains a release blocker
+// until an official Admin/Maintainer SDK surface is verified.
+var SDKUnsupportedOperations = []string{"cluster-health-check-update"}
 
 func effectiveNamespace(namespace string) string {
 	if namespace == "" {
@@ -68,6 +79,7 @@ type sdkNamingClient interface {
 	GetAllServicesInfo(vo.GetAllServiceInfoParam) (model.ServiceList, error)
 	Subscribe(*vo.SubscribeParam) error
 	Unsubscribe(*vo.SubscribeParam) error
+	ServerHealthy() bool
 	CloseClient()
 }
 
@@ -124,6 +136,7 @@ func newSDKNamingFacade(cfg ClientConfig) (*sdkNamingFacade, error) {
 		addresses = []string{cfg.ServerURL}
 	}
 	servers := make([]constant.ServerConfig, 0, len(addresses))
+	var transportScheme string
 	for _, raw := range addresses {
 		u, err := normalizeNacosURL(raw)
 		if err != nil {
@@ -136,6 +149,11 @@ func newSDKNamingFacade(cfg ClientConfig) (*sdkNamingFacade, error) {
 		scheme := u.Scheme
 		if scheme == "" {
 			scheme = "http"
+		}
+		if transportScheme == "" {
+			transportScheme = scheme
+		} else if transportScheme != scheme {
+			return nil, fmt.Errorf("nacos sdk: mixed server URL schemes %q and %q are not supported by one SDK client", transportScheme, scheme)
 		}
 		contextPath := u.Path
 		if contextPath == "" || contextPath == "/" {
@@ -246,12 +264,28 @@ func (f *sdkNamingFacade) list(service string, cluster string) ([]Host, error) {
 	return hosts, nil
 }
 
-func (f *sdkNamingFacade) services(page, size int, namespace string) ([]string, error) {
+// healthy reports the official SDK connectivity state.  It intentionally
+// stays behind the facade so readiness never needs to construct a direct
+// net/http request in SDK mode.
+func (f *sdkNamingFacade) healthy() bool {
+	return f.client.ServerHealthy()
+}
+
+// catalog returns the complete naming view for one service/cluster.  The
+// official SelectAllInstances contract explicitly includes unhealthy,
+// disabled and zero-weight instances, which is the set the sink's prune and
+// authoritative compare need.  It is therefore the SDK equivalent of the
+// old catalog HTTP endpoint for the production path.
+func (f *sdkNamingFacade) catalog(service, cluster string) ([]Host, error) {
+	return f.list(service, cluster)
+}
+
+func (f *sdkNamingFacade) services(page, size int, namespace string) ([]string, int, error) {
 	result, err := f.client.GetAllServicesInfo(vo.GetAllServiceInfoParam{NameSpace: namespace, GroupName: f.group, PageNo: uint32(page), PageSize: uint32(size)})
 	if err != nil {
-		return nil, classifySDKError(err)
+		return nil, 0, classifySDKError(err)
 	}
-	return append([]string(nil), result.Doms...), nil
+	return append([]string(nil), result.Doms...), int(result.Count), nil
 }
 
 func (f *sdkNamingFacade) subscribe(service, group string, clusters []string, callback func([]Host, error)) error {

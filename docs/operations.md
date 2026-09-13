@@ -55,13 +55,19 @@ process is normally started from the directory that contains `config/`.
 When enabled, production naming operations use the official
 `nacos-sdk-go/v2` facade. `--nacos-transport=sdk` is the default; set
 `--nacos-transport=http-compat` only for an explicitly approved migration
-rollback or local mock run, which emits a `NON_PRODUCTION_COMPAT` warning.
+rollback or local mock run, which emits a `NON_PRODUCTION_COMPAT` warning and
+is rejected when `Env=product`. SDK mode allocates no compatibility
+`net/http` client.
 `--nacos-server-list` provides ordered failover addresses; namespace/group,
 username/password, TLS CA/server name, and timeout flags are passed to the
-same client configuration. Catalog/prune, cluster health-check update, and
-console readiness remain audited HTTP compatibility exceptions with an owner
-and expiry; they are not a production SDK PASS until the Admin/Maintainer SDK
-equivalent is verified.
+same client configuration. Catalog/prune uses the official SDK
+`SelectAllInstances` complete view (including disabled/unhealthy entries),
+and readiness uses the SDK service-list RPC plus a persistent register /
+deregister canary. The pinned SDK v2.3.5 has no cluster-admin API for the
+NONE health checker; SDK mode returns `ErrUnsupportedOperation` and records
+the release gap rather than issuing a raw HTTP request. The HTTP cluster
+update remains a separately owned, expiring compatibility exception and is
+never a product-path fallback.
 
 For notifications, configure `--appcenter-notice-endpoint`,
 `--appcenter-notice-auth-token`, `--appcenter-notice-timeout` and

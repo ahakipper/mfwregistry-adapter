@@ -9,8 +9,9 @@ import (
 
 // TestNacosHTTPUsageIsCentralized verifies the B3 static boundary: business
 // code may not grow new net/http call sites. The only allow-listed source is
-// client.go, which contains the versioned Admin/Catalog/readiness compatibility
-// adapter and its rollback transport; naming operations are routed through
+// client.go, which contains the explicitly selected compatibility adapter;
+// production SDK mode never allocates or reaches that transport. Naming,
+// service-list, SelectAll/catalog and readiness operations route through
 // sdk.go's official SDK facade when TransportSDK is selected.
 func TestNacosHTTPUsageIsCentralized(t *testing.T) {
 	entries, err := os.ReadDir(".")
@@ -39,6 +40,24 @@ func TestHTTPCompatibilityExceptionsAreOwnedAndExpiring(t *testing.T) {
 	for _, item := range HTTPCompatibilityExceptions {
 		if item.Operation == "" || item.Owner == "" || item.ExpiresOn == "" || item.RemovalCriteria == "" {
 			t.Fatalf("incomplete HTTP compatibility exception: %+v", item)
+		}
+	}
+}
+
+func TestSDKUnsupportedOperationsAreExplicitlyRegistered(t *testing.T) {
+	if len(SDKUnsupportedOperations) == 0 {
+		t.Fatal("SDK unsupported-operation registry is empty")
+	}
+	seen := make(map[string]bool, len(SDKUnsupportedOperations))
+	for _, operation := range SDKUnsupportedOperations {
+		if operation == "" || seen[operation] {
+			t.Fatalf("invalid or duplicate SDK unsupported operation %q", operation)
+		}
+		seen[operation] = true
+	}
+	for _, item := range HTTPCompatibilityExceptions {
+		if !seen[item.Operation] {
+			t.Fatalf("HTTP compatibility exception %q is not represented in SDK unsupported registry", item.Operation)
 		}
 	}
 }
