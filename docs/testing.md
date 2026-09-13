@@ -530,14 +530,15 @@ Supporting work (not tests, prerequisite): fix
   test count in the output or by keeping the suites in dedicated `_test.go`
   files).
 - **Budget**: measured race-suite time is ~130 s of package time; the
-  aggregate `test-all` (unit + blackbox + smoke + e2e) is designed to stay
-under ~3 minutes wall clock on a dev machine.
+aggregate `test-all` (unit + blackbox + smoke + e2e) is designed to stay
+  under ~3 minutes wall clock on a dev machine.
 
 Observe lifecycle commands: `scripts/observe-up.sh` and
 `scripts/observe-down.sh` own the OBS-full kwok stack, validate scratch
 ports/API/node capacity, and verify state hashes. `OBS_KUBECONFIG` selects an
 external read-only OBS-mini mode; teardown never deletes it. Fake-PATH shell
-contract checks should run with `bash -n scripts/observe-*.sh`; missing
+contract checks should run with `bash scripts/observe_lifecycle_test.sh` (and
+`bash -n scripts/observe-*.sh`); missing
 kwokctl/docker/nc and occupied ports remain explicit EnvError/InfraError.
 The 2h/1000+ real run remains `NOT VERIFIED` when kwokctl or its prerequisites
 are unavailable.
