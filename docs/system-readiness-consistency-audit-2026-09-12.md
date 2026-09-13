@@ -411,10 +411,11 @@ Reviewer 确认：
 
 **Reviewer 状态：** PASS（仅表示原始审计/计划的一致性复核完成，不表示当前生产发布门禁关闭）。
 
-**后续实现复核（2026-09-13）：** 已关闭并提交：Nacos naming SDK seam、B2 scoped readiness、
-Atlas/Observe fail-closed gates、K8s cache pointer/stop-state race、multi-appcode
-membership、normal SyncAll metadata propagation、cross-provider tombstone scope、
-nonblocking provider pool submission 和 `go vet` 两条诊断。仍为 P1/P2 REMAINING：真实
-Nacos/Atlas/2h Observe 证据、DDD legacy globals、真实 appcenter 告警，以及 Nacos
-catalog/prune/cluster/readiness 的有期限 HTTP compatibility exceptions；这些不能由
-本地 mock、tagged skip 或计划 reviewer PASS 代替。
+**后续实现复核（2026-09-13）：** 已关闭并提交：Nacos naming SDK seam、SDK
+catalog/prune/readiness routing、B2 scoped readiness、Atlas/Observe fail-closed gates、
+K8s cache pointer/stop-state race、multi-appcode membership、normal SyncAll metadata
+propagation、cross-provider tombstone scope、nonblocking provider pool submission 和
+`go vet` 两条诊断。仍为 P1/P2 REMAINING：真实 Nacos/Atlas/2h Observe 证据、DDD
+legacy globals、真实 appcenter 告警，以及 SDK v2.3.5 缺少 cluster-admin health-check
+API 的有期限 typed unsupported 例外；这些不能由本地 mock、tagged skip 或计划 reviewer
+PASS 代替。
