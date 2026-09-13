@@ -81,11 +81,16 @@ guards. It restarts only that named container through a bounded context,
 reconnects with the official SDK, verifies persistent canary visibility, and
 cleans up before closing the client. Missing guards skip as `NOT VERIFIED`; no
 arbitrary container or production endpoint is touched.
-Because nacos-sdk-go/v2 pseudo-pin `0024865` has a race in its automatic reconnect path during
-server restart, the gate closes the pre-restart client and uses a fresh
-post-restart client; automatic reconnect remains `NOT VERIFIED/RACE_BLOCKED`.
+Historical v2.3.5 runs exposed a race in the automatic reconnect path during
+server restart; that old result is retained as provenance. The current
+pseudo-pin `0024865` has a separate guarded single-client ARM64 `-race` run
+recorded as PASS, while untagged SDK, HA, TLS, Admin, and production evidence
+remain NOT VERIFIED.
 The pre-restart client is first warmed by a bounded service-list call so a
 startup-session Close race is not mistaken for the vendor restart result.
+
+The current evidence command is:
+`go test -v -race -vet=off -tags=nacos_restart ./tests/e2e/... -run TestNacosRealAutoReconnect -count=1`.
 The non-race scratch restart/new-client run passed with cleanup evidence. A
 later guarded single-client auto-reconnect run with pseudo-pin `0024865`
 passed under `-race` on the ARM64 scratch image. This does not establish

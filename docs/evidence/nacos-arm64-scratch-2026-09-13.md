@@ -99,12 +99,12 @@ restart/new-client visibility; cleanup reported
 `cleanup_attempted=true`, `status=passed`, `residual_unknown=false`, and Docker
 inspection confirmed the container was removed.
 
-The corresponding race-enabled command exposed a real data race in the
-vendor `nacos-sdk-go/v2` pseudo-pin `0024865` RpcClient reconnect path and therefore **FAILED /
+Historical v2.3.5 race run (before the current pseudo-pin) exposed a real data
+race in the vendor RpcClient reconnect path and therefore **FAILED /
 RACE_BLOCKED**. The gate deliberately closes the old SDK client before restart,
 warms its bounded service-list session, and creates a fresh one afterwards;
-automatic reconnect is explicitly `NOT VERIFIED/RACE_BLOCKED`, never masked or
-suppressed. This vendor blocker prevents any production SDK lifecycle PASS.
+automatic reconnect was explicitly `NOT VERIFIED/RACE_BLOCKED` for that
+historical run; this result is not attributed to the current pseudo-pin.
 
 The guarded `TestNacosRealAutoReconnect` now provides a real single-client
 verification path when an approved scratch target is supplied; it is not run
