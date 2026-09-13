@@ -229,7 +229,6 @@ func (m *consulMonitor) updateInstanceRecord() {
 				}
 			}(handler)
 		}
-		return
 	}
 	handlers := m.instanceHandlerSnapshot()
 	obj := &api.CatalogService{}

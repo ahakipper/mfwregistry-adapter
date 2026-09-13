@@ -563,3 +563,22 @@ func awaitLog(t *testing.T, logger *fakes.FakeLogger, level, message string) {
 	}
 	t.Fatalf("timed out waiting for %s log %q, captured %#v", level, message, logger.Entries())
 }
+
+func TestMonitorDispatchesLegacyAndPayloadFreeHandlers(t *testing.T) {
+	logger, notifier := &fakes.FakeLogger{}, &fakes.FakeNotifier{}
+	monitor := &consulMonitor{logger: logger, notifier: notifier}
+	legacy, modern := make(chan struct{}, 1), make(chan struct{}, 1)
+	monitor.AppendInstanceHandler(func(*api.CatalogService) error { legacy <- struct{}{}; return errors.New("legacy") })
+	monitor.AppendInstanceChangeHandler(func() error { modern <- struct{}{}; return errors.New("modern") })
+	monitor.updateInstanceRecord()
+	select {
+	case <-legacy:
+	case <-time.After(time.Second):
+		t.Fatal("legacy handler not called")
+	}
+	select {
+	case <-modern:
+	case <-time.After(time.Second):
+		t.Fatal("payload-free handler not called")
+	}
+}
