@@ -51,12 +51,27 @@ func runNacosOutageRestart(ctx context.Context, container, addr string) error {
 		}
 		if action == "stop" {
 			deadline := time.Now().Add(10 * time.Second)
+			observedDown := false
 			for time.Now().Before(deadline) {
 				conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
 				if err != nil {
+					observedDown = true
 					break
 				}
 				conn.Close()
+				time.Sleep(100 * time.Millisecond)
+			}
+			if !observedDown {
+				return fmt.Errorf("Nacos outage not observed: endpoint remained reachable")
+			}
+		} else {
+			deadline := time.Now().Add(30 * time.Second)
+			for time.Now().Before(deadline) {
+				conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+				if err == nil {
+					conn.Close()
+					break
+				}
 				time.Sleep(100 * time.Millisecond)
 			}
 		}
@@ -289,7 +304,7 @@ func TestNacosRealAutoReconnect(t *testing.T) {
 		t.Fatalf("post-restart write: %v", err)
 	}
 	hosts, err := client.ListInstances(service)
-	if err != nil || len(hosts) == 0 {
+	if err != nil || len(hosts) == 0 || hosts[0].Enabled {
 		t.Fatalf("reconnected canary missing: hosts=%d err=%v", len(hosts), err)
 	}
 	t.Logf("NACOS_RECONNECT PASS: endpoint=%s transport=sdk restart=single-client sdk_auto_reconnect=VERIFIED cleanup_deferred=true", cfg.endpoint)
