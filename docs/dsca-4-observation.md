@@ -383,3 +383,5 @@ OBS-mini may use `OBS_KUBECONFIG` in external read-only mode. The definitive
 2h/1000+ run remains **NOT VERIFIED** until executed on the owned stack.
 
 **Artifacts produced by this audit (all outside the repo, per the read-only rule):** `/tmp/ds4-rehearse.py` (the observation script — comparison engine corrected in the review pass, the three P1-3 defects documented in its header), `/tmp/ds4-rehearsal.log` (90 per-tick console lines, original run) and `/tmp/ds4-rehearsal-ticks.jsonl` (90 per-tick JSON records, original run) + `/tmp/ds4-rehearsal-summary.json`, and the review-pass re-run's `/tmp/ds4-rehearsal2.log` (48 per-tick console lines), `/tmp/ds4-rehearsal2-ticks.jsonl` (48 per-tick JSON records), `/tmp/ds4-rehearsal2-summary.json`. The only repo file written is this document.
+Startup state is persisted before cluster creation (commit `6c31290`), with
+CPU/memory/pod capacity validation and retryable residual markers on teardown.
