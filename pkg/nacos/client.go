@@ -118,12 +118,13 @@ type ServicePage struct {
 // through sdkNamingFacade; otherwise the explicitly opt-in HTTP compatibility
 // adapter below is used for migration/test-only callers.
 type Client struct {
-	baseURL  *url.URL
-	baseURLs []*url.URL
-	http     *http.Client
-	logger   ports.Logger
-	config   ClientConfig
-	sdk      *sdkNamingFacade
+	baseURL      *url.URL
+	baseURLs     []*url.URL
+	http         *http.Client
+	logger       ports.Logger
+	config       ClientConfig
+	clusterAdmin NacosClusterAdmin
+	sdk          *sdkNamingFacade
 }
 
 // ClientConfig controls the official SDK transport and the isolated HTTP
@@ -151,6 +152,13 @@ type ClientConfig struct {
 	InsecureSkipVerify bool
 	Timeout            time.Duration
 	MaxConnsPerHost    int
+	ClusterAdmin       NacosClusterAdmin
+}
+
+// NacosClusterAdmin is an injected official or approved admin facade.
+type NacosClusterAdmin interface {
+	UpdateHealthChecker(ctx context.Context, namespace, group, service, cluster string) error
+	Close() error
 }
 
 // Transport tuning constants (dsca-2 DS-2-4, fix design: "construct the
@@ -284,11 +292,12 @@ func NewClientWithConfig(cfg ClientConfig, logger ports.Logger) (*Client, error)
 		httpClient = &http.Client{Timeout: timeout, Transport: transport}
 	}
 	client := &Client{
-		baseURL:  parsedURLs[0],
-		baseURLs: parsedURLs,
-		http:     httpClient,
-		logger:   logger,
-		config:   cfg,
+		baseURL:      parsedURLs[0],
+		baseURLs:     parsedURLs,
+		http:         httpClient,
+		logger:       logger,
+		config:       cfg,
+		clusterAdmin: cfg.ClusterAdmin,
 	}
 	if cfg.TransportMode == TransportSDK {
 		facade, err := newSDKNamingFacade(cfg)
@@ -538,10 +547,14 @@ func (c *Client) Unsubscribe(service, group string, clusters []string, callback 
 // Close releases SDK gRPC resources. HTTP compatibility clients remain
 // stateless and require no explicit close.
 func (c *Client) Close() error {
+	var closeErr error
+	if c.clusterAdmin != nil {
+		closeErr = c.clusterAdmin.Close()
+	}
 	if c.sdk != nil {
 		c.sdk.client.CloseClient()
 	}
-	return nil
+	return closeErr
 }
 
 // UpdateCluster disables Nacos's server-side health check for one (service,
@@ -570,6 +583,15 @@ func (c *Client) Close() error {
 // is a no-op.
 func (c *Client) UpdateCluster(serviceName, clusterName string) error {
 	if c.sdk != nil {
+		if c.clusterAdmin != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), c.config.Timeout)
+			if c.config.Timeout <= 0 {
+				cancel()
+				ctx, cancel = context.WithTimeout(context.Background(), RequestTimeout)
+			}
+			defer cancel()
+			return c.clusterAdmin.UpdateHealthChecker(ctx, effectiveNamespace(c.config.NamespaceID), effectiveGroup(c.config.GroupName), serviceName, clusterName)
+		}
 		return fmt.Errorf("%w: cluster-health-check-update (official naming SDK v2.3.5 has no admin cluster API)", ErrUnsupportedOperation)
 	}
 	values := url.Values{}

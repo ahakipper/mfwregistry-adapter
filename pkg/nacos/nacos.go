@@ -256,7 +256,7 @@ func NewHTTPCompatSink(addr string, logger ports.Logger) (*Sink, error) {
 // TransportMode resolves to the official SDK; callers that need the temporary
 // HTTP path must set TransportHTTPCompat explicitly.
 func NewSinkWithConfig(config ClientConfig, logger ports.Logger) (*Sink, error) {
-	if config.TransportMode == "" || config.TransportMode == TransportSDK {
+	if (config.TransportMode == "" || config.TransportMode == TransportSDK) && config.ClusterAdmin == nil {
 		// The pinned naming SDK has no cluster-admin health-check operation.
 		// A persistent sink cannot safely start without proving that control
 		// plane is available; fail during startup before accepting writes.
