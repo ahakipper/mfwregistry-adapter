@@ -45,6 +45,25 @@ docs/superpowers/specs/2026-09-13-batch-and-global-refactor-design.md
 - Before completion run git diff --check, go vet ./..., go test ./... -count=1,
   and go test -race ./... -count=1.
 
+## Multi-Agent Execution Protocol
+
+- The primary agent (`/root`) owns scope, sequencing, shared-worktree safety,
+  verification, commits, pushes, and the final ledger.
+- Each implementation stage has exactly one developer agent and one independent
+  reviewer agent. Developer agents may edit the shared worktree only for their
+  assigned stage; reviewer agents are read-only.
+- Stages are serialized. The next developer is not dispatched until the prior
+  stage's focused tests, diff inspection, reviewer result, commit, and push are
+  complete.
+- A reviewer reports PASS or concrete P0/P1/P2 findings. Any finding starts a
+  developer fix round and a fresh reviewer round; no stage is committed or
+  pushed while a P0-P2 finding remains.
+- The primary agent verifies every agent report against git diff, test output,
+  and the execution ledger. Agent claims alone are not completion evidence.
+- History rewriting is performed by the primary agent after a developer
+  prepares the message map and a reviewer approves it. The exact range is
+  e708630^..e9ea7d2; no later execution commit is rewritten.
+
 ---
 
 ### Task 1: Establish repository contribution and commit governance
@@ -134,8 +153,10 @@ history rewriting. Push this commit only after review.
 - Create: scripts/validate_commit_message_map.py
 - Create during the operation: backup tag
   backup/pre-detailed-commit-rewrite-20260913
-- Modify: commit metadata only for the remediation range e708630^..HEAD
-  (174 commits at plan authoring time)
+- Create during the operation: backup tag
+  backup/pre-detailed-commit-rewrite-current-tip-20260913
+- Modify: commit metadata only for the confirmed remediation range
+  e708630^..e9ea7d2 (175 commits)
 
 **Interfaces:**
 
@@ -143,26 +164,30 @@ history rewriting. Push this commit only after review.
 - Produces a message-only rewrite: every commit in the selected remediation
   range keeps its original tree, parent order, author, and timestamp while its
   subject/body becomes detailed English with the five required headings.
-- Original project history before e708630 is preserved. The range is a
-  proposed default and must be confirmed if the user intends a different
-  boundary.
+- Original project history before e708630 is preserved. Commits created after
+  e9ea7d2 (including the AGENTS.md policy commit) are replayed unchanged on top
+  of the rewritten range and are not included in the 175-commit rewrite.
 
 - [ ] Step 1: Snapshot refs before any rewrite.
 
 ~~~sh
 BASE=$(git rev-parse e708630^)
-OLD_HEAD=$(git rev-parse HEAD)
+OLD_HEAD=$(git rev-parse e9ea7d2)
+CURRENT_TIP=$(git rev-parse HEAD)
 BRANCH=$(git branch --show-current)
 OLD_REMOTE=$(git rev-parse origin/$BRANCH)
 git tag backup/pre-detailed-commit-rewrite-20260913 "$OLD_HEAD"
+git tag backup/pre-detailed-commit-rewrite-current-tip-20260913 "$CURRENT_TIP"
 git log --reverse --format='%H%x09%P%x09%an%x09%ad%x09%s%x09%b' --date=iso \
   "$BASE..$OLD_HEAD" > /tmp/spotter-commit-messages-before.tsv
+test "$(git rev-parse "$OLD_HEAD^" 2>/dev/null)" != ""
 git rev-list --count "$BASE..$OLD_HEAD"
 ~~~
 
-Expected: the command prints the exact recorded count (174 at plan authoring),
-the backup tag, and the remote ref. The recorded count, not a hard-coded number,
-is authoritative for the confirmed range; stop if the branch or range differs.
+Expected: the command prints 175, both backup tags, and the remote ref. The
+recorded range `e708630^..e9ea7d2` is authoritative; stop if the branch or
+remote differs from the confirmed scope. The current-tip tag protects any
+post-range execution commits as well as the frozen rewrite input.
 
 - [ ] Step 2: Generate and review a per-commit message map.
 
@@ -190,8 +215,8 @@ Documentation:
 <documents or evidence artifacts updated, or "None">
 ~~~
 
-The map must preserve commit order and include every hash in the recorded range;
-missing or duplicate hashes fail the task.
+The map must preserve commit order and include all 175 hashes in the confirmed
+range; missing or duplicate hashes fail the task.
 
 - [ ] Step 3: Validate the map without changing refs.
 
@@ -202,17 +227,21 @@ python3 scripts/validate_commit_message_map.py \
 ~~~
 
 The validator must exit non-zero when a hash is missing, a required heading is
-missing, a subject contains CJK characters, or a body claims a test result not
-present in the before snapshot. If Python is unavailable, implement the same
-validator as a temporary Go program under /tmp; do not weaken the checks.
+missing, a subject contains CJK characters, a subject is a generic one-line
+message (for example `fix`, `update`, or `changes` without a specific area and
+behavior), or a body claims a test result not present in the before snapshot.
+If Python is unavailable, implement the same validator as a temporary Go
+program under /tmp; do not weaken the checks.
 
 - [ ] Step 4: Apply a message-only rewrite on a disposable branch ref.
 
-Create rewrite/commit-messages-20260913 from OLD_HEAD and use a non-destructive
-message callback (preferred: git filter-repo with an explicit old-hash to
-message map; fallback: scripted git rebase --rebase-merges with every commit
-marked reword). The callback must refuse any commit outside BASE..OLD_HEAD and
-must not alter trees or parents.
+Create rewrite/commit-messages-20260913 from OLD_HEAD and check out that
+disposable ref. Use a non-destructive message callback (preferred:
+git filter-repo with an explicit old-hash to message map; fallback: scripted
+git rebase --rebase-merges with every commit marked reword). The callback must
+refuse any commit outside BASE..OLD_HEAD and must not alter trees or parents.
+After the callback, switch back to the checked-out refactor/all branch; keep it
+untouched until preservation checks pass.
 
 - [ ] Step 5: Prove content and metadata preservation.
 
@@ -235,15 +264,23 @@ every rewritten commit contains all five headings.
 - [ ] Step 6: Independent review and controlled remote replacement.
 
 The reviewer must inspect the message map and preservation output. Only after
-PASS, move the rewritten ref to refactor/all and push with an exact lease:
+PASS, rewrite the confirmed ancestor range, replay any post-e9ea7d2 commits
+(such as AGENTS.md) onto the rewritten tip, and push with an exact lease:
 
 ~~~sh
-git branch -f refactor/all rewrite/commit-messages-20260913
-git push --force-with-lease=refs/heads/refactor/all:$OLD_REMOTE \
+git branch rewrite/commit-messages-20260913 "$OLD_HEAD"
+git switch rewrite/commit-messages-20260913
+# Apply the reviewed message-only callback while this disposable ref is checked out.
+# The callback updates this ref only and preserves every tree and parent.
+git switch "$BRANCH"
+git rebase --rebase-merges --onto rewrite/commit-messages-20260913 "$OLD_HEAD" "$BRANCH"
+git push --force-with-lease=refs/heads/$BRANCH:$OLD_REMOTE \
   git@github.com:ahakipper/mfwregistry-adapter.git \
-  refactor/all:refactor/all
+  "$BRANCH:$BRANCH"
 git push git@github.com:ahakipper/mfwregistry-adapter.git \
   backup/pre-detailed-commit-rewrite-20260913
+git push git@github.com:ahakipper/mfwregistry-adapter.git \
+  backup/pre-detailed-commit-rewrite-current-tip-20260913
 BRANCH=$(git branch --show-current)
 git fetch origin "$BRANCH"
 test "$(git rev-parse "$BRANCH")" = "$(git rev-parse "origin/$BRANCH")"
@@ -277,8 +314,10 @@ docs/evidence/commit-message-rewrite-2026-09-13.md records the mapping and prese
 ~~~
 
 This task is a destructive ref operation. Do not execute it until the user
-confirms the exact e708630^..HEAD range and the independent reviewer approves
-the message map.
+confirms the exact e708630^..e9ea7d2 range and the independent reviewer
+approves the message map. The post-range commits must be compared with
+`git range-diff "$OLD_HEAD..$CURRENT_TIP" "$NEW_HEAD..$BRANCH"` after the
+`--rebase-merges` replay; the final trees and post-range patch set must match.
 
 ---
 
