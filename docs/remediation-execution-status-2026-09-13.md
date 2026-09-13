@@ -15,6 +15,13 @@ remain unchanged and are not promoted to current PASS evidence.
 
 ## Execution matrix
 
+### Release blockers vs deferred scope
+
+| Category | Items |
+|---|---|
+| Current release blockers | Nacos Admin/Maintainer health-check capability; definitive OBS-full 2h/1000+ evidence; legacy shim retirement where required by deployment policy. |
+| Out of scope or deferred | Atlas real wire contract; deployment-level Nacos HA/multi-node/TLS/auth/namespace/leaderless validation; AppCenter endpoint/payload/auth/SLA; Consul scale evidence. |
+
 | Area | Status | Evidence / boundary |
 |---|---|---|
 | K8s identity and ordering | **CODE PASS** | Source-aware identity, UID/cluster keys, ordered per-identity writes, tombstones, full revalidation and retry retention are covered by unit/race/e2e tests. |
@@ -54,17 +61,15 @@ product PASS.
 
 1. **Nacos Admin capability:** provide an official Go Admin/Maintainer SDK or
    an approved, versioned adapter for cluster health-check configuration.
-2. **Nacos production evidence:** run the pinned SDK against the target HA
-   topology with TLS, authentication policy, namespace/group authorization,
-   leaderless/recovery and final catalog hash.
-3. **Atlas contract:** provide the real protobuf definitions, method path,
-   TLS/auth contract and a scratch/pre-production endpoint.
-4. **AppCenter contract:** provide endpoint, payload schema, authentication and
-   delivery/SLA acceptance; then run the guarded notifier scratch gate.
-5. **Observe-full evidence:** install/enable `kwokctl` on a clean host and run
+2. **Observe-full evidence:** install/enable `kwokctl` on a clean host and run
    the required 30m/100 rehearsal followed by the 2h/1000+ definitive run.
-6. **Legacy shim retirement:** migrate remaining external callers, then remove
+3. **Legacy shim retirement:** migrate remaining external callers, then remove
    compatibility constructors only after CLI/env/metrics compatibility replay.
 
 Until these external gates are satisfied, the repository is suitable for code
 review and local scratch validation but must not be labeled production-ready.
+
+Deployment-level Nacos HA/TLS/auth/namespace/leaderless evidence, Atlas real
+wire contract, and AppCenter endpoint/payload/auth/SLA are deferred scope;
+they become required only if a future release explicitly re-enables those
+deployment or integration targets.
