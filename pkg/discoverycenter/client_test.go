@@ -14,6 +14,20 @@ import (
 	"spotter/internal/testkit/fakes"
 )
 
+type getAllFixtureService struct {
+	item *instance.Instance
+}
+
+func (s *getAllFixtureService) SynInstance(context.Context, *instance.SynInstancesRequest, ...grpc.CallOption) (*instance.CommonResponse, error) {
+	return &instance.CommonResponse{}, nil
+}
+func (s *getAllFixtureService) SynAllInstance(context.Context, *instance.SynAllInstancesRequest, ...grpc.CallOption) (*instance.CommonResponse, error) {
+	return &instance.CommonResponse{}, nil
+}
+func (s *getAllFixtureService) GetAllInstance(context.Context, *instance.GetAllInstancesRequest, ...grpc.CallOption) (*instance.InstanceList, error) {
+	return &instance.InstanceList{Instance: []*instance.Instance{nil, s.item}}, nil
+}
+
 func TestNewClientRejectsNilService(t *testing.T) {
 	client, err := NewClient(nil, nil, nil)
 	if err == nil {
@@ -21,6 +35,36 @@ func TestNewClientRejectsNilService(t *testing.T) {
 	}
 	if client != nil {
 		t.Fatalf("NewClient() client = %#v, want nil", client)
+	}
+}
+
+func TestClientGetAllEmptyProviderReturnsAllAndClones(t *testing.T) {
+	source := &instance.Instance{
+		InstanceId: "all-providers", Provider: "ecs", Status: 1,
+		Ports: []*instance.PortInfo{{Name: "http", Port: 8080}},
+		Label: map[string]string{"owner": "source"}, Image: map[string]string{"app": "v1"},
+	}
+	service := &getAllFixtureService{item: source}
+	client, err := NewClient(service, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := client.GetAll([]int32{1}, "")
+	if err != nil {
+		t.Fatalf("GetAll(empty provider) error = %v", err)
+	}
+	if len(list.Instance) != 1 || list.Instance[0] == nil || list.Instance[0].Provider != "ecs" {
+		t.Fatalf("GetAll(empty provider) = %#v, want all non-nil records", list.Instance)
+	}
+	got := list.Instance[0]
+	if got == source || got.Ports[0] == source.Ports[0] || &got.Label == &source.Label || &got.Image == &source.Image {
+		t.Fatal("GetAll returned aliased instance data")
+	}
+	got.Ports[0].Port = 9000
+	got.Label["owner"] = "caller"
+	got.Image["app"] = "v2"
+	if source.Ports[0].Port != 8080 || source.Label["owner"] != "source" || source.Image["app"] != "v1" {
+		t.Fatalf("GetAll clone mutation changed source: %#v", source)
 	}
 }
 
