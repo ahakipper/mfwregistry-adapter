@@ -60,6 +60,13 @@ PATH="$fake:/usr/bin:/bin" OBS_KUBECONFIG="$external" "$root/scripts/observe-up.
 PATH="$fake:/usr/bin:/bin" OBS_KUBECONFIG="$external" "$root/scripts/observe-down.sh"
 [[ -f "$external" ]] || { echo "external kubeconfig was removed" >&2; exit 1; }
 
+# Successful owned up/down removes state and deletes exactly once.
+success_log="$tmp/success-delete.log"
+PATH="$fake:/usr/bin:/bin" FAKE_DELETE_LOG="$success_log" OBS_KWOK_CLUSTER=dsca-observe-success "$root/scripts/observe-up.sh"
+PATH="$fake:/usr/bin:/bin" FAKE_DELETE_LOG="$success_log" "$root/scripts/observe-down.sh"
+[[ "$(wc -l <"$success_log" | tr -d ' ')" == 1 ]] || { echo "successful cleanup delete count != 1" >&2; exit 1; }
+[[ ! -e "$root/build/observe/observe-state" ]] || { echo "successful cleanup retained state" >&2; exit 1; }
+
 # Docker daemon and port conflicts fail before cluster creation.
 assert_fail env PATH="$fake:/usr/bin:/bin" FAKE_DOCKER_RC=1 "$root/scripts/observe-up.sh"
 cat >"$fake/nc" <<'EOF'
