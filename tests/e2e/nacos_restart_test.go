@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -43,6 +44,16 @@ func runNacosRestartCommand(ctx context.Context, container string) error {
 }
 
 func runNacosOutageRestart(ctx context.Context, container, addr string) error {
+	if strings.Contains(addr, ",") {
+		return fmt.Errorf("restart outage requires a single server address")
+	}
+	if strings.Contains(addr, "://") {
+		u, err := url.Parse(addr)
+		if err != nil || u.Host == "" {
+			return fmt.Errorf("invalid restart endpoint")
+		}
+		addr = u.Host
+	}
 	for _, action := range []string{"stop", "start"} {
 		cmd := execCommandContext(ctx, "docker", action, container)
 		cmd.Env = os.Environ()
@@ -50,7 +61,10 @@ func runNacosOutageRestart(ctx context.Context, container, addr string) error {
 			return fmt.Errorf("docker %s: %w: %s", action, err, strings.TrimSpace(string(out)))
 		}
 		if action == "stop" {
-			deadline := time.Now().Add(10 * time.Second)
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				return fmt.Errorf("restart requires context deadline")
+			}
 			observedDown := false
 			for time.Now().Before(deadline) {
 				conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
@@ -65,7 +79,10 @@ func runNacosOutageRestart(ctx context.Context, container, addr string) error {
 				return fmt.Errorf("Nacos outage not observed: endpoint remained reachable")
 			}
 		} else {
-			deadline := time.Now().Add(30 * time.Second)
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				return fmt.Errorf("restart requires context deadline")
+			}
 			for time.Now().Before(deadline) {
 				conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
 				if err == nil {
@@ -281,6 +298,14 @@ func TestNacosRealAutoReconnect(t *testing.T) {
 				status = "failed"
 				cleanupErr = err
 				t.Errorf("cleanup: %v", err)
+			} else if hosts, err := client.ListInstances(params.ServiceName); err != nil {
+				status = "failed"
+				cleanupErr = err
+				t.Errorf("cleanup residual query: %v", err)
+			} else if len(hosts) != 0 {
+				status = "failed"
+				cleanupErr = fmt.Errorf("%d residual instances", len(hosts))
+				t.Errorf("cleanup residual: %v", cleanupErr)
 			}
 		}
 		t.Logf("NACOS_RECONNECT cleanup_attempted=%t status=%s residual_unknown=%t error=%v", attempted, status, cleanupErr != nil, cleanupErr)
