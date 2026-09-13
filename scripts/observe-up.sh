@@ -24,7 +24,13 @@ kwokctl create cluster --name "$cluster" --kubeconfig "$kc" --kube-apiserver-por
 for i in {1..30}; do [[ -s "$kc" ]] && kubectl --kubeconfig "$kc" get --raw=/readyz >/dev/null 2>&1 && break; sleep 1; done
 [[ -s "$kc" ]] || { echo "InfraError: kwok kubeconfig not created" >&2; exit 3; }
 kubectl --kubeconfig "$kc" get --raw=/readyz >/dev/null || { echo "InfraError: kwok apiserver not ready" >&2; exit 3; }
-kubectl --kubeconfig "$kc" label node "${OBS_KWOK_NODE:-kwok-node}" kwok.x-k8s.io/node=fake --overwrite >/dev/null 2>&1 || true
+node="${OBS_KWOK_NODE:-kwok-node}"
+kubectl --kubeconfig "$kc" label node "$node" kwok.x-k8s.io/node=fake --overwrite >/dev/null 2>&1 || { echo "InfraError: kwok node $node unavailable" >&2; exit 3; }
+# Pre-seed a generous allocatable capacity so large observe runs do not depend
+# on a user's pre-existing node patch. The status subresource is best-effort
+# across kwok versions; verify the node and fail closed when capacity is absent.
+kubectl --kubeconfig "$kc" patch node "$node" --subresource=status --type=merge -p '{"status":{"capacity":{"cpu":"1000","memory":"1Ti"},"allocatable":{"cpu":"1000","memory":"1Ti"}}}' >/dev/null 2>&1 || true
+kubectl --kubeconfig "$kc" get node "$node" -o jsonpath='{.status.capacity.cpu}' | grep -q . || { echo "InfraError: kwok node capacity unavailable" >&2; exit 3; }
 printf 'cluster=%s\nkubeconfig=%s\napi=%s\netcd=%s\n' "$cluster" "$kc" "$api" "$etcd" > "$out/observe-state"
 sha256sum "$out/observe-state" > "$out/observe-state.sha256"
 trap - ERR
