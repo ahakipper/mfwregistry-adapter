@@ -107,6 +107,9 @@ func TestNacosSDKPersistentLifecycle(t *testing.T) {
 	if err := client.DeregisterInstance(params); err != nil {
 		t.Fatalf("SDK persistent deregister: %v", err)
 	}
+	if err := verifyNacosCanary(verifier, service); err != nil {
+		t.Fatalf("fresh SDK residual verification: %v", err)
+	}
 	cleanupElapsed = time.Since(cleanupStart)
 	cleanupStatus = "passed"
 	t.Logf("NACOS_SDK_EVAL PASS: endpoint=%s transport=sdk lifecycle=register,list,services,subscribe,unsubscribe,deregister latency_ms=%d service=%s", cfg.endpoint, time.Since(started).Milliseconds(), service)
