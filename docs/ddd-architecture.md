@@ -1,5 +1,10 @@
 # spotter — Target DDD Architecture Design
 
+> **Consul monitor addendum (33606fa):** Payload-free instance-change
+> notifications are available; legacy and new handlers both dispatch with
+> preserved notifier/Warnf semantics. The fabricated empty CatalogService
+> issue is closed for migrated callers. Consul scale remains a non-goal.
+
 > **Implementation status (2026-09-13):** The composition root and
 > `internal/ports` are active, and the server's production provider graph now
 > receives explicit logger/notifier/metrics/config dependencies (`42ecb89`).
