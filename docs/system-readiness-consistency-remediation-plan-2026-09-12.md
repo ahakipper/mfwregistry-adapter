@@ -556,6 +556,8 @@ go test -tags=nacos_real -race ./tests/e2e/... -run 'TestNacosReal|TestNacosSDKR
 **E2E-R（真实 scratch，nightly/manual）：**
 
 - `tests/e2e/nacos_real_test.go`（`nacos_real` tag；由 B2 创建）；
+- `tests/e2e/nacos_restart_test.go`（`nacos_restart` tag；仅允许严格命名的
+  scratch 容器，验证 SDK persistent canary 在单节点 restart/reconnect 后保留）；
 - 动态 Nacos 端口、TLS/auth/namespace/group、leaderless/write probe、catalog/list；
 - 保存 summary 和 hash，不提交原始全量日志。
 

@@ -1,5 +1,5 @@
-//go:build nacos_real || nacos_sdk_eval
-// +build nacos_real nacos_sdk_eval
+//go:build nacos_real || nacos_sdk_eval || nacos_restart
+// +build nacos_real nacos_sdk_eval nacos_restart
 
 package e2e
 

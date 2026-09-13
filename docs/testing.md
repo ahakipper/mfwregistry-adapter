@@ -75,6 +75,13 @@ The evidence includes the auth-enabled dual-port run and one non-public
 namespace/group run; the plaintext-auth rejection is retained as a negative
 security result, not a successful deployment claim.
 
+The optional `nacos_restart` gate requires an approved scratch container name
+(`dsca-*` or `test-*`) plus `NACOS_REAL_ALLOW_RESTART=1`, scratch, and write
+guards. It restarts only that named container through a bounded context,
+reconnects with the official SDK, verifies persistent canary visibility, and
+cleans up before closing the client. Missing guards skip as `NOT VERIFIED`; no
+arbitrary container or production endpoint is touched.
+
 Companion documents: [architecture.md](architecture.md) (design),
 [data-model.md](data-model.md) (the `Instance` model),
 [operations.md](operations.md) (runbook). See [README.md](README.md) for the
