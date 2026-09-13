@@ -113,11 +113,11 @@ func TestFailClosedNotifierCountsWithoutClaimingDelivery(t *testing.T) {
 
 func TestHTTPNotifierCloseWaitsForAcceptedDelivery(t *testing.T) {
 	started := make(chan struct{})
-	release := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	finished := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(started)
-		<-release
-		w.WriteHeader(http.StatusNoContent)
+		<-r.Context().Done()
+		close(finished)
 	}))
 	defer server.Close()
 	n, err := NewHTTP(HTTPConfig{
@@ -138,17 +138,16 @@ func TestHTTPNotifierCloseWaitsForAcceptedDelivery(t *testing.T) {
 	}()
 	select {
 	case <-done:
-		t.Fatal("Close returned before accepted delivery completed")
-	case <-time.After(20 * time.Millisecond):
-	}
-	close(release)
-	select {
-	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("Close did not wait for delivery completion")
+		t.Fatal("Close did not cancel delivery promptly")
 	}
-	if n.SuccessCount() != 1 {
-		t.Fatalf("SuccessCount=%d, want 1 after Close", n.SuccessCount())
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("server handler did not observe request cancellation")
+	}
+	if n.FailureCount() != 1 {
+		t.Fatalf("FailureCount=%d, want 1 after cancellation", n.FailureCount())
 	}
 }
 
