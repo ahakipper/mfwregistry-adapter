@@ -9,7 +9,7 @@
 > [system-readiness-consistency-remediation-plan-2026-09-12.md](system-readiness-consistency-remediation-plan-2026-09-12.md) §10 for the
 > mandatory migration and complete test gate.
 > Production SDK startup is intentionally **BLOCKED / NOT VERIFIED** before
-> readiness because SDK v2.3.5 lacks the required cluster-admin health-check
+> readiness because SDK pseudo-version `0024865` lacks the required cluster-admin health-check
 > operation; no HTTP fallback is permitted in product wiring. Real Nacos tests
 > are guarded and cleanup-safe with local ARM64 scratch evidence, so mock/race evidence
 > does not promote the production status.
@@ -33,8 +33,11 @@
 > it is a real scratch check only and does not unlock production.
 > Auth-enabled lifecycle and the non-public `tenant-a`/`blue` namespace/group
 > replay are also recorded there; credentials are intentionally omitted.
-> The non-race restart/new-client scratch replay passed, while the race run
-> exposed the vendor SDK reconnect race and remains `FAIL / RACE_BLOCKED`.
+> The historical v2.3.5 restart/new-client race replay exposed the vendor SDK
+> reconnect race and remains `FAIL / RACE_BLOCKED`; the current pseudo-pin
+> `0024865` has a separate guarded ARM64 single-client `-race` scratch PASS.
+> Untagged SDK, HA/TLS/Admin behavior and production readiness remain
+> `NOT VERIFIED`.
 >
 > The remaining F5/soak descriptions in this document describe the historical
 > local implementation stage; they do not constitute a production PASS.
@@ -48,12 +51,12 @@ intentionally explicit:
 |---|---|---|
 | persistent register/deregister, SelectAll, service list, subscribe/unsubscribe, readiness read/write canary | official `nacos-sdk-go/v2` naming facade (`--nacos-transport=sdk`) | none; `http-compat` is rollback/test-only |
 | catalog/prune | official SDK `SelectAllInstances` (complete view includes disabled/unhealthy hosts) | catalog HTTP endpoint remains only in explicit `http-compat` fixtures |
-| cluster health-check update | **unsupported in official naming SDK v2.3.5; SDK mode returns `ErrUnsupportedOperation` before any business register and logs a release gap** | versioned HTTP compatibility adapter only; never selected by product wiring |
+| cluster health-check update | **unsupported in official naming SDK pseudo-version `0024865`; SDK mode returns `ErrUnsupportedOperation` before any business register and logs a release gap** | versioned HTTP compatibility adapter only; never selected by product wiring |
 
 The server wiring defaults to `sdk`; an explicit `http-compat` mode is required
 for the nacosmock suites and emergency rollback, and is rejected when
 `Config.Env=product`. Static `accessToken` is
-rejected in SDK mode because SDK v2.3.5 exposes username/password auth rather
+rejected in SDK mode because SDK pseudo-version `0024865` exposes username/password auth rather
 than an equivalent static-token option; this is fail-closed by design.
 
 The code-level exception registry (`pkg/nacos.HTTPCompatibilityExceptions`)
