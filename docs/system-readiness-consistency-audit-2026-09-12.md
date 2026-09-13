@@ -6,6 +6,8 @@
 > from the current release; real protobuf/method/TLS/auth is a future gate.
 > Deployment-level Nacos HA/TLS/auth/namespace/leaderless checks are outside
 > current Spotter scope; single-Sink SDK integration remains in scope.
+> Current server wiring still constructs Atlas by default; retaining that path
+> requires an Atlas endpoint. Fully optional Atlas wiring is a separate code item.
 **仓库：** `/Users/d-robotics/go/src/github.com/ahakipper/mfwregistry-adapter`  
 **分支/提交：** `refactor/all` / `c986632` (implementation baseline; docs synced after)
 **文档状态：** FINAL（已完成第二轮独立 reviewer 复核）

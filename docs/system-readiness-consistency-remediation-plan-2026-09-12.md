@@ -3,6 +3,9 @@
 > Current scope: Atlas is an optional existing Sink/mock deferred from the
 > current release; real wire compatibility is a future entry gate. Deployment
 > Nacos HA/TLS/auth/namespace/leaderless checks are outside scope.
+> The current server still constructs Atlas by default; deployments retaining
+> that path require an Atlas endpoint. Removing the dependency needs a separate
+> Atlas-optional wiring change.
 
 > **执行说明：** 本计划以 [system-readiness-consistency-audit-2026-09-12.md](system-readiness-consistency-audit-2026-09-12.md) 为输入，按工作包和提交批次执行。每个批次必须先补测试、再改实现、再跑门禁；任何 P0/P1/P2 未关闭时不得宣布批次完成。
 

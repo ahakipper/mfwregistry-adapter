@@ -2,6 +2,8 @@
 
 > Current scope: Atlas remains an optional existing Sink/mock deferred from the
 > current release; this plan's release gate covers the Nacos single-Sink SDK.
+> The server currently wires Atlas by default, so this deferral does not make
+> an Atlas-less deployment production-ready; optional wiring is a separate task.
 
 > **Current-state addendum (2026-09-13, code baseline `356aa75`):** This document contains the original F5
 > implementation plan. Its D4 “hand-rolled HTTP client” decision is superseded:
