@@ -262,7 +262,7 @@ func NewHTTPCompatSink(addr string, logger ports.Logger) (*Sink, error) {
 // TransportMode resolves to the official SDK; callers that need the temporary
 // HTTP path must set TransportHTTPCompat explicitly.
 func NewSinkWithConfig(config ClientConfig, logger ports.Logger) (*Sink, error) {
-	if (config.TransportMode == "" || config.TransportMode == TransportSDK) && config.ClusterAdmin == nil {
+	if (config.TransportMode == "" || config.TransportMode == TransportSDK) && config.ClusterAdmin == nil && config.ClusterAdminFactory == nil {
 		// The pinned naming SDK has no cluster-admin health-check operation.
 		// A persistent sink cannot safely start without proving that control
 		// plane is available; fail during startup before accepting writes.
@@ -271,6 +271,10 @@ func NewSinkWithConfig(config ClientConfig, logger ports.Logger) (*Sink, error) 
 	client, err := NewClientWithConfig(config, logger)
 	if err != nil {
 		return nil, err
+	}
+	if (config.TransportMode == "" || config.TransportMode == TransportSDK) && client.clusterAdmin == nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("nacos: SDK sink startup blocked: %w (cluster-admin factory returned no facade)", ErrUnsupportedOperation)
 	}
 	return &Sink{
 		client:            client,

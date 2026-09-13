@@ -23,6 +23,11 @@ timestamp/ledger harness defects are fixed, but a complete self-contained 2h
 run remains unverified. Consul scale observation remains an accepted non-goal
 until ECS/machine deployment is re-enabled.
 
+Composition tests also cover the per-start `ClusterAdminFactory`: each
+leadership start receives a fresh admin, factory errors fail before readiness,
+and a nil factory retains the SDK startup block without selecting HTTP
+compatibility.
+
 The current release gates are explicit: SDK-only Nacos product startup is
 blocked before readiness until official cluster-admin support exists;
 `http-compat` is test/rollback only. Guarded Nacos/Atlas real tags and the

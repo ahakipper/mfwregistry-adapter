@@ -31,6 +31,41 @@ type recordingNotifier struct{}
 
 func (recordingNotifier) Notify(title, content string) {}
 
+type serverAdmin struct{}
+
+func (serverAdmin) UpdateHealthChecker(context.Context, string, string, string, string) error {
+	return nil
+}
+func (serverAdmin) Close(context.Context) error { return nil }
+
+func TestStartProvidersInvokesFreshNacosAdminFactoryBeforeReadiness(t *testing.T) {
+	logger := zap.NewNop().Sugar()
+	calls := 0
+	initializeCalls := 0
+	s := &Server{
+		isLeader: true, stop: make(chan struct{}), logger: logger,
+		notifier: recordingNotifier{}, localIP: func() (string, error) { return "127.0.0.1", nil },
+		cfg: infraconfig.Config{NacosAddr: "127.0.0.1:1", NacosTransport: string(nacos.TransportSDK), MetricsAddr: "127.0.0.1:0"},
+		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
+			return discoverycenter.NewClient(noopDiscoveryService{}, nil, nil)
+		},
+		initializeProviders: func(context.Context, worker.Worker) ([]providers.Provider, error) { initializeCalls++; return nil, nil },
+		nacosAdminFactory:   func() (nacos.NacosClusterAdmin, error) { calls++; return nil, errors.New("admin factory unavailable") },
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		err := s.startProviders()
+		if err == nil || !strings.Contains(err.Error(), "cluster-admin") {
+			t.Fatalf("startProviders attempt %d error = %v, want cluster-admin factory failure", attempt, err)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("admin factory calls = %d, want one fresh call per start", calls)
+	}
+	if initializeCalls != 0 {
+		t.Fatalf("initializeProviders calls = %d, want 0 before readiness", initializeCalls)
+	}
+}
+
 func TestStartProvidersCancelsDialWhenLeadershipIsLost(t *testing.T) {
 	logger := zap.NewNop().Sugar()
 	dialStarted := make(chan struct{})

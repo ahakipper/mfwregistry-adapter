@@ -277,6 +277,40 @@ func TestSDKSinkConstructionFailsFastOnUnsupportedClusterAdmin(t *testing.T) {
 	}
 }
 
+func TestSDKClientConfigAdminFactoryIsInvoked(t *testing.T) {
+	calls := 0
+	admin := &fakeClusterAdmin{}
+	client, err := NewClientWithConfig(ClientConfig{ServerURL: "127.0.0.1:8848", TransportMode: TransportSDK, ClusterAdminFactory: func() (NacosClusterAdmin, error) {
+		calls++
+		return admin, nil
+	}}, ports.NopLogger{})
+	if err != nil {
+		t.Fatalf("NewClientWithConfig() error = %v", err)
+	}
+	if calls != 1 || client.clusterAdmin != admin || client.http != nil {
+		t.Fatalf("factory calls=%d admin=%v http=%v", calls, client.clusterAdmin == admin, client.http != nil)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSDKSinkAdminFactoryAllowsConstruction(t *testing.T) {
+	admin := &fakeClusterAdmin{}
+	sink, err := NewSinkWithConfig(ClientConfig{ServerURL: "127.0.0.1:8848", TransportMode: TransportSDK, ClusterAdminFactory: func() (NacosClusterAdmin, error) {
+		return admin, nil
+	}}, ports.NopLogger{})
+	if err != nil {
+		t.Fatalf("NewSinkWithConfig(factory) error = %v", err)
+	}
+	if sink.client.clusterAdmin != admin || sink.client.http != nil {
+		t.Fatalf("sink factory wiring admin=%v http=%v", sink.client.clusterAdmin == admin, sink.client.http != nil)
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func adminTestSink(admin NacosClusterAdmin, naming *fakeSDKNaming, timeout time.Duration) *Sink {
 	return &Sink{
 		client: &Client{sdk: &sdkNamingFacade{client: naming, group: DefaultGroup}, clusterAdmin: admin, config: ClientConfig{Timeout: timeout}},

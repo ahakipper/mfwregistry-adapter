@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -37,11 +38,12 @@ type Server struct {
 	stopped           bool
 
 	// injected dependencies
-	logger   ports.Logger
-	notifier ports.Notifier
-	metrics  ports.MetricsRecorder
-	cfg      infraconfig.Config
-	localIP  func() (string, error)
+	logger            ports.Logger
+	notifier          ports.Notifier
+	metrics           ports.MetricsRecorder
+	nacosAdminFactory func() (nacos.NacosClusterAdmin, error)
+	cfg               infraconfig.Config
+	localIP           func() (string, error)
 
 	dialDiscovery       func(context.Context) (*discoverycenter.Client, error)
 	waitRetry           func(context.Context, time.Duration) error
@@ -106,18 +108,19 @@ func NewServerFromDeps(rt *composition.Runtime) (*Server, error) {
 	}
 	// init Server
 	return &Server{
-		stopElectorFunc:  ecancel,
-		stopProviderFunc: nil,
-		Providers:        nil,
-		elector:          elector,
-		leaderChCh:       leaderChanges,
-		stop:             make(chan struct{}),
-		logger:           rt.Logger,
-		notifier:         rt.Notifier,
-		metrics:          rt.Metrics,
-		cfg:              rt.Config,
-		localIP:          rt.LocalIP,
-		waitRetry:        waitForRetry,
+		stopElectorFunc:   ecancel,
+		stopProviderFunc:  nil,
+		Providers:         nil,
+		elector:           elector,
+		leaderChCh:        leaderChanges,
+		stop:              make(chan struct{}),
+		logger:            rt.Logger,
+		notifier:          rt.Notifier,
+		metrics:           rt.Metrics,
+		nacosAdminFactory: rt.NacosClusterAdminFactory,
+		cfg:               rt.Config,
+		localIP:           rt.LocalIP,
+		waitRetry:         waitForRetry,
 		initializeProviders: func(ctx context.Context, w worker.Worker) ([]providers.Provider, error) {
 			return InitializeProvidersWithDeps(ctx, w, rt.Config, rt.Logger, rt.Notifier)
 		},
@@ -340,18 +343,45 @@ func (s *Server) startProviders() error {
 				s.notifier.Notify("Nacos compatibility transport enabled", message)
 			}
 		}
+		var clusterAdmin nacos.NacosClusterAdmin
+		if transportMode == string(nacos.TransportSDK) && s.nacosAdminFactory != nil {
+			clusterAdmin, err = s.nacosAdminFactory()
+			if err != nil {
+				if clusterAdmin != nil {
+					_ = closeNacosAdmin(clusterAdmin, 0)
+				}
+				cleanup()
+				s.clearStartup(generation, nil)
+				return errors.WithMessage(err, "new nacos cluster-admin facade")
+			}
+			if clusterAdmin == nil {
+				cleanup()
+				s.clearStartup(generation, nil)
+				return errors.New("new nacos cluster-admin facade: factory returned nil admin")
+			}
+		}
 		nacosCfg := nacos.ClientConfig{TransportMode: nacos.TransportMode(transportMode), ServerURL: s.cfg.NacosAddr, ServerURLs: s.cfg.NacosServerList, NamespaceID: s.cfg.NacosNamespace, GroupName: s.cfg.NacosGroup, Username: s.cfg.NacosUsername, Password: s.cfg.NacosPassword, AccessToken: s.cfg.NacosAccessToken, CAFile: s.cfg.NacosCAFile, ServerName: s.cfg.NacosServerName, InsecureSkipVerify: s.cfg.NacosInsecureSkipVerify}
+		nacosCfg.ClusterAdmin = clusterAdmin
 		if s.cfg.NacosTimeout > 0 {
 			nacosCfg.Timeout = time.Duration(s.cfg.NacosTimeout) * time.Second
 		}
 		nacosSink, err = nacos.NewSinkWithConfig(nacosCfg, s.logger)
 		if err != nil {
+			if clusterAdmin != nil {
+				_ = closeNacosAdmin(clusterAdmin, nacosCfg.Timeout)
+			}
 			cleanup()
 			s.clearStartup(generation, nil)
 			return errors.WithMessage(err, "new nacos sink")
 		}
-		if err := nacos.CheckReadinessWithConfig(nacosCfg, s.logger); err != nil {
-			_ = nacosSink.Close()
+		readinessCfg := nacosCfg
+		// Readiness owns a temporary naming client; the long-lived admin
+		// belongs to nacosSink and must not be closed by the probe client.
+		readinessCfg.ClusterAdmin = nil
+		if err := nacos.CheckReadinessWithConfig(readinessCfg, s.logger); err != nil {
+			if closeErr := nacosSink.Close(); closeErr != nil {
+				err = stderrors.Join(err, closeErr)
+			}
 			cleanup()
 			s.clearStartup(generation, nil)
 			return errors.WithMessage(err, "nacos readiness check")
@@ -542,6 +572,18 @@ func (s *Server) clearStartup(generation uint64, cancel context.CancelFunc) {
 	if cancel != nil {
 		cancel()
 	}
+}
+
+func closeNacosAdmin(admin nacos.NacosClusterAdmin, timeout time.Duration) error {
+	if admin == nil {
+		return nil
+	}
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return admin.Close(ctx)
 }
 
 // stopAndStartProviders will stop providers and then start new providers
