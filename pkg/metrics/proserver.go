@@ -5,8 +5,8 @@ import (
 	"math/rand"
 	"net/http"
 	_ "net/http/pprof"
+	legacycompat "spotter/internal/infra/legacycompat"
 	"spotter/internal/ports"
-	"spotter/pkg/log"
 	"time"
 )
 
@@ -20,7 +20,7 @@ var srv *http.Server
 func NewPrometheusServer(addr string) *PrometheusService {
 	return &PrometheusService{
 		Addr:   addr,
-		Logger: log.Logger,
+		Logger: legacycompat.Logger(),
 	}
 }
 
