@@ -161,15 +161,49 @@ func (c *Client) GetAll(statuses []int32, provider string) (*instance.InstanceLi
 			c.logger.Errorf("GetAll fail: %v req: %v", err, req)
 			return nil, err
 		}
-		if provider != "" && list != nil && len(list.Instance) > 0 {
-			for _, instance := range list.Instance {
-				if instance.Provider == provider {
-					instances.Instance = append(instances.Instance, instance)
-				}
+		if list == nil {
+			continue
+		}
+		for _, item := range list.Instance {
+			if item == nil || (provider != "" && item.Provider != provider) {
+				continue
 			}
+			// The returned list owns its values. Clone nested maps/slices so a
+			// caller mutating one status page cannot alias the service's response
+			// or another status page in the accumulated result.
+			instances.Instance = append(instances.Instance, cloneInstance(item))
 		}
 	}
 	return instances, nil
+}
+
+func cloneInstance(in *instance.Instance) *instance.Instance {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	if in.Ports != nil {
+		out.Ports = make([]*instance.PortInfo, len(in.Ports))
+		for i, port := range in.Ports {
+			if port != nil {
+				copyPort := *port
+				out.Ports[i] = &copyPort
+			}
+		}
+	}
+	if in.Label != nil {
+		out.Label = make(map[string]string, len(in.Label))
+		for key, value := range in.Label {
+			out.Label[key] = value
+		}
+	}
+	if in.Image != nil {
+		out.Image = make(map[string]string, len(in.Image))
+		for key, value := range in.Image {
+			out.Image[key] = value
+		}
+	}
+	return &out
 }
 
 // Close releases a connection created by Dial. It is safe to call repeatedly.
