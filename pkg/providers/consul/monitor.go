@@ -22,6 +22,10 @@ type Monitor interface {
 	AppendInstanceHandler(InstanceHandler)
 }
 
+// InstanceChangeHandler receives a change notification without fabricated
+// CatalogService payload. It is additive for compatibility with InstanceHandler.
+type InstanceChangeHandler func() error
+
 // InstanceHandler processes service instance change events.
 type InstanceHandler func(instance *api.CatalogService) error
 
@@ -36,6 +40,7 @@ type consulMonitor struct {
 
 	handlersMu       sync.RWMutex
 	instanceHandlers []InstanceHandler
+	changeHandlers   []InstanceChangeHandler
 	serviceHandlers  []ServiceHandler
 	handlersWG       sync.WaitGroup
 }
@@ -213,8 +218,21 @@ func (m *consulMonitor) updateServiceRecord() {
 }
 
 func (m *consulMonitor) updateInstanceRecord() {
-	obj := &api.CatalogService{}
+	changeHandlers := m.changeHandlerSnapshot()
+	if len(changeHandlers) > 0 {
+		m.handlersWG.Add(len(changeHandlers))
+		for _, handler := range changeHandlers {
+			go func(h InstanceChangeHandler) {
+				defer m.handlersWG.Done()
+				if err := h(); err != nil {
+					m.logger.Warnf("Error executing instance change handler: %v", err)
+				}
+			}(handler)
+		}
+		return
+	}
 	handlers := m.instanceHandlerSnapshot()
+	obj := &api.CatalogService{}
 	m.handlersWG.Add(len(handlers))
 	for _, handler := range handlers {
 		go func(handler InstanceHandler) {
@@ -225,6 +243,17 @@ func (m *consulMonitor) updateInstanceRecord() {
 			}
 		}(handler)
 	}
+}
+
+func (m *consulMonitor) AppendInstanceChangeHandler(handler InstanceChangeHandler) {
+	m.handlersMu.Lock()
+	m.changeHandlers = append(m.changeHandlers, handler)
+	m.handlersMu.Unlock()
+}
+func (m *consulMonitor) changeHandlerSnapshot() []InstanceChangeHandler {
+	m.handlersMu.RLock()
+	defer m.handlersMu.RUnlock()
+	return append([]InstanceChangeHandler(nil), m.changeHandlers...)
 }
 
 func (m *consulMonitor) AppendServiceHandler(handler ServiceHandler) {

@@ -178,7 +178,11 @@ func NewConsulProviderWithDeps(ctx context.Context, worker worker.Worker, pushIn
 
 	// Watch the change events to refresh local caches
 	// monitor.AppendServiceHandler(provider.ServiceChanged)
-	monitor.AppendInstanceHandler(consulProvider.InstanceChanged)
+	if changeMonitor, ok := monitor.(interface{ AppendInstanceChangeHandler(InstanceChangeHandler) }); ok {
+		changeMonitor.AppendInstanceChangeHandler(func() error { return consulProvider.syncInstance() })
+	} else {
+		monitor.AppendInstanceHandler(consulProvider.InstanceChanged)
+	}
 
 	//return &controller, err
 	return consulProvider, nil
