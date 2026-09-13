@@ -1,6 +1,6 @@
 # Multi-Sink Plan: Nacos as the Second InstanceSink
 
-> **Current-state addendum (2026-09-13, authoritative HEAD `cb16f73`):** This document contains the original F5
+> **Current-state addendum (2026-09-13, authoritative HEAD `1a82138`):** This document contains the original F5
 > implementation plan. Its D4 “hand-rolled HTTP client” decision is superseded:
 > all production Nacos operations must now go through the official Nacos SDK or
 > an explicitly versioned SDK facade. The existing HTTP client may remain only
@@ -16,7 +16,9 @@
 > Exported `NewClient` and `NewSink` are SDK-default and therefore inherit
 > that fail-closed capability gate. Raw HTTP tests/rollback callers must use
 > the explicitly named `NewHTTPCompatClient` and `NewHTTPCompatSink` helpers;
-> no unnamed constructor may allocate the compatibility client.
+> no unnamed constructor may allocate the compatibility client. `CheckReadiness`
+> follows the same SDK-default rule; only `CheckReadinessHTTPCompat` is
+> permitted in HTTP fixture/rollback code.
 >
 > The remaining F5/soak descriptions in this document describe the historical
 > local implementation stage; they do not constitute a production PASS.
@@ -48,7 +50,7 @@ the production gap explicit; there is no hidden fallback to `net/http`.
 
 Status: authoritative implementation plan for the multi-sink initiative on
 `refactor/all`; the historical implementation baseline `728f1d2` is superseded
-by the current-status addendum above and HEAD `cb16f73`. The lead implements it
+by the current-status addendum above and HEAD `1a82138`. The lead implements it
 phase-by-phase (F2..F6) under agent review; each phase's exit criteria are
 the review contract. Companions: [ddd-architecture.md](ddd-architecture.md)
 (target layering, §4 decisions), [architecture.md](architecture.md),
