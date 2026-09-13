@@ -120,7 +120,8 @@ production callers: k8s and consul still run inline diff policies
 The multi-sink work must not force-unify those policies — the taken decision
 in ddd-architecture.md §4(j).
 
-**Goal.** Nacos becomes a second `ports.InstanceSink` alongside Atlas,
+**Goal.** Nacos becomes a `ports.InstanceSink`; Atlas remains an existing
+Sink/mock integration point deferred to a later release,
 behind a `FanoutSink` the worker talks to, with per-sink retry state — plus
 a full local end-to-end environment (real Nacos, consul, k3s, etcd
 election) and a 1-hour continuous soak with extreme edge cases, runnable on

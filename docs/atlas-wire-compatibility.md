@@ -1,8 +1,11 @@
 # Atlas wire compatibility gate
 
-Status: **NOT VERIFIED (P1)**.
+Status: **DEFERRED (future entry gate)**.
 
-> **Current-status addendum (2026-09-13, code baseline `356aa75`):** The
+> **Current-status addendum (2026-09-13, code baseline `33606fa`):** Atlas is
+> retained as an existing Sink/mock integration point and deferred from the
+> current Spotter release. The future entry gate remains real protobuf/method
+> path/TLS/auth compatibility evidence. The
 > guarded `atlas_real` gate now supports explicit TLS/CA/server-name and
 > scratch-only insecure-auth controls, marks canary cleanup before the first
 > write, validates cleanup responses, and reports redacted endpoint/latency/
