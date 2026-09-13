@@ -38,10 +38,10 @@ TLS/auth, HA/restart, and non-public namespace evidence remain outstanding.
 The scratch artifact includes guarded username/password and token runs plus
 the `tenant-a`/`blue` scope; those results do not replace production TLS/auth
 or HA evidence.
-The `nacos_restart` gate passed a non-race persistent/new-client scratch run
-with cleanup evidence, but its race-enabled run exposed a vendor SDK
-reconnect race and is `FAIL / RACE_BLOCKED`; automatic reconnect and production
-SDK lifecycle remain `NOT VERIFIED`.
+The historical v2.3.5 `nacos_restart` race run exposed a vendor SDK reconnect
+race and is `FAIL / RACE_BLOCKED`. The current pseudo-pin `0024865` has a
+separate guarded ARM64 single-client `-race` scratch PASS; untagged SDK,
+HA/TLS/Admin behavior and production SDK lifecycle remain `NOT VERIFIED`.
 
 ## Build
 
@@ -102,7 +102,7 @@ username/password, TLS CA/server name, and timeout flags are passed to the
 same client configuration. Catalog/prune uses the official SDK
 `SelectAllInstances` complete view (including disabled/unhealthy entries),
 and readiness uses the SDK service-list RPC plus a persistent register /
-deregister canary. The pinned SDK v2.3.5 has no cluster-admin API for the
+deregister canary. The pinned SDK pseudo-version `0024865` has no cluster-admin API for the
 NONE health checker; SDK mode returns `ErrUnsupportedOperation` before any
 business register and records the release gap rather than issuing a raw HTTP
 request. The HTTP cluster update remains a separately owned, expiring
