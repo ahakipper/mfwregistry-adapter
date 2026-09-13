@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"math/rand"
 	"net/http"
@@ -15,6 +16,7 @@ type PrometheusService struct {
 	Logger ports.Logger
 	mu     sync.Mutex
 	srv    *http.Server
+	stopMu sync.Mutex
 }
 
 func NewPrometheusServer(addr string) *PrometheusService {
@@ -42,6 +44,11 @@ func (s *PrometheusService) Start() {
 	}
 	//s.mock()
 	s.mu.Lock()
+	if s.srv != nil {
+		s.mu.Unlock()
+		s.Logger.Warn("prometheus server already started")
+		return
+	}
 	s.srv = &http.Server{Addr: s.Addr}
 	server := s.srv
 	s.mu.Unlock()
@@ -53,11 +60,26 @@ func (s *PrometheusService) Start() {
 }
 
 func (s *PrometheusService) Stop() {
+	if s == nil {
+		return
+	}
+	s.stopMu.Lock()
+	defer s.stopMu.Unlock()
 	s.mu.Lock()
 	server := s.srv
 	s.mu.Unlock()
 	if server != nil {
-		_ = server.Shutdown(nil)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := server.Shutdown(ctx)
+		cancel()
+		s.mu.Lock()
+		if s.srv == server {
+			s.srv = nil
+		}
+		s.mu.Unlock()
+		if err != nil && s.Logger != nil {
+			s.Logger.Errorf("prometheus server shutdown failed: %s", err)
+		}
 	}
 }
 
