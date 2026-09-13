@@ -509,6 +509,10 @@ func (s *Sink) GetAll(statuses []int32, provider string) (*instance.InstanceList
 			return nil, err
 		}
 		for _, host := range hosts {
+			if host.Metadata["spotterOwner"] != metadataOwner {
+				s.logger.Warnf("nacos: ignoring non-owned catalog instance %s for reconcile", host.InstanceID)
+				continue
+			}
 			ins := reconstruct(service, host)
 			if !statusAllowed(statuses, ins.Status) {
 				continue
