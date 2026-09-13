@@ -571,3 +571,8 @@ been executed here because `kwokctl` is unavailable. OBS-mini may use
 `OBS_KUBECONFIG` external read-only mode; teardown never deletes that cluster.
 Run `scripts/observe_lifecycle_test.sh` for fake-PATH failure and cleanup
 coverage.
+
+Plain Chinese terminology: Nacos batch 是一次提交多个临时实例；cluster-admin
+health-check 是 Nacos 服务器主动探测实例健康的管理开关；AppCenter
+endpoint/payload/auth/SLA 分别是告警地址、消息格式、认证信息和时效承诺；
+legacy shim/globals 是为旧调用方保留的兼容包装和进程级全局变量。

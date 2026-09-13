@@ -9,9 +9,12 @@ spotter. See [architecture.md](architecture.md) for design background and
 - Nacos production startup defaults to the official SDK but is **BLOCKED / NOT
   VERIFIED** before readiness until an official Admin/Maintainer cluster-health
   operation is available. `http-compat` is restricted to tests/rollback.
-- Real Nacos has bounded ARM64 scratch evidence, while Atlas has no real target;
-  their skips are not production evidence. Atlas JSON discoverymock is not
-  protobuf compatibility proof.
+- Real Nacos has bounded ARM64 scratch evidence. Deployment-level HA,
+  multi-node failover, TLS/auth, namespace and leaderless checks are outside
+  this release scope; the single-Sink SDK integration remains covered.
+- Atlas remains an existing Sink/mock integration point, deferred for a future
+  release. Real protobuf/method/TLS/auth compatibility is its future entry gate,
+  not a current release blocker.
 - Observe unit/race harness safety is implemented, including bounded external
   commands and explicit EnvError/InfraError skips; the full 2h/1000+ run is
   still pending. Consul scale observation is an accepted non-goal until ECS
