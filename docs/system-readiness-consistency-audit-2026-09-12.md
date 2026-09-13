@@ -2,7 +2,7 @@
 
 **审计日期：** 2026-09-12（当前状态增量更新至 2026-09-13）
 **仓库：** `/Users/d-robotics/go/src/github.com/ahakipper/mfwregistry-adapter`  
-**分支/提交：** `refactor/all` / `356aa75`
+**分支/提交：** `refactor/all` / `b54b2b6`
 **文档状态：** FINAL（已完成第二轮独立 reviewer 复核）
 
 > **当前状态增补（2026-09-13，代码基线 `356aa75`）：** 生产 Nacos 默认仍为 SDK-only，但因官方 Nacos Go SDK v2.3.5 没有 cluster-admin health-check update，启动在 readiness/canary 前 **BLOCKED / NOT VERIFIED**；`http-compat` 仅测试/回滚。Nacos real/sdk-eval harness 已加入 TLS/CA/server-name/auth guards、redacted evidence 和 write-attempt cleanup，本地 scratch 目标已补充但不能宣称生产协议 PASS。Atlas 仍是普通 Go struct + JSON codec 的 discoverymock stand-in，真实 protobuf/TLS/auth/method compatibility **NOT VERIFIED**。Observe harness 的命令、健康检查和 teardown 已 context-bounded，clean host 缺外部依赖会显式 `NOT VERIFIED: EnvError/InfraError` skip；完整 2h OBS 未运行。Nacos GetAll 只返回 `spotterOwner` 自有条目；Cache Delete/GetAll 已修复 nil、深拷贝、空 provider 和 legacy 唯一匹配。Notifier 有 owned context/Close/retry/fail-closed 生命周期，但真实 AppCenter endpoint/payload/auth/SLA 未提供。DDD active graph 使用显式 ports，legacy bridge 集中于 `internal/infra/legacycompat`；Consul 同规模观察按当前无机器部署列为 accepted non-goal。`go vet ./...`、相关 race/unit/tagged gates 已通过；真实 Nacos/Atlas/OBS-full 证据仍保持 NOT VERIFIED。
@@ -447,3 +447,8 @@ propagation、cross-provider tombstone scope、nonblocking provider pool submiss
 legacy globals、真实 appcenter 告警，以及 SDK v2.3.5 缺少 cluster-admin health-check
 API 的有期限 typed unsupported 例外；这些不能由本地 mock、tagged skip 或计划 reviewer
 PASS 代替。
+
+> **SDK provenance clarification:** Current implementation and ARM64
+> reconnect evidence use pseudo-pin `v2.3.6-0.20260902123754-002486583df5`
+> (commit `0024865`). Any unqualified v2.3.5 references in the historical
+> findings below describe the earlier audit baseline only.
