@@ -1,6 +1,11 @@
 # spotter 当前工程就绪度与一致性闭环审计
 
 **审计日期：** 2026-09-12（当前状态增量更新至 2026-09-13）
+
+> Current scope: Atlas is an existing Sink/mock integration point deferred
+> from the current release; real protobuf/method/TLS/auth is a future gate.
+> Deployment-level Nacos HA/TLS/auth/namespace/leaderless checks are outside
+> current Spotter scope; single-Sink SDK integration remains in scope.
 **仓库：** `/Users/d-robotics/go/src/github.com/ahakipper/mfwregistry-adapter`  
 **分支/提交：** `refactor/all` / `c986632` (implementation baseline; docs synced after)
 **文档状态：** FINAL（已完成第二轮独立 reviewer 复核）
