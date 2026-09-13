@@ -142,7 +142,7 @@ func (c *spotterChild) start(ctx context.Context) error {
 }
 
 // kill stops the child hard (TERM then KILL, the soak's discipline).
-func (c *spotterChild) kill() {
+func (c *spotterChild) kill() error {
 	c.mu.Lock()
 	cmd := c.cmd
 	waitDone := c.waitDone
@@ -155,27 +155,42 @@ func (c *spotterChild) kill() {
 		if logFile != nil {
 			_ = logFile.Close()
 		}
-		return
+		return nil
 	}
 	pgid := -cmd.Process.Pid
-	_ = syscall.Kill(pgid, syscall.SIGTERM)
+	termErr := syscall.Kill(pgid, syscall.SIGTERM)
 	if waitDone == nil {
-		return
+		if logFile != nil {
+			_ = logFile.Close()
+		}
+		return termErr
 	}
 	select {
 	case <-waitDone:
+		if logFile != nil {
+			_ = logFile.Close()
+		}
+		return nil
 	case <-time.After(10 * time.Second):
-		_ = syscall.Kill(pgid, syscall.SIGKILL)
+		killErr := syscall.Kill(pgid, syscall.SIGKILL)
 		select {
 		case <-waitDone:
+			if logFile != nil {
+				_ = logFile.Close()
+			}
+			return nil
 		case <-time.After(5 * time.Second):
 			// The process group did not reap within the bounded cleanup
-			// window. The harness reports this through its teardown log;
-			// never block the test process indefinitely.
+			// window. Return the failure so OBS-full can classify teardown as
+			// incomplete instead of silently reporting a clean run.
+			if logFile != nil {
+				_ = logFile.Close()
+			}
+			if killErr != nil {
+				return fmt.Errorf("observe: child kill failed after bounded reap: term=%v kill=%v", termErr, killErr)
+			}
+			return fmt.Errorf("observe: child did not exit within bounded reap window")
 		}
-	}
-	if logFile != nil {
-		_ = logFile.Close()
 	}
 }
 
