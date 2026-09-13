@@ -27,7 +27,9 @@ import (
 const observeNacosContainer = "dsca-observe-nacos"
 
 // nacosImage is the throwaway stack's nacos image (the soak stack's tag).
-const nacosImage = "nacos/nacos-server:v2.1.0"
+const nacosImage = "nacos/nacos-server:v2.1.0-slim"
+const nacosImageDigest = "sha256:237e6eb663468c5a000505d06ed8306da7c946933a44f2048c9a7b49ec31c7d9"
+const nacosPlatform = "linux/arm64"
 
 // nacosHealthWait boot-waits a fresh standalone nacos: the container start
 // plus the ARM/colima JVM's rebuild window (the soak's (d)-scenario
@@ -125,6 +127,10 @@ func nacosHostPort(addr string) string {
 // port. It fails fast when the image is missing (the harness does not
 // silently substitute a mock for the real server).
 func dockerRunNacos(hostPort int) error {
+	image := nacosImage
+	if override := strings.TrimSpace(os.Getenv("OBS_NACOS_IMAGE")); override != "" {
+		image = override
+	}
 	running, inspectErr := dockerContainerRunning(observeNacosContainer)
 	if inspectErr != nil {
 		return fmt.Errorf("observe: docker inspect before run: %w", inspectErr)
@@ -132,18 +138,34 @@ func dockerRunNacos(hostPort int) error {
 	if running {
 		return fmt.Errorf("observe: throwaway nacos container %s already exists (previous run not cleaned up; docker rm -f %s)", observeNacosContainer, observeNacosContainer)
 	}
-	has, imageErr := dockerImagePresent(nacosImage)
+	has, imageErr := dockerImagePresent(image)
 	if imageErr != nil {
 		return fmt.Errorf("observe: docker image inspect: %w", imageErr)
 	}
 	if !has {
-		return fmt.Errorf("observe: nacos image %s not present (docker pull %s)", nacosImage, nacosImage)
+		return fmt.Errorf("observe: nacos image %s not present (docker pull %s)", image, image)
+	}
+	if err := validateNacosImage(image); err != nil {
+		return err
 	}
 	out, err := runCommand("docker", "run", "-d", "--name", observeNacosContainer,
+		"--platform", nacosPlatform,
 		"-e", "MODE=standalone", "-e", "JVM_XMS=512m", "-e", "JVM_XMX=512m",
-		"-p", fmt.Sprintf("%d:8848", hostPort), nacosImage)
+		"-p", fmt.Sprintf("%d:8848", hostPort), image)
 	if err != nil {
 		return fmt.Errorf("observe: docker run nacos: %w: %s", err, strings.TrimSpace(out))
+	}
+	return nil
+}
+
+func validateNacosImage(image string) error {
+	out, err := runCommand("docker", "image", "inspect", "--format", "{{.Architecture}} {{index .RepoDigests 0}}", image)
+	if err != nil {
+		return fmt.Errorf("observe: EnvError inspect Nacos image architecture/digest: %w", err)
+	}
+	parts := strings.Fields(out)
+	if len(parts) < 2 || parts[0] != "arm64" || !strings.Contains(parts[1], "@"+nacosImageDigest) {
+		return fmt.Errorf("observe: EnvError Nacos image %s must prove arm64 and digest %s (got %q)", image, nacosImageDigest, strings.TrimSpace(out))
 	}
 	return nil
 }
