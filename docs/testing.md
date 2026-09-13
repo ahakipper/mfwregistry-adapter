@@ -548,6 +548,12 @@ When `OBS_KUBECONFIG` is set, `make test-observe` runs only read-only
 `TestObserveUnit` cases and exits before any apply/delete driver operation.
 ### Nacos SDK startup capability gate
 
+The SDK eval classifies a Nacos 2.1.0 `RequestHandler Not Found` batch response
+as `NOT VERIFIED: batch unsupported by target`; it never promotes that target
+to PASS. Batch support is a capability introduced after 2.1.0 (2.1.1+), while
+Spotter's persistent sink does not depend on batch registration. Other batch
+errors remain hard failures and cleanup still runs.
+
 The SDK-only code path is covered by unit and race tests. A production SDK sink must fail before readiness or canary side effects while the pinned SDK lacks the required cluster-admin health-check operation; real Nacos/Admin verification is therefore `BLOCKED / NOT VERIFIED`.
 
 ### Observe lifecycle status
