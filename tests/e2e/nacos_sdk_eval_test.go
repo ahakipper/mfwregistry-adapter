@@ -65,15 +65,22 @@ func TestNacosSDKPersistentLifecycle(t *testing.T) {
 	batchService := service + "_batch"
 	batchParam := vo.BatchRegisterInstanceParam{ServiceName: batchService, GroupName: cfg.client.GroupName, Instances: []vo.RegisterInstanceParam{{Ip: "127.0.0.2", Port: 2, Enable: true, Ephemeral: true}}}
 	batchAttempted := true
+	batchUnsupportedObserved := false
 	defer func() {
 		var cleanupErr error
 		if batchAttempted {
 			cleanupErr = client.DeregisterInstance(nacos.InstanceParams{ServiceName: batchService, IP: "127.0.0.2", Port: 2, ClusterName: "DEFAULT", GroupName: cfg.client.GroupName, NamespaceID: cfg.client.NamespaceID, Ephemeral: true})
+			if batchUnsupportedObserved && batchUnsupported(cleanupErr) {
+				cleanupErr = nil
+			}
 			if cleanupErr == nil {
 				cleanupErr = verifyNacosCanary(cfg.client, batchService)
 			}
 		}
 		status := "passed"
+		if batchUnsupportedObserved {
+			status = "NOT_VERIFIED/unsupported"
+		}
 		if cleanupErr != nil {
 			status = "failed"
 		}
@@ -84,6 +91,7 @@ func TestNacosSDKPersistentLifecycle(t *testing.T) {
 	}()
 	if err := client.BatchRegisterEphemeral(batchParam); err != nil {
 		if batchUnsupported(err) {
+			batchUnsupportedObserved = true
 			t.Skipf("NOT VERIFIED: batch unsupported by target: %v", err)
 		}
 		t.Fatalf("SDK ephemeral batch register: %v", err)
