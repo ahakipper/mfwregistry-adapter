@@ -23,6 +23,14 @@ timestamp/ledger harness defects are fixed, but a complete self-contained 2h
 run remains unverified. Consul scale observation remains an accepted non-goal
 until ECS/machine deployment is re-enabled.
 
+The Observe harness command, health probes, and child lifecycle are now
+context-bounded: kubectl/docker calls default to a 30-second deadline, health
+waits inherit their caller bound, and TERM/KILL cleanup is idempotent and
+bounded. `tests/observe/lifecycle_test.go` exercises cancellation and teardown
+without starting a real stack. These tests establish harness safety only;
+`EnvError`/`InfraError` and residual resources must remain explicit in any
+OBS-full result and cannot be promoted to a product PASS.
+
 Companion documents: [architecture.md](architecture.md) (design),
 [data-model.md](data-model.md) (the `Instance` model),
 [operations.md](operations.md) (runbook). See [README.md](README.md) for the

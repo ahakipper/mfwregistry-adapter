@@ -565,6 +565,16 @@ K8s fake Robot、Nacos mock、discoverymock JSON codec 和 SDK 编译结果默�
 
 Make target 契约：`make test-observe` 必须等价执行 `go test -tags=observe -run '^TestObserveConsistency$$|^TestObserveUnit' ...`，但 OBS-mini/OBS-full 的外部前置条件仍按本节区分；直接 `go test` 命令若未带对应 build tag，一律不计入 E2E/OBS 门禁。
 
+Observe harness reliability gate: every kubectl/docker invocation is issued
+through a context-bounded command helper (30s default); health probes use the
+caller bound and cancel-aware HTTP requests; child process startup observes a
+wait channel and teardown is idempotent with bounded TERM/KILL reaping. These
+controls prevent an unreachable API, hung Docker daemon, or exited child from
+stalling teardown indefinitely. The deterministic `tests/observe/lifecycle_test.go`
+suite covers cancellation, invalid bounds, child kill idempotence, and invalid
+churn inputs. They prove harness behavior only; no EnvError/InfraError result
+is promoted to a product PASS, and no real stack is started by the unit tier.
+
 ### 12.3 E2E 启动硬门禁
 
 启动前必须全部通过：

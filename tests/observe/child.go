@@ -48,10 +48,12 @@ type spotterChild struct {
 	nacosAddr  string
 	metrics    int
 
-	cmd     *exec.Cmd
-	mu      sync.Mutex
-	starts  int
-	logFile *os.File
+	cmd      *exec.Cmd
+	mu       sync.Mutex
+	starts   int
+	logFile  *os.File
+	waitDone chan struct{}
+	exitErr  error
 }
 
 func newSpotterChild(bin, workDir, kubeconfig string, etcd []string, atlasAddr, nacosAddr string, metricsPort int) *spotterChild {
@@ -71,10 +73,22 @@ func newSpotterChild(bin, workDir, kubeconfig string, etcd []string, atlasAddr, 
 // visible in the artifact; --log-to-std=false lands the application log in
 // <workdir>/log/app.log (the forensic tail's source).
 func (c *spotterChild) start(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.cmd != nil && c.cmd.Process != nil {
-		return fmt.Errorf("observe: spotter child already running (pid %d)", c.cmd.Process.Pid)
+		if c.waitDone == nil {
+			return fmt.Errorf("observe: spotter child already running (pid %d)", c.cmd.Process.Pid)
+		}
+		select {
+		case <-c.waitDone:
+			c.cmd = nil
+			c.waitDone = nil
+		default:
+			return fmt.Errorf("observe: spotter child already running (pid %d)", c.cmd.Process.Pid)
+		}
 	}
 	logPath := fmt.Sprintf("%s/spotter-child.log", c.workDir)
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -107,7 +121,23 @@ func (c *spotterChild) start(ctx context.Context) error {
 	}
 	c.cmd = cmd
 	c.logFile = logFile
+	c.waitDone = make(chan struct{})
+	c.exitErr = nil
 	c.starts++
+	waitDone := c.waitDone
+	go func() {
+		err := cmd.Wait()
+		c.mu.Lock()
+		if c.cmd == cmd {
+			c.exitErr = err
+		}
+		if c.logFile == logFile {
+			_ = c.logFile.Close()
+			c.logFile = nil
+		}
+		close(waitDone)
+		c.mu.Unlock()
+	}()
 	return nil
 }
 
@@ -115,36 +145,57 @@ func (c *spotterChild) start(ctx context.Context) error {
 func (c *spotterChild) kill() {
 	c.mu.Lock()
 	cmd := c.cmd
+	waitDone := c.waitDone
+	logFile := c.logFile
 	c.cmd = nil
+	c.waitDone = nil
+	c.logFile = nil
 	c.mu.Unlock()
 	if cmd == nil || cmd.Process == nil {
+		if logFile != nil {
+			_ = logFile.Close()
+		}
 		return
 	}
 	pgid := -cmd.Process.Pid
 	_ = syscall.Kill(pgid, syscall.SIGTERM)
-	done := make(chan struct{})
-	go func() { _, _ = cmd.Process.Wait(); close(done) }()
+	if waitDone == nil {
+		return
+	}
 	select {
-	case <-done:
+	case <-waitDone:
 	case <-time.After(10 * time.Second):
 		_ = syscall.Kill(pgid, syscall.SIGKILL)
-		<-done
+		select {
+		case <-waitDone:
+		case <-time.After(5 * time.Second):
+			// The process group did not reap within the bounded cleanup
+			// window. The harness reports this through its teardown log;
+			// never block the test process indefinitely.
+		}
 	}
-	if c.logFile != nil {
-		_ = c.logFile.Close()
-		c.logFile = nil
+	if logFile != nil {
+		_ = logFile.Close()
 	}
 }
 
 // running reports whether the child process is alive.
 func (c *spotterChild) running() bool {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	cmd := c.cmd
-	c.mu.Unlock()
 	if cmd == nil || cmd.Process == nil {
 		return false
 	}
-	return cmd.ProcessState == nil
+	if c.waitDone == nil {
+		return false
+	}
+	select {
+	case <-c.waitDone:
+		return false
+	default:
+		return true
+	}
 }
 
 // pid returns the current child's pid (0 when not running).
@@ -160,20 +211,42 @@ func (c *spotterChild) pid() int {
 // waitForHealthy blocks until the child's metrics endpoint answers (the
 // Run() is executing signal), bounded.
 func (c *spotterChild) waitForHealthy(bound time.Duration) error {
-	deadline := time.Now().Add(bound)
+	return c.waitForHealthyContext(context.Background(), bound)
+}
+
+func (c *spotterChild) waitForHealthyContext(parent context.Context, bound time.Duration) error {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if bound <= 0 {
+		return fmt.Errorf("observe: spotter child health bound must be positive")
+	}
+	ctx, cancel := context.WithTimeout(parent, bound)
+	defer cancel()
 	metricsURL := fmt.Sprintf("http://127.0.0.1:%d/metrics", c.metrics)
-	for time.Now().Before(deadline) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
 		if !c.running() {
 			return fmt.Errorf("observe: spotter child died during startup (see %s/spotter-child.log)", c.workDir)
 		}
-		response, err := http.Get(metricsURL) //nolint:gosec // fixed loopback URL
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, metricsURL, nil)
+		if reqErr != nil {
+			return fmt.Errorf("observe: build health request: %w", reqErr)
+		}
+		response, err := sharedHTTP.Do(req) //nolint:gosec // fixed loopback URL
 		if err == nil {
 			_ = response.Body.Close()
-			return nil
+			if response.StatusCode >= 200 && response.StatusCode < 300 {
+				return nil
+			}
 		}
-		time.Sleep(500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("observe: spotter child not healthy within %s: %w (see %s/spotter-child.log)", bound, ctx.Err(), c.workDir)
+		case <-ticker.C:
+		}
 	}
-	return fmt.Errorf("observe: spotter child not healthy within %s (metrics endpoint silent; see %s/spotter-child.log)", bound, c.workDir)
 }
 
 // logSlice extracts the lines naming any of the needles, issued within
