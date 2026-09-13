@@ -55,8 +55,8 @@
 |---|---|---|
 | A0–A3 身份、顺序、全量重试 | **IMPLEMENTED / TESTED** | source-aware identity、keyed per-identity gate、typed full retry、revalidation、tombstone scope 已提交；仍需真实 2h/生产观测验证。 |
 | K8s cache/worker | **IMPLEMENTED / RACE-TESTED** | cache pointer swap、stop-state、HasSynced cancel 竞态已修复；`--appcodes` 多值 membership、full SyncAll metadata、cross-provider tombstone 已修复；ants pool overload 现在 nonblocking 并计数 drop。 |
-| Nacos naming | **SDK DEFAULT / NO PRODUCTION RAW HTTP / REAL EVIDENCE PARTIAL** | 当前 pinned SDK pseudo-version `0024865` facade 已接入；register/deregister/list/query/subscribe/service-list/catalog/prune/readiness 均经 SDK，GetAll/prune 使用 fresh session+isolated cache；cluster Admin 的 NONE health-check update 仍 typed fail-closed；ARM64 scratch lifecycle/reconnect 已通过，HA/TLS/生产证据仍缺。 |
-| Atlas wire | **NOT VERIFIED (P1)** | JSON mirror + guarded `atlas_real` harness；真实 protobuf/JSON、TLS/auth/method path 仍待 scratch。 |
+| Nacos naming | **SDK DEFAULT / NO PRODUCTION RAW HTTP / REAL EVIDENCE PARTIAL** | SDK client/Admin capability code and scratch evidence remain partial; cluster Admin NONE health-check is typed fail-closed. Deployment HA/multi-node/TLS/auth/namespace/leaderless checks are out of scope. |
+| Atlas wire | **DEFERRED (non-blocking)** | Real wire is a future entry gate; current release does not require production Atlas protocol evidence. |
 | Observe | **HARNESS FIXED / 2H NOT RUN** | zap `ts` 解析和 ledger-before-apply/delete 已修复；完整自包含 2h OBS 仍待执行。 |
 | DDD / notice | **CODE IMPLEMENTED / REAL DELIVERY PENDING** | active provider/elector/conversion/metrics graph uses injected ports; legacy constructors/bridge remain for compatibility; aggregate is build-gated; appcenter HTTP adapter is fail-closed until deployment contract is supplied. |
 | Consul scale | **ACCEPTED NON-GOAL** | 当前无机器部署场景；重新启用 ECS/机器部署时再开同等规模门禁。 |
@@ -98,11 +98,11 @@ amd64，QEMU 下 Java 持续高 CPU 超过 5 分钟仍无 readiness 响应。容
 | Burst delete race | **IMPLEMENTED / TESTED; REAL OBS PENDING** | keyed per-identity gate、trusted full revalidation、scoped tombstone 和 typed full retry 已提交；真实长时 burst/生产延迟仍需重跑观察 | 部分过时：原始 burst 结果保留为历史证据，当前实现状态见增量章节 |
 | Observe `logSlice` + ledger/apply 竞态 | **HARNESS FIXED; 2H PENDING** | zap JSON `ts`/行首时间解析和 apply/delete 前 ledger clock 已修复并有 deterministic tests；完整自包含 2h 观察尚未执行 | 是：旧缺口已修复，长时证据仍缺 |
 | Consul 同等规模观察 | **ACCEPTED NON-GOAL** | 2h/1000 观察只启动 `--providers k8s`；当前没有机器部署场景，按本次范围暂不展开 | 否；范围边界已明确 |
-| Nacos HTTP/SDK Sink | **SDK DEFAULT / PRODUCTION SDK-ONLY / REAL PARTIAL** | naming lifecycle/query/subscribe/service-list、catalog/prune 和 readiness read/write 走官方 SDK；cluster Admin 无 SDK 等价接口，SDK mode 在业务 register 前 fail-closed/显式报错且不产生远端写入；HTTP 仅集中 compatibility adapter，product 环境拒绝；真实 Nacos 2.x/auth/TLS/HA 证据仍缺 | 是：此前“catalog/readiness HTTP exception”描述已被当前实现取代 |
-| Nacos 官方 SDK gRPC 能力 | **SUPPORTED BY SDK AND WIRED** | 当前 pseudo-pin `0024865` naming facade 已接入；persistent register/deregister 按 SDK 设计走 HTTP，ephemeral/batch 走 gRPC；ARM64 scratch lifecycle/reconnect 已有 `-race` 证据，目标 HA/TLS/auth 仍待执行 | 是 |
-| Nacos SDK 统一接入约束 | **CODE PASS / RELEASE NOT VERIFIED (P1)** | `TransportSDK` 默认、SDK mode 不分配 raw HTTP、catalog/prune/readiness 通过 SDK facade、cluster Admin typed unsupported、product 拒绝 `http-compat`；静态 raw-HTTP allowlist/negative tests 已补齐；真实 query/list/subscribe/batch/reconnect/auth/TLS 证据仍缺 | 是：代码门禁已落地，发布证据未闭环 |
-| Atlas 真实 protobuf wire | **NOT VERIFIED / P1** | 本仓库模型是普通 Go struct；生产 `Dial` 强制 JSON codec，只有本地 discoverymock/e2e 证明 JSON 链路；未证明真实 Atlas 接受该 codec | 否；限制说明准确 |
-| Notice / appcenter 告警 | **CODE PARTIAL / REAL DELIVERY PENDING** | active graph 已使用注入式 `Notifier`，新增 HTTP adapter、重试、失败计数、redaction 和 fail-closed；真实 appcenter endpoint/payload/auth/SLA 尚未验证 | 是 |
+| Nacos HTTP/SDK Sink | **SDK DEFAULT / PRODUCTION SDK-ONLY / REAL PARTIAL** | SDK client query/list/subscribe/batch/reconnect and Admin capability evidence remains partial; cluster Admin lacks an SDK equivalent and fails closed. Deployment HA/multi-node/TLS/auth/namespace/leaderless checks are out of scope. | 是 |
+| Nacos 官方 SDK gRPC 能力 | **SUPPORTED BY SDK AND WIRED** | 当前 pseudo-pin `0024865` naming facade 已接入；persistent register/deregister 按 SDK 设计走 HTTP，ephemeral/batch 走 gRPC；SDK client/Admin code/scratch evidence remains partial. Deployment HA/multi-node/TLS/auth/namespace/leaderless checks are out of scope. | 是 |
+| Nacos SDK 统一接入约束 | **CODE PASS / RELEASE NOT VERIFIED (P1)** | SDK query/list/subscribe/batch/reconnect/Admin evidence is partial; deployment HA/multi-node/TLS/auth/namespace/leaderless checks are out of scope. | 是 |
+| Atlas 真实 protobuf wire | **DEFERRED / NON-BLOCKING** | Historical limitation retained; real wire remains a future entry gate if Atlas is re-enabled. | No current release blocker |
+| Notice / appcenter 告警 | **OPTIONAL / OUT OF SCOPE** | AppCenter endpoint/payload/auth/SLA are deployment-owned and not wired in this release; notifier adapter remains optional. | No current release blocker |
 | DDD 目标架构 | **CODE PARTIAL / SHIM RETIREMENT PENDING** | active provider/elector/conversion/metrics graph 已使用显式依赖；legacy constructors/bridge 保留兼容，aggregate 已由 `legacyaggregate` build tag 隔离 | 是 |
 | `go vet ./...` | **PASS** | `eb6bf0c` 修复 cache printf 和 K8s unkeyed literal；当前命令退出 0 | 是 |
 
