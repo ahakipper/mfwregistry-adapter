@@ -230,19 +230,29 @@ func TestNacosRealAutoReconnect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create SDK client: %v", err)
 	}
-	defer client.Close()
+	writeAttempted := true
 	service := "__spotter_reconnect_" + time.Now().UTC().Format("20060102T150405.000000000")
 	params := nacos.InstanceParams{ServiceName: service, IP: "127.0.0.1", Port: 1, ClusterName: "spotter-reconnect", GroupName: cfg.client.GroupName, NamespaceID: cfg.client.NamespaceID, Enabled: true, Ephemeral: false}
-	registered := false
 	defer func() {
-		if registered {
-			_ = client.DeregisterInstance(params)
+		attempted := writeAttempted
+		status := "not_needed"
+		var cleanupErr error
+		if attempted {
+			status = "passed"
+			if err := client.DeregisterInstance(params); err != nil {
+				status = "failed"
+				cleanupErr = err
+				t.Errorf("cleanup: %v", err)
+			}
+		}
+		t.Logf("NACOS_RECONNECT cleanup_attempted=%t status=%s residual_unknown=%t error=%v", attempted, status, cleanupErr != nil, cleanupErr)
+		if err := client.Close(); err != nil {
+			t.Errorf("close: %v", err)
 		}
 	}()
 	if err := client.RegisterInstance(params); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	registered = true
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout)
 	defer cancel()
 	if err := runNacosRestartCommand(ctx, os.Getenv("NACOS_REAL_CONTAINER")); err != nil {
@@ -250,6 +260,10 @@ func TestNacosRealAutoReconnect(t *testing.T) {
 	}
 	if err := warmNacosSDK(ctx, client); err != nil {
 		t.Fatalf("automatic reconnect visibility failed: %v", err)
+	}
+	params.Enabled = false
+	if err := client.RegisterInstance(params); err != nil {
+		t.Fatalf("post-restart write: %v", err)
 	}
 	hosts, err := client.ListInstances(service)
 	if err != nil || len(hosts) == 0 {
