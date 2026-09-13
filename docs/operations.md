@@ -158,3 +158,6 @@ and three "Instance data inconsistency" variants emitted during full pushes.
 - [architecture.md](architecture.md) — architecture design.
 - [data-model.md](data-model.md) — the `Instance` model and state machines.
 - [../README.md](../README.md) — project README.
+### Nacos production startup gate
+
+SDK routing and offline tests are PASS, but production startup remains BLOCKED: `NewSinkWithConfig` rejects SDK construction before readiness probes because the pinned official SDK lacks cluster-admin health-check control. No Nacos read or canary write is attempted. Production can resume only after an official Admin/Maintainer SDK or approved versioned adapter is verified; `http-compat` is test/rollback only.
