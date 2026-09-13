@@ -323,7 +323,7 @@ func loadRootCAs(path string) (*x509.CertPool, error) {
 // tests/tools; production startup must use CheckReadinessWithConfig, whose
 // default SDK path performs naming service-list and persistent canary calls
 // through the official SDK.
-func CheckReadiness(addr string, timeout time.Duration) error {
+func CheckReadinessHTTPCompat(addr string, timeout time.Duration) error {
 	if addr != "" && !strings.Contains(addr, "://") {
 		addr = "http://" + addr
 	}
@@ -337,6 +337,12 @@ func CheckReadiness(addr string, timeout time.Duration) error {
 		return fmt.Errorf("nacos: readiness check %s answered status %d", addr, response.StatusCode)
 	}
 	return nil
+}
+
+// CheckReadiness is the SDK-default readiness gate. It performs naming read
+// and persistent canary write checks through the official SDK facade.
+func CheckReadiness(addr string, timeout time.Duration) error {
+	return CheckReadinessWithConfig(ClientConfig{ServerURL: addr, Timeout: timeout, TransportMode: TransportSDK}, nil)
 }
 
 // CheckReadinessWithConfig performs the read/write readiness gate with the

@@ -1125,10 +1125,10 @@ func TestBlackboxSinkReadinessGate(t *testing.T) {
 	server := nacosmock.Start()
 	defer server.Close()
 
-	if err := nacos.CheckReadiness(server.URL(), nacos.RequestTimeout); err != nil {
+	if err := nacos.CheckReadinessHTTPCompat(server.URL(), nacos.RequestTimeout); err != nil {
 		t.Fatalf("CheckReadiness(healthy) error = %v, want nil", err)
 	}
-	if err := nacos.CheckReadiness("http://127.0.0.1:1", 100*time.Millisecond); err == nil {
+	if err := nacos.CheckReadinessHTTPCompat("http://127.0.0.1:1", 100*time.Millisecond); err == nil {
 		t.Fatal("CheckReadiness(unreachable) error = nil, want an error")
 	}
 }
