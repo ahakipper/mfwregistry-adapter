@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -29,6 +30,28 @@ import (
 // adapterRunner is the small command seam used by tests to exercise startup
 // composition without entering the long-running server loop.
 type adapterRunner interface{ Run() }
+
+// adapterServerStartError marks failures while constructing the running
+// server (for example, an unavailable etcd endpoint). The legacy command
+// printed these errors and returned successfully; preserving that distinction
+// keeps the offline smoke contract while configuration failures remain fatal.
+type adapterServerStartError struct {
+	err error
+}
+
+func (e *adapterServerStartError) Error() string { return e.err.Error() }
+func (e *adapterServerStartError) Unwrap() error { return e.err }
+
+func adapterExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var startErr *adapterServerStartError
+	if errors.As(err, &startErr) {
+		return 0
+	}
+	return 1
+}
 
 var (
 	loadAdapterConfig   = infraconfig.Load
@@ -52,7 +75,10 @@ converts the observed pods/endpoints into instance data, and pushes the
 		fmt.Println("starting adapter")
 		if err := executeAdapter(cmd); err != nil {
 			fmt.Println(err.Error())
-			os.Exit(1)
+			if code := adapterExitCode(err); code != 0 {
+				os.Exit(code)
+			}
+			return
 		}
 
 		// notify signal
@@ -88,7 +114,7 @@ func executeAdapter(cmd *cobra.Command) error {
 	}
 	server, err := newAdapterServer(rt)
 	if err != nil {
-		return err
+		return &adapterServerStartError{err: err}
 	}
 	server.Run()
 	return nil

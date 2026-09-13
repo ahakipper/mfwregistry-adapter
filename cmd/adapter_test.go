@@ -27,6 +27,41 @@ type adapterRunnerFake struct{}
 
 func (adapterRunnerFake) Run() {}
 
+func TestAdapterExitCodeClassifiesStartupErrors(t *testing.T) {
+	serverErr := &adapterServerStartError{err: errors.New("connect to etcd server failed")}
+	if got := adapterExitCode(serverErr); got != 0 {
+		t.Fatalf("adapterExitCode(server start error) = %d, want 0", got)
+	}
+	if got := adapterExitCode(errors.New("invalid env param")); got != 1 {
+		t.Fatalf("adapterExitCode(configuration error) = %d, want 1", got)
+	}
+	if got := adapterExitCode(nil); got != 0 {
+		t.Fatalf("adapterExitCode(nil) = %d, want 0", got)
+	}
+}
+
+func TestExecuteAdapterWrapsServerStartErrorsWithoutStringClassification(t *testing.T) {
+	oldLoad, oldBuild, oldNew := loadAdapterConfig, buildAdapterRuntime, newAdapterServer
+	t.Cleanup(func() { loadAdapterConfig, buildAdapterRuntime, newAdapterServer = oldLoad, oldBuild, oldNew })
+
+	want := errors.New("connect to etcd server failed")
+	cfg := infraconfig.Config{Env: "test", Providers: []string{"k8s"}}
+	loadAdapterConfig = func(string, infraconfig.Flags) (infraconfig.Config, error) { return cfg, nil }
+	buildAdapterRuntime = func(infraconfig.Config, composition.Deps) (*composition.Runtime, error) {
+		return &composition.Runtime{Config: cfg, Logger: &fakes.FakeLogger{}, Notifier: &fakes.FakeNotifier{}, Metrics: &fakes.FakeMetricsRecorder{}}, nil
+	}
+	newAdapterServer = func(*composition.Runtime) (adapterRunner, error) { return nil, want }
+
+	err := executeAdapter(newAdapterCommand())
+	var got *adapterServerStartError
+	if !errors.As(err, &got) {
+		t.Fatalf("executeAdapter() error = %T %v, want adapterServerStartError", err, err)
+	}
+	if !errors.Is(err, want) {
+		t.Fatalf("executeAdapter() error = %v, want wrapped %v", err, want)
+	}
+}
+
 // applyLegacyGlobals is retained as a test-only helper for compatibility
 // contract tests. Normal command startup must never call this bridge.
 func applyLegacyGlobals(cfg infraconfig.Config) {
