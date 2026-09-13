@@ -65,6 +65,7 @@ type fakeSDKNaming struct {
 	selected     vo.SelectAllInstancesParam
 	services     vo.GetAllServiceInfoParam
 	instances    []model.Instance
+	selectErr    error
 	err          error
 	serviceErr   error
 	healthyState *bool
@@ -92,6 +93,9 @@ func (f *fakeSDKNaming) DeregisterInstance(p vo.DeregisterInstanceParam) (bool, 
 func (f *fakeSDKNaming) UpdateInstance(vo.UpdateInstanceParam) (bool, error) { return true, nil }
 func (f *fakeSDKNaming) SelectAllInstances(p vo.SelectAllInstancesParam) ([]model.Instance, error) {
 	f.selected = p
+	if f.selectErr != nil {
+		return nil, f.selectErr
+	}
 	return f.instances, nil
 }
 func (f *fakeSDKNaming) GetAllServicesInfo(p vo.GetAllServiceInfoParam) (model.ServiceList, error) {
@@ -131,6 +135,15 @@ func TestSDKFacadeRoutesPersistentLifecycleAndPreservesFields(t *testing.T) {
 	}
 	if len(fake.deregistered) != 1 || fake.deregistered[0].Ephemeral || fake.deregistered[0].Cluster != "k8s" {
 		t.Fatalf("deregister mapping = %+v", fake.deregistered)
+	}
+}
+
+func TestSDKFacadeSelectAllErrorNeverReturnsCachedInstances(t *testing.T) {
+	fake := &fakeSDKNaming{instances: []model.Instance{{InstanceId: "stale"}}, selectErr: errors.New("subscribe failed")}
+	f := &sdkNamingFacade{client: fake, group: DefaultGroup}
+	got, err := f.list("svc", "k8s")
+	if err == nil || got != nil {
+		t.Fatalf("list() = %#v, %v; want nil data and explicit error", got, err)
 	}
 }
 
