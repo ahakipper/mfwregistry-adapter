@@ -277,6 +277,15 @@ func (f *sdkNamingFacade) batchRegister(param vo.BatchRegisterInstanceParam) err
 	return nil
 }
 
+// BatchRegisterEphemeral exposes the official SDK batch contract explicitly;
+// persistent batch registration is rejected by the upstream SDK.
+func (c *Client) BatchRegisterEphemeral(param vo.BatchRegisterInstanceParam) error {
+	if c == nil || c.sdk == nil {
+		return ErrUnsupportedOperation
+	}
+	return c.sdk.batchRegister(param)
+}
+
 func (f *sdkNamingFacade) list(service string, cluster string) ([]Host, error) {
 	param := vo.SelectAllInstancesParam{ServiceName: service, GroupName: f.group}
 	if cluster != "" {
