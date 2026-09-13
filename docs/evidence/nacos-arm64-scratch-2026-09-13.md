@@ -106,6 +106,10 @@ warms its bounded service-list session, and creates a fresh one afterwards;
 automatic reconnect is explicitly `NOT VERIFIED/RACE_BLOCKED`, never masked or
 suppressed. This vendor blocker prevents any production SDK lifecycle PASS.
 
+The guarded `TestNacosRealAutoReconnect` now provides a real single-client
+verification path when an approved scratch target is supplied; it is not run
+in clean CI and remains `NOT VERIFIED` until such a run completes.
+
 Commands and outcomes:
 
 ```bash
