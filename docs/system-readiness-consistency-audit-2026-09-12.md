@@ -7,6 +7,11 @@
 
 > **当前状态增补（2026-09-13，权威提交 `7231049`）：** 生产 Nacos 默认仍为 SDK-only，但因官方 Nacos Go SDK v2.3.5 没有 cluster-admin health-check update，启动在 readiness/canary 前 **BLOCKED / NOT VERIFIED**；`http-compat` 仅测试/回滚。Nacos real/sdk-eval harness 已加入 TLS/CA/server-name/auth guards、redacted evidence 和 write-attempt cleanup，但没有真实目标，不能宣称协议 PASS。Atlas 仍是普通 Go struct + JSON codec 的 discoverymock stand-in，真实 protobuf/TLS/auth/method compatibility **NOT VERIFIED**。Observe harness 的命令、健康检查和 teardown 已 context-bounded，clean host 缺外部依赖会显式 `NOT VERIFIED: EnvError/InfraError` skip；完整 2h OBS 未运行。Nacos GetAll 只返回 `spotterOwner` 自有条目；Cache Delete/GetAll 已修复 nil、深拷贝、空 provider 和 legacy 唯一匹配。Notifier 有 owned context/Close/retry/fail-closed 生命周期，但真实 AppCenter endpoint/payload/auth/SLA 未提供。DDD active graph 使用显式 ports，legacy bridge 集中于 `internal/infra/legacycompat`；Consul 同规模观察按当前无机器部署列为 accepted non-goal。`go vet ./...`、相关 race/unit/tagged gates 已通过；真实 Nacos/Atlas/OBS-full 证据仍保持 NOT VERIFIED。
 
+> Nacos exported `NewClient`/`NewSink` now default to SDK; raw HTTP is
+> available only through explicitly named compatibility constructors, and SDK
+> startup remains fail-closed before readiness when cluster-admin capability is
+> absent.
+
 本文是对当前工程的一次总盘点，作为后续全面优化的主要参考。它把已有设计文档、当前代码、测试结果和已提交的观察产物放在同一份证据链中；结论优先以当前工作树和实际命令输出为准，不以旧文档中的历史基线为准。
 
 ## 1. 审计范围与方法

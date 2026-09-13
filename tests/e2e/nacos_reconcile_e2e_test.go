@@ -81,9 +81,9 @@ func TestE2ENacosReconcileSourceBootHeal(t *testing.T) {
 	// it went down, plus one console edit).
 	nacosServer := nacosmock.Start()
 	defer nacosServer.Close()
-	nacosSink, err := nacos.NewSink(nacosServer.URL(), nil)
+	nacosSink, err := nacos.NewHTTPCompatSink(nacosServer.URL(), nil)
 	if err != nil {
-		t.Fatalf("nacos.NewSink() error = %v", err)
+		t.Fatalf("nacos.NewHTTPCompatSink() error = %v", err)
 	}
 
 	// The live pod's steady registration (what spotter itself wrote).

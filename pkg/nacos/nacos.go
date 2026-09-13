@@ -240,8 +240,14 @@ func (s *Sink) PushAllOperation(op ports.RetryOperation) error {
 
 // NewSink creates a Nacos sink bound to addr. A nil logger is defaulted.
 func NewSink(addr string, logger ports.Logger) (*Sink, error) {
-	// Deprecated: retained for legacy tests and the explicit HTTP rollback
-	// adapter. Production wiring uses NewSinkWithConfig with TransportSDK.
+	// The default constructor is SDK-only. The temporary raw HTTP adapter is
+	// available only through the explicitly named compatibility constructor.
+	return NewSinkWithConfig(ClientConfig{ServerURL: addr, TransportMode: TransportSDK}, logger)
+}
+
+// NewHTTPCompatSink is the explicitly named compatibility/rollback
+// constructor. Product composition must not call it.
+func NewHTTPCompatSink(addr string, logger ports.Logger) (*Sink, error) {
 	return NewSinkWithConfig(ClientConfig{ServerURL: addr, TransportMode: TransportHTTPCompat}, logger)
 }
 

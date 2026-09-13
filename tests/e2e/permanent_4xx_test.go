@@ -80,9 +80,9 @@ func TestE2EPermanent4xxDropsFromRetryQueue(t *testing.T) {
 	// --- Nacos leg: the real sink over the loopback nacosmock.
 	nacosServer := nacosmock.Start()
 	defer nacosServer.Close()
-	nacosSink, err := nacos.NewSink(nacosServer.URL(), nil)
+	nacosSink, err := nacos.NewHTTPCompatSink(nacosServer.URL(), nil)
 	if err != nil {
-		t.Fatalf("nacos.NewSink() error = %v", err)
+		t.Fatalf("nacos.NewHTTPCompatSink() error = %v", err)
 	}
 
 	// --- The fan-out and the worker: the same declaration order the server

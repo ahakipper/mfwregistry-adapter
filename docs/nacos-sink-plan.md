@@ -13,6 +13,10 @@
 > operation; no HTTP fallback is permitted in product wiring. Real Nacos tests
 > are guarded and cleanup-safe but have no real target, so mock/race evidence
 > does not promote the production status.
+> Exported `NewClient` and `NewSink` are SDK-default and therefore inherit
+> that fail-closed capability gate. Raw HTTP tests/rollback callers must use
+> the explicitly named `NewHTTPCompatClient` and `NewHTTPCompatSink` helpers;
+> no unnamed constructor may allocate the compatibility client.
 >
 > The remaining F5/soak descriptions in this document describe the historical
 > local implementation stage; they do not constitute a production PASS.

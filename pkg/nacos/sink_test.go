@@ -33,7 +33,7 @@ func newSinkAt(t *testing.T) (*nacos.Sink, *nacosmock.Server) {
 	t.Helper()
 	server := nacosmock.Start()
 	t.Cleanup(server.Close)
-	sink, err := nacos.NewSink(server.URL(), &fakes.FakeLogger{})
+	sink, err := nacos.NewHTTPCompatSink(server.URL(), &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewSink(%s) error = %v", server.URL(), err)
 	}
@@ -210,7 +210,7 @@ func TestBlackboxSinkClusterUpdateFailureDoesNotFailPushAndRetries(t *testing.T)
 		writeStubOK(w)
 	}))
 	defer stub.Close()
-	sink, err := nacos.NewSink(stub.URL, &fakes.FakeLogger{})
+	sink, err := nacos.NewHTTPCompatSink(stub.URL, &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewSink(stub) error = %v", err)
 	}
@@ -756,7 +756,7 @@ func TestBlackboxSinkPushAllPruneToleratesCatalogNotFound(t *testing.T) {
 		writeStubOK(w)
 	}))
 	defer stub.Close()
-	sink, err := nacos.NewSink(stub.URL, &fakes.FakeLogger{})
+	sink, err := nacos.NewHTTPCompatSink(stub.URL, &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewSink(stub) error = %v", err)
 	}
@@ -784,7 +784,7 @@ func TestBlackboxSinkPushAllPruneSurfacesOtherCatalog500s(t *testing.T) {
 		writeStubOK(w)
 	}))
 	defer stub.Close()
-	sink, err := nacos.NewSink(stub.URL, &fakes.FakeLogger{})
+	sink, err := nacos.NewHTTPCompatSink(stub.URL, &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewSink(stub) error = %v", err)
 	}
@@ -815,7 +815,7 @@ func TestBlackboxSinkPushAllPruneSurfacesNotFoundBodyOn400(t *testing.T) {
 		writeStubOK(w)
 	}))
 	defer stub.Close()
-	sink, err := nacos.NewSink(stub.URL, &fakes.FakeLogger{})
+	sink, err := nacos.NewHTTPCompatSink(stub.URL, &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewSink(stub) error = %v", err)
 	}
@@ -1091,7 +1091,7 @@ func TestBlackboxSinkGetAllManyServices(t *testing.T) {
 func TestBlackboxSinkSatisfiesInstanceSink(t *testing.T) {
 	// The compile-time assertion lives in the production file
 	// (nacos.go); this test pins it from the outside too.
-	sink, err := nacos.NewSink("http://127.0.0.1:1", nil)
+	sink, err := nacos.NewHTTPCompatSink("http://127.0.0.1:1", nil)
 	if err != nil {
 		t.Fatalf("NewSink() error = %v", err)
 	}
@@ -1099,14 +1099,14 @@ func TestBlackboxSinkSatisfiesInstanceSink(t *testing.T) {
 }
 
 func TestBlackboxSinkNewSinkValidation(t *testing.T) {
-	if _, err := nacos.NewSink("", &fakes.FakeLogger{}); err == nil {
+	if _, err := nacos.NewHTTPCompatSink("", &fakes.FakeLogger{}); err == nil {
 		t.Fatal("NewSink(\"\") error = nil, want an error")
 	}
-	if _, err := nacos.NewSink("://bad", &fakes.FakeLogger{}); err == nil {
+	if _, err := nacos.NewHTTPCompatSink("://bad", &fakes.FakeLogger{}); err == nil {
 		t.Fatal("NewSink(bad) error = nil, want an error")
 	}
 	// A nil logger defaults instead of failing.
-	if _, err := nacos.NewSink("http://127.0.0.1:1", nil); err != nil {
+	if _, err := nacos.NewHTTPCompatSink("http://127.0.0.1:1", nil); err != nil {
 		t.Fatalf("NewSink(nil logger) error = %v, want nil", err)
 	}
 }
@@ -1709,7 +1709,7 @@ func TestBlackboxSinkGetAllCatalogNotFoundToleratedPerService(t *testing.T) {
 		}
 	}))
 	defer stub.Close()
-	sink, err := nacos.NewSink(stub.URL, &fakes.FakeLogger{})
+	sink, err := nacos.NewHTTPCompatSink(stub.URL, &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewSink(stub) error = %v", err)
 	}
@@ -1744,7 +1744,7 @@ func TestBlackboxSinkGetAllSurfacesOtherCatalogErrors(t *testing.T) {
 		}
 	}))
 	defer stub.Close()
-	sink, err := nacos.NewSink(stub.URL, &fakes.FakeLogger{})
+	sink, err := nacos.NewHTTPCompatSink(stub.URL, &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewSink(stub) error = %v", err)
 	}
@@ -1769,7 +1769,7 @@ func TestBlackboxSinkGetAllSurfacesOtherCatalogErrors(t *testing.T) {
 		}
 	}))
 	defer stub2.Close()
-	sink2, err := nacos.NewSink(stub2.URL, &fakes.FakeLogger{})
+	sink2, err := nacos.NewHTTPCompatSink(stub2.URL, &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewSink(stub2) error = %v", err)
 	}

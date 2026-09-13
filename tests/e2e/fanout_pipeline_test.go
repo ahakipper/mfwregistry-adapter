@@ -93,9 +93,9 @@ func TestE2EConsulFanoutPipelineRealTick(t *testing.T) {
 	// --- Nacos side: the F5 sink over the loopback nacosmock.
 	nacosServer := nacosmock.Start()
 	defer nacosServer.Close()
-	nacosSink, err := nacos.NewSink(nacosServer.URL(), nil)
+	nacosSink, err := nacos.NewHTTPCompatSink(nacosServer.URL(), nil)
 	if err != nil {
-		t.Fatalf("nacos.NewSink() error = %v", err)
+		t.Fatalf("nacos.NewHTTPCompatSink() error = %v", err)
 	}
 
 	// --- The fan-out: Atlas first (the primary), Nacos second — the same
