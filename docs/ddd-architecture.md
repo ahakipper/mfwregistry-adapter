@@ -12,7 +12,8 @@
 > older callers; `pkg/providers/aggregate` is isolated behind the
 > `legacyaggregate` build tag. Notifications have a real transport seam and
 > fail-closed behavior, but appcenter endpoint/auth/SLA evidence is still
-> required before removing the shims. See remediation plan §13.
+> required for any future AppCenter integration; legacy shim retirement is a
+> separate migration decision. See remediation plan §13.
 
 > **Current-status addendum (code baseline `356aa75`):** The active graph
 > has explicit ports and no direct legacy imports; `legacycompat` is the sole

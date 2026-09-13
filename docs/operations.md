@@ -36,8 +36,10 @@ The server obtains it through a per-start factory, so leadership restarts never
 reuse a closed admin; absent or failed factories remain a startup block.
 The ARM64 local Nacos SDK lifecycle result is recorded in
 [`docs/evidence/nacos-arm64-scratch-2026-09-13.md`](evidence/nacos-arm64-scratch-2026-09-13.md).
-It is not a production readiness approval; Admin/Maintainer capability,
-TLS/auth, HA/restart, and non-public namespace evidence remain outstanding.
+It is not a production readiness approval; the missing Admin/Maintainer
+cluster-health capability is the current Nacos integration blocker. Deployment
+TLS/auth, HA/restart and non-public namespace evidence are outside this
+Spotter release scope.
 The scratch artifact includes guarded username/password and token runs plus
 the `tenant-a`/`blue` scope; those results do not replace production TLS/auth
 or HA evidence.

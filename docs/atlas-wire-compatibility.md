@@ -14,6 +14,9 @@ Status: **DEFERRED (future entry gate; not a current release blocker)**.
 > protobuf, method path, TLS, authentication, and payload compatibility stay
 > **NOT VERIFIED**.
 
+> Deferred does not mean Atlas is production-ready; if Atlas is re-enabled,
+> this real wire gate becomes a release blocker again.
+
 The repository still ships a self-contained mirror of the private
 `beehive-proto api/service/v2` surface.  `pkg/beehive/service/v2/v2.go` defines
 ordinary Go structs and aliases them to the domain model; it does not contain
