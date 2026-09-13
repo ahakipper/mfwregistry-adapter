@@ -341,7 +341,12 @@ func TestNacosRealAutoReconnect(t *testing.T) {
 	if err := client.RegisterInstance(params); err != nil {
 		t.Fatalf("post-restart write: %v", err)
 	}
-	hosts, err := client.ListInstances(service)
+	verifier, err := nacos.NewClientWithConfig(cfg.client, nil)
+	if err != nil {
+		t.Fatalf("create fresh verifier: %v", err)
+	}
+	defer verifier.Close()
+	hosts, err := verifier.ListInstances(service)
 	if err != nil || len(hosts) == 0 || hosts[0].Enabled {
 		t.Fatalf("reconnected canary missing: hosts=%d err=%v", len(hosts), err)
 	}
