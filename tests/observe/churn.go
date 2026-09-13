@@ -5,6 +5,7 @@ package observe
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,6 +15,8 @@ import (
 	"sync"
 	"time"
 )
+
+const observeCommandTimeout = 30 * time.Second
 
 // The churn vehicle (dsca-4 §4.2, the driver contract with dsca-1's kwok
 // design): bare Pods applied to the kwok cluster in batched List
@@ -64,7 +67,16 @@ func newChurnDriver(kubeconfig string, appCodes []string, prefix string) *churnD
 
 // kubectl runs kubectl with the kwok kubeconfig, feeding stdin.
 func (d *churnDriver) kubectlStdin(stdin string, args ...string) (string, error) {
-	cmd := exec.Command("kubectl", args...) //nolint:gosec // the churn tool, the soak driver's pattern
+	ctx, cancel := context.WithTimeout(context.Background(), observeCommandTimeout)
+	defer cancel()
+	return d.kubectlStdinContext(ctx, stdin, args...)
+}
+
+func (d *churnDriver) kubectlStdinContext(ctx context.Context, stdin string, args ...string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := exec.CommandContext(ctx, "kubectl", args...) //nolint:gosec // the churn tool, the soak driver's pattern
 	cmd.Env = append(os.Environ(), "KUBECONFIG="+d.kubeconfig)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
@@ -73,6 +85,9 @@ func (d *churnDriver) kubectlStdin(stdin string, args ...string) (string, error)
 	cmd.Stdout = &out
 	cmd.Stderr = &errOut
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return out.String(), fmt.Errorf("kubectl %s: %w", strings.Join(args, " "), ctx.Err())
+		}
 		return out.String(), fmt.Errorf("kubectl %s: %w: %s", strings.Join(args, " "), err, errOut.String())
 	}
 	return out.String(), nil
@@ -160,6 +175,12 @@ func podListItem(manifest string) string {
 func (d *churnDriver) applyBatch(count, batchSize int, issuedAt time.Time) ([]string, error) {
 	if count <= 0 {
 		return nil, nil
+	}
+	if batchSize <= 0 {
+		return nil, fmt.Errorf("apply batch size must be positive")
+	}
+	if len(d.appCodes) == 0 {
+		return nil, fmt.Errorf("apply batch requires at least one app code")
 	}
 	// Reserve names + app-codes first, under the lock.
 	type pod struct{ name, appCode string }

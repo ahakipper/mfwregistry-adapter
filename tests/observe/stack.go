@@ -4,7 +4,9 @@
 package observe
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -33,27 +35,40 @@ const nacosImage = "nacos/nacos-server:v2.1.0"
 // data, so the gate is the SERVICE LIST answering, the assert.go
 // nsAPIReady discipline: a 200 with a non-empty count).
 func nacosHealthWait(addr string, bound time.Duration) error {
+	if bound <= 0 {
+		return fmt.Errorf("nacos health wait bound must be positive")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), bound)
+	defer cancel()
+	return nacosHealthWaitContext(ctx, addr)
+}
+
+func nacosHealthWaitContext(ctx context.Context, addr string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	base := "http://" + addr
-	deadline := time.Now().Add(bound)
 	var lastErr error
-	for time.Now().Before(deadline) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
 		// readiness endpoint first (fast fail), then the naming-service gate.
-		if err := httpGetOK(base + "/nacos/v1/console/health/readiness"); err != nil {
+		if err := httpGetOKContext(ctx, base+"/nacos/v1/console/health/readiness"); err != nil {
 			lastErr = err
-			time.Sleep(2 * time.Second)
-			continue
-		}
-		if err := nacosNamingServing(base); err != nil {
+		} else if err := nacosNamingServingContext(ctx, base); err != nil {
 			lastErr = err
 		} else {
 			return nil
 		}
-		time.Sleep(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			if lastErr == nil {
+				lastErr = ctx.Err()
+			}
+			return fmt.Errorf("nacos health wait timed out: %w (last error: %v)", ctx.Err(), lastErr)
+		case <-ticker.C:
+		}
 	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("nacos health wait timed out after %s", bound)
-	}
-	return lastErr
 }
 
 // nacosNamingServing reports whether the v1 naming API serves its persisted
@@ -65,12 +80,29 @@ func nacosHealthWait(addr string, bound time.Duration) error {
 // that had data (the soak's restart scenario). The gate therefore accepts
 // a 200 and distinguishes connection errors.
 func nacosNamingServing(base string) error {
-	return httpGetOK(base + "/nacos/v1/ns/service/list?pageNo=1&pageSize=1&groupName=DEFAULT_GROUP&namespaceId=public")
+	return nacosNamingServingContext(context.Background(), base)
+}
+
+func nacosNamingServingContext(ctx context.Context, base string) error {
+	return httpGetOKContext(ctx, base+"/nacos/v1/ns/service/list?pageNo=1&pageSize=1&groupName=DEFAULT_GROUP&namespaceId=public")
 }
 
 // httpGetOK issues one GET and reports non-2xx / transport errors.
 func httpGetOK(target string) error {
-	response, err := sharedHTTP.Get(target) //nolint:gosec // fixed loopback URL
+	ctx, cancel := context.WithTimeout(context.Background(), observeCommandTimeout)
+	defer cancel()
+	return httpGetOKContext(ctx, target)
+}
+
+func httpGetOKContext(ctx context.Context, target string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return err
+	}
+	response, err := sharedHTTP.Do(req) //nolint:gosec // fixed loopback URL
 	if err != nil {
 		return err
 	}
@@ -140,8 +172,20 @@ func dockerImagePresent(image string) (bool, error) {
 
 // runCommand runs one command, returning trimmed stdout.
 func runCommand(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...) //nolint:gosec // the harness's own docker/kubectl machinery
+	ctx, cancel := context.WithTimeout(context.Background(), observeCommandTimeout)
+	defer cancel()
+	return runCommandContext(ctx, name, args...)
+}
+
+func runCommandContext(ctx context.Context, name string, args ...string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // the harness's own docker/kubectl machinery
 	cmd.Env = os.Environ()
 	out, err := cmd.Output()
+	if err != nil && ctx.Err() != nil {
+		return string(out), fmt.Errorf("%s timed out: %w", name, ctx.Err())
+	}
 	return string(out), err
 }
