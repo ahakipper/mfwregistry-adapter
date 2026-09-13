@@ -564,6 +564,16 @@ func (s *Sink) pushOne(ins *instance.Instance) error {
 // register upserts one instance: the enabled flag follows the status
 // policy — Enabled for online, forced false for unhealthy.
 func (s *Sink) register(ins *instance.Instance) error {
+	// The sink's persistent-instance contract requires Nacos's server-side
+	// health checker to be disabled before any business registration is
+	// accepted. The official naming SDK v2.3.5 exposes no cluster-admin method;
+	// fail closed before issuing RegisterInstance rather than create a remote
+	// record whose health semantics Spotter cannot control. This guard is
+	// intentionally limited to SDK mode; the explicit HTTP compatibility mode
+	// still performs the audited UpdateCluster call below.
+	if s.client != nil && s.client.sdk != nil {
+		return fmt.Errorf("nacos: register %s: %w: cluster-health-check-update (official naming SDK v2.3.5 has no admin cluster API)", ins.InstanceId, ErrUnsupportedOperation)
+	}
 	enabled := ins.Enabled
 	if ins.Status == instance.InstanceStatusUnhealthy {
 		enabled = false
@@ -607,14 +617,15 @@ func (s *Sink) register(ins *instance.Instance) error {
 // configured as they are first pushed, and clusters that existed before this
 // change get configured on the first register after the restart.
 //
-// Failure discipline: a failed cluster-admin operation logs a warning and
-// does NOT fail the register push — the instance registration itself is the
-// data-plane operation, while this configuration is a separate control-plane
-// concern. In SDK mode the pinned naming SDK returns ErrUnsupportedOperation;
-// this path records the explicit release gap and never falls back to raw HTTP.
-// The pair's marker is RELEASED so the next push retries the update when an
-// approved Admin/Maintainer SDK becomes available. The mutex is not held
-// across the control-plane call (a timeout must not block the prune sweep).
+// Failure discipline for the explicit HTTP compatibility mode: a failed
+// cluster-admin operation logs a warning and does NOT fail the register push
+// (the compatibility adapter's historical behavior); the pair's marker is
+// RELEASED so the next push retries. SDK mode never reaches this method:
+// register() fails closed before RegisterInstance because the pinned naming
+// SDK has no cluster-admin API. Thus no production record can be created with
+// an uncontrolled health-check policy and no raw HTTP fallback is hidden.
+// The mutex is not held across the control-plane call (a timeout must not
+// block the prune sweep).
 //
 // Concurrency discipline (dsca-2 DS-2-1 interplay): the marker is
 // CLAIMED check-and-set under the mutex BEFORE the HTTP call, so under the
@@ -639,13 +650,8 @@ func (s *Sink) ensureClusterHealthCheckDisabled(service, cluster string) {
 		return // another worker's PUT for this pair is in flight
 	}
 	if err := s.client.UpdateCluster(service, cluster); err != nil {
-		if errors.Is(err, ErrUnsupportedOperation) {
-			s.logger.Errorf("nacos: SDK-only mode cannot configure server-side health check for %s/%s; no raw HTTP fallback is permitted: %v",
-				service, cluster, err)
-		} else {
-			s.logger.Warnf("nacos: disabling server-side health check for %s/%s failed, will retry on the next push: %v",
-				service, cluster, err)
-		}
+		s.logger.Warnf("nacos: disabling server-side health check for %s/%s failed, will retry on the next push: %v",
+			service, cluster, err)
 		// Release the claim so the next push retries (failure discipline).
 		s.rememberedMu.Lock()
 		delete(s.healthCheckClaims, key)

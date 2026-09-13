@@ -21,7 +21,7 @@ intentionally explicit:
 |---|---|---|
 | persistent register/deregister, SelectAll, service list, subscribe/unsubscribe, readiness read/write canary | official `nacos-sdk-go/v2` naming facade (`--nacos-transport=sdk`) | none; `http-compat` is rollback/test-only |
 | catalog/prune | official SDK `SelectAllInstances` (complete view includes disabled/unhealthy hosts) | catalog HTTP endpoint remains only in explicit `http-compat` fixtures |
-| cluster health-check update | **unsupported in official naming SDK v2.3.5; SDK mode returns `ErrUnsupportedOperation` and logs a release gap** | versioned HTTP compatibility adapter only; never selected by product wiring |
+| cluster health-check update | **unsupported in official naming SDK v2.3.5; SDK mode returns `ErrUnsupportedOperation` before any business register and logs a release gap** | versioned HTTP compatibility adapter only; never selected by product wiring |
 
 The server wiring defaults to `sdk`; an explicit `http-compat` mode is required
 for the nacosmock suites and emergency rollback, and is rejected when

@@ -8,6 +8,9 @@ import (
 
 	"github.com/nacos-group/nacos-sdk-go/v2/model"
 	"github.com/nacos-group/nacos-sdk-go/v2/vo"
+
+	"spotter/internal/domain/instance"
+	"spotter/internal/ports"
 )
 
 type fakeSDKNaming struct {
@@ -213,6 +216,22 @@ func TestSDKUnsupportedClusterAdminFailsClosed(t *testing.T) {
 	err := c.UpdateCluster("svc", "k8s")
 	if !errors.Is(err, ErrUnsupportedOperation) {
 		t.Fatalf("UpdateCluster(sdk) error = %v, want ErrUnsupportedOperation", err)
+	}
+}
+
+func TestSDKSinkRegisterFailsClosedBeforeRemoteWrite(t *testing.T) {
+	fake := &fakeSDKNaming{}
+	sink := &Sink{
+		client: &Client{sdk: &sdkNamingFacade{client: fake, group: DefaultGroup}},
+		logger: ports.NopLogger{},
+	}
+	ins := &instance.Instance{InstanceId: "pod-a", AppCode: "svc", Provider: "k8s", Ip: "10.0.0.1", Status: instance.InstanceStatusOnline, Enabled: true}
+	err := sink.Push(1, []*instance.Instance{ins})
+	if !errors.Is(err, ErrUnsupportedOperation) {
+		t.Fatalf("SDK sink Push() error = %v, want ErrUnsupportedOperation", err)
+	}
+	if len(fake.registered) != 0 {
+		t.Fatalf("SDK sink issued %d remote register calls despite unsupported cluster admin, want 0", len(fake.registered))
 	}
 }
 
