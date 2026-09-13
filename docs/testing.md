@@ -81,6 +81,9 @@ guards. It restarts only that named container through a bounded context,
 reconnects with the official SDK, verifies persistent canary visibility, and
 cleans up before closing the client. Missing guards skip as `NOT VERIFIED`; no
 arbitrary container or production endpoint is touched.
+Because nacos-sdk-go/v2.3.5 has a race in its automatic reconnect path during
+server restart, the gate closes the pre-restart client and uses a fresh
+post-restart client; automatic reconnect remains `NOT VERIFIED/RACE_BLOCKED`.
 
 Companion documents: [architecture.md](architecture.md) (design),
 [data-model.md](data-model.md) (the `Instance` model),
