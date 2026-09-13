@@ -92,11 +92,23 @@ must retain equivalent cleanup status and residual-container verification.
 
 The repository also contains a separate `nacos_restart` gate for persistent
 canary survival across a single-node restart. It is guarded by a strict
-`dsca-*`/`test-*` container name and explicit restart/write flags; it has not
-been run as part of this artifact and therefore remains **NOT VERIFIED**.
-The gate deliberately closes the old SDK client before restart and creates a
-fresh one afterwards: the vendor SDK v2.3.5 automatic reconnect path has a
-known race under restart, so `sdk_auto_reconnect=NOT_VERIFIED/RACE_BLOCKED` is
-recorded rather than being presented as a PASS. Before closing, the gate warms
-the old client's bounded service-list session; this avoids conflating a
-STARTING-session shutdown race with the vendor restart limitation.
+`dsca-*`/`test-*` container name and explicit restart/write flags. Against the
+same ARM64 Nacos image, the non-race run used host mappings
+`48848 → 8848`, `49848 → 9848`, and `49849 → 9849` and **PASS**ed persistent
+restart/new-client visibility; cleanup reported
+`cleanup_attempted=true`, `status=passed`, `residual_unknown=false`, and Docker
+inspection confirmed the container was removed.
+
+The corresponding race-enabled command exposed a real data race in the
+vendor `nacos-sdk-go/v2.3.5` RpcClient reconnect path and therefore **FAILED /
+RACE_BLOCKED**. The gate deliberately closes the old SDK client before restart,
+warms its bounded service-list session, and creates a fresh one afterwards;
+automatic reconnect is explicitly `NOT VERIFIED/RACE_BLOCKED`, never masked or
+suppressed. This vendor blocker prevents any production SDK lifecycle PASS.
+
+Commands and outcomes:
+
+```bash
+go test -vet=off -tags=nacos_restart ./tests/e2e/... -run TestNacosRealRestartPersistence -count=1  # PASS
+go test -race -vet=off -tags=nacos_restart ./tests/e2e/... -run TestNacosRealRestartPersistence -count=1  # FAIL: vendor RpcClient race
+```

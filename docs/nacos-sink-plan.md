@@ -33,6 +33,8 @@
 > it is a real scratch check only and does not unlock production.
 > Auth-enabled lifecycle and the non-public `tenant-a`/`blue` namespace/group
 > replay are also recorded there; credentials are intentionally omitted.
+> The non-race restart/new-client scratch replay passed, while the race run
+> exposed the vendor SDK reconnect race and remains `FAIL / RACE_BLOCKED`.
 >
 > The remaining F5/soak descriptions in this document describe the historical
 > local implementation stage; they do not constitute a production PASS.
