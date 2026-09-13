@@ -4,6 +4,26 @@ Operational reference for building, running, monitoring and troubleshooting
 spotter. See [architecture.md](architecture.md) for design background and
 [data-model.md](data-model.md) for the pushed data model.
 
+## Current release status (2026-09-13, HEAD `7231049`)
+
+- Nacos production startup defaults to the official SDK but is **BLOCKED / NOT
+  VERIFIED** before readiness until an official Admin/Maintainer cluster-health
+  operation is available. `http-compat` is restricted to tests/rollback.
+- Real Nacos and Atlas gates are scratch-only and currently have no target;
+  their skips are not production evidence. Atlas JSON discoverymock is not
+  protobuf compatibility proof.
+- Observe unit/race harness safety is implemented, including bounded external
+  commands and explicit EnvError/InfraError skips; the full 2h/1000+ run is
+  still pending. Consul scale observation is an accepted non-goal until ECS
+  deployment returns.
+- DDD active paths use injected logger/notifier/metrics ports; residual legacy
+  reads are confined to `internal/infra/legacycompat`. AppCenter delivery is
+  fail-closed without a deployment-owned endpoint/payload/auth/SLA contract.
+
+Current code gates: `go vet ./...`, package race tests, observe-tagged unit/race
+tests, and guarded `nacos_real`/`atlas_real` tag tests. A skipped external gate
+must remain `NOT VERIFIED`.
+
 ## Build
 
 ```bash
