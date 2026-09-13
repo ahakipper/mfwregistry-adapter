@@ -402,6 +402,17 @@ func (s *Sink) prune(instances []*instance.Instance) error {
 	// have distinct composite ids, so the DELETEs are order-independent and
 	// idempotent, and first-error-in-remote-order keeps the surfaced error
 	// deterministic.
+	readClient := s.client
+	var session *sdkNamingFacade
+	if s.client.sdk != nil && s.client.sdkFactory != nil {
+		var err error
+		session, err = s.client.sdkFactory(s.client.config)
+		if err != nil {
+			return err
+		}
+		defer session.close()
+		readClient = &Client{config: s.client.config, sdk: session}
+	}
 	var firstErr error
 	type pruneTask struct {
 		key  clusterKey
@@ -409,7 +420,7 @@ func (s *Sink) prune(instances []*instance.Instance) error {
 	}
 	var tasks []pruneTask
 	for key, wanted := range union {
-		hosts, err := s.client.ListCatalogInstances(key.service, key.cluster)
+		hosts, err := readClient.ListCatalogInstances(key.service, key.cluster)
 		if err != nil {
 			// A real Nacos answers HTTP 500 with a "cluster ... is not
 			// found" / "service ... is not found" body when the (service,
