@@ -12,6 +12,8 @@
 
 **范围边界：** K8s 是本阶段规模主路径；Consul 1000+ 规模观察是 accepted non-goal，只有重新启用 ECS/机器部署时才开启独立里程碑。Nacos SDK 统一接入是生产必做项；兼容验证完成前可保留 HTTP 回滚/对照通道，但不能把裸 HTTP 作为最终生产路径。
 
+**最新启动门禁（54768c9）：** `NewSinkWithConfig` 在 SDK 模式下会先检查 cluster-admin health-check 能力；官方 Nacos Go SDK v2.3.5 未提供该操作，因此在 readiness read/write canary 之前 fail-fast，禁止任何 Nacos side effect。生产 Nacos 状态为 `BLOCKED / NOT VERIFIED`，直至官方 Admin/Maintainer SDK 或经批准、版本化的 adapter 完成真实目标版本验证；`http-compat` 仅用于显式测试/回滚。
+
 **执行状态（2026-09-13）：** `b1d9e2f` 已完成 B2 的 HTTP compatibility foundation：多地址 failover（5xx/transport 可切换、4xx 停止）、显式 namespace/group/auth/TLS/timeout、CLI→Config wiring、read+write readiness canary（成功地址固定 register/deregister，清理失败告警）、custom scope PushAll/prune/GetAll 回归测试。`fd1f539` 完成 B3 SDK seam：生产默认 `sdk`，naming lifecycle/query/subscribe 走官方 SDK；其后 `7e9ec06` 将 catalog/prune、service-list、readiness read/write 也统一到 SDK facade，并使 SDK mode 不分配 compatibility HTTP client，product wiring 拒绝 `http-compat`；`771dfd6` 进一步使 cluster-admin health-check unsupported 在业务 register 前 fail-closed、零远端写入。`c8e5613` 完成 B4 fail-closed Atlas gate，`cce983e` 完成 Observe 时间/ledger 修复，`eb6bf0c` 清零 `go vet`，`75a151b/403e0c5` 修复 K8s cache 指针和 stop-state 竞态，`728f1d2` 修复 normal SyncAll metadata、cross-provider tombstone、multi-appcode filter、provider backpressure 和 HasSynced cancellation，`ff10610` 完成 provider overflow/lifecycle 汇合，`42ecb89` 完成 C2 显式依赖注入、aggregate 隔离和通知生命周期/敏感信息收口，`b38505c` 完成 provider lifecycle stop-channel 初始化。真实 Nacos/Atlas 版本验证、完整 2h Observe、appcenter endpoint contract、cluster-admin 官方替代方案和最终发布证据仍未提供，因此发布状态仍为 NOT VERIFIED。
 
 **B3 SDK-only amendment (2026-09-13):** 后续实现已将 `TransportSDK` 设为真正的生产

@@ -972,3 +972,6 @@ phase ends green on `make test-unit test-blackbox test-e2e` (F5 adds
 *End of plan. File:line citations verified against `refactor/all` at HEAD
 `b976356`. F0 environment facts verified by the lead on the local
 colima/docker stack (§8.2).*
+### Current SDK startup status
+
+The production SDK path is intentionally fail-closed. `NewSinkWithConfig` rejects construction before readiness when the official Go SDK cannot perform cluster-admin health-check configuration. This prevents registration side effects with uncontrolled health semantics. The status is `BLOCKED / NOT VERIFIED` until an approved Admin/Maintainer SDK or adapter is verified against the target Nacos version.

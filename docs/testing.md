@@ -459,3 +459,6 @@ Supporting work (not tests, prerequisite): fix
 - **Budget**: measured race-suite time is ~130 s of package time; the
   aggregate `test-all` (unit + blackbox + smoke + e2e) is designed to stay
   under ~3 minutes wall clock on a dev machine.
+### Nacos SDK startup capability gate
+
+The SDK-only code path is covered by unit and race tests. A production SDK sink must fail before readiness or canary side effects while the pinned SDK lacks the required cluster-admin health-check operation; real Nacos/Admin verification is therefore `BLOCKED / NOT VERIFIED`.
