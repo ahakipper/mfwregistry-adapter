@@ -18,8 +18,13 @@ etcd="${OBS_KWOK_ETCD_PORT:-34679}"
 for port in "$api" "$etcd" "${OBS_NACOS_PORT:-28848}" "${OBS_NACOS_GRPC_PORT:-29848}" "${OBS_NACOS_CONTROL_PORT:-29849}" "${OBS_ATLAS_PORT:-19997}" "${OBS_METRICS_PORT:-19998}"; do
   if nc -z 127.0.0.1 "$port" >/dev/null 2>&1; then echo "EnvError: scratch port already in use: $port" >&2; exit 2; fi
 done
-cleanup() { kwokctl delete cluster --name "$cluster" --kubeconfig "$kc" >/dev/null 2>&1 || true; }
-trap cleanup ERR
+umask 077
+printf 'cluster=%s\nkubeconfig=%s\napi=%s\netcd=%s\n' "$cluster" "$kc" "$api" "$etcd" > "$out/observe-state.tmp"
+mv "$out/observe-state.tmp" "$out/observe-state"
+sha256sum "$out/observe-state" > "$out/observe-state.sha256"
+cleanup_enabled=1
+cleanup() { rc=$?; if [ "$cleanup_enabled" -eq 1 ]; then if ! kwokctl delete cluster --name "$cluster" --kubeconfig "$kc" >/dev/null 2>"$out/cleanup-error"; then echo "residual_unknown=true" > "$out/cleanup-status"; else echo "residual_unknown=false" > "$out/cleanup-status"; fi; fi; exit $rc; }
+trap cleanup EXIT
 kwokctl create cluster --name "$cluster" --kubeconfig "$kc" --kube-apiserver-port "$api" --etcd-port "$etcd"
 for i in {1..30}; do [[ -s "$kc" ]] && kubectl --kubeconfig "$kc" get --raw=/readyz >/dev/null 2>&1 && break; sleep 1; done
 [[ -s "$kc" ]] || { echo "InfraError: kwok kubeconfig not created" >&2; exit 3; }
@@ -37,6 +42,6 @@ cpu=$(kubectl --kubeconfig "$kc" get node "$node" -o jsonpath='{.status.allocata
 memory=$(kubectl --kubeconfig "$kc" get node "$node" -o jsonpath='{.status.allocatable.memory}')
 [[ -n "$cpu" && -n "$memory" ]] || { echo "InfraError: node CPU/memory capacity unavailable" >&2; exit 3; }
 kubectl --kubeconfig "$kc" wait --for=condition=Ready "node/$node" --timeout=30s >/dev/null || { echo "InfraError: kwok node not Ready" >&2; exit 3; }
-printf 'cluster=%s\nkubeconfig=%s\napi=%s\netcd=%s\n' "$cluster" "$kc" "$api" "$etcd" > "$out/observe-state"
+echo "state=ready" >> "$out/observe-state"
 sha256sum "$out/observe-state" > "$out/observe-state.sha256"
-trap - ERR
+cleanup_enabled=0
