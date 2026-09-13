@@ -1012,3 +1012,21 @@ colima/docker stack (§8.2).*
 ### Current SDK startup status
 
 The production SDK path is intentionally fail-closed. `NewSinkWithConfig` rejects construction before readiness when the official Go SDK cannot perform cluster-admin health-check configuration. This prevents registration side effects with uncontrolled health semantics. The status is `BLOCKED / NOT VERIFIED` until an approved Admin/Maintainer SDK or adapter is verified against the target Nacos version.
+
+### Protocol batch versus Spotter persistent application batch
+
+The Nacos protocol-level batch endpoint is a single request containing multiple
+instances. The pinned SDK/target exposes that operation only for ephemeral
+instances; the Nacos 2.1.0 scratch probe returned `RequestHandler Not Found`.
+That response remains explicit `NOT VERIFIED/unsupported` evidence and is not a
+claim that Spotter cannot batch its work.
+
+For a full persistent snapshot, Spotter groups by namespace/group/service/
+cluster/operation, partitions each application into batches of at most 100
+items, serializes batches within one application scope, and applies a bounded
+global concurrency across official SDK single-instance persistent
+register/deregister calls. Prune starts only after every batch succeeds; a
+failed batch is retried with its operation scope and sequence metadata intact.
+The guarded real gate is `TestNacosRealPersistentApplicationBatch` and must
+record the final catalog hash plus `residual_unknown=false` before being called
+scratch PASS.

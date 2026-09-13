@@ -546,19 +546,27 @@ The owned lifecycle writes state before creation and uses an EXIT cleanup trap;
 state hashes and residual markers permit safe retry after partial failure.
 When `OBS_KUBECONFIG` is set, `make test-observe` runs only read-only
 `TestObserveUnit` cases and exits before any apply/delete driver operation.
-### Nacos SDK startup capability gate
+### Nacos SDK startup capability gate and persistent application batches
 
-The SDK eval classifies a Nacos 2.1.0 `RequestHandler Not Found` batch response
-as `NOT VERIFIED: batch unsupported by target`; it never promotes that target
-to PASS. Batch support is target-dependent: only the observed 2.1.0 response
-is classified here; newer versions (including 2.1.1+) require independent
-verification, while
-Spotter's persistent sink does not depend on batch registration. Other batch
-errors remain hard failures and cleanup still runs.
+The SDK eval classifies a Nacos 2.1.0 `RequestHandler Not Found` response for
+the *protocol-level ephemeral batch endpoint* as `NOT VERIFIED: batch
+unsupported by target`; it never promotes that target to PASS. This result must
+not be read as evidence that Spotter cannot batch its work. The production sink
+now provides a separate persistent application-batch path: a full snapshot is
+grouped by namespace/group/service/cluster/operation, split into at most 100
+items per application batch, and each persistent item is sent through the
+official SDK with bounded concurrency. Newer protocol versions still require
+independent verification; protocol-level persistent batching remains
+unsupported by the pinned SDK. Other batch errors remain hard failures and
+cleanup still runs.
 
 Latest ARM64 evidence records `TestNacosReal -race` persistent lifecycle PASS;
-the SDK eval batch operation is target-dependent and remains NOT VERIFIED on
-Nacos 2.1.0, while persistent cleanup passes and residual state is false.
+the SDK eval ephemeral protocol batch remains NOT VERIFIED on Nacos 2.1.0,
+while `TestNacosRealPersistentApplicationBatch` is the guarded gate for the
+Spotter persistent application-batch fallback. A successful run records the
+exact 201-item catalog, retry convergence, final catalog hash and
+`residual_unknown=false`; without explicit scratch guards it skips as
+`NOT VERIFIED: EnvError`.
 
 The SDK-only code path is covered by unit and race tests. A production SDK sink must fail before readiness or canary side effects while the pinned SDK lacks the required cluster-admin health-check operation; real Nacos/Admin verification is therefore `BLOCKED / NOT VERIFIED`.
 
