@@ -19,6 +19,10 @@
 > no unnamed constructor may allocate the compatibility client. `CheckReadiness`
 > follows the same SDK-default rule; only `CheckReadinessHTTPCompat` is
 > permitted in HTTP fixture/rollback code.
+> An injected `NacosClusterAdmin` seam now permits an approved official
+> Admin/Maintainer implementation to run the health-check update before any
+> business registration; the default server composition still supplies none,
+> so the fail-closed block remains active until a real adapter is verified.
 >
 > The remaining F5/soak descriptions in this document describe the historical
 > local implementation stage; they do not constitute a production PASS.

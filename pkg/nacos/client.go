@@ -19,6 +19,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"spotter/internal/ports"
@@ -125,6 +126,8 @@ type Client struct {
 	config       ClientConfig
 	clusterAdmin NacosClusterAdmin
 	sdk          *sdkNamingFacade
+	closeOnce    sync.Once
+	closeErr     error
 }
 
 // ClientConfig controls the official SDK transport and the isolated HTTP
@@ -158,8 +161,21 @@ type ClientConfig struct {
 // NacosClusterAdmin is an injected official or approved admin facade.
 type NacosClusterAdmin interface {
 	UpdateHealthChecker(ctx context.Context, namespace, group, service, cluster string) error
-	Close() error
+	Close(ctx context.Context) error
 }
+
+// ClusterAdminError keeps admin failures visible to retry policy. Facades may
+// expose Permanent() (for example a 4xx API rejection); transport/timeouts
+// remain retryable by default.
+type ClusterAdminError struct{ Err error }
+
+func (e *ClusterAdminError) Error() string { return "nacos cluster-admin update: " + e.Err.Error() }
+func (e *ClusterAdminError) Unwrap() error { return e.Err }
+func (e *ClusterAdminError) Permanent() bool {
+	var p interface{ Permanent() bool }
+	return errors.As(e.Err, &p) && p.Permanent()
+}
+func (e *ClusterAdminError) Retryable() bool { return !e.Permanent() }
 
 // Transport tuning constants (dsca-2 DS-2-4, fix design: "construct the
 // Transport explicitly in NewClient ... with <concurrency>/<cap> tied to
@@ -358,7 +374,7 @@ func CheckReadiness(addr string, timeout time.Duration) error {
 // same configured transport and credentials as sink requests. SDK mode (the
 // default) never constructs a raw HTTP request; the compatibility branch is
 // reachable only when TransportHTTPCompat is explicitly selected.
-func CheckReadinessWithConfig(cfg ClientConfig, logger ports.Logger) error {
+func CheckReadinessWithConfig(cfg ClientConfig, logger ports.Logger) (retErr error) {
 	if cfg.TransportMode == "" {
 		cfg.TransportMode = TransportSDK
 	}
@@ -366,9 +382,18 @@ func CheckReadinessWithConfig(cfg ClientConfig, logger ports.Logger) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = c.Close() }()
+	defer func() {
+		if closeErr := c.Close(); closeErr != nil {
+			if retErr != nil {
+				retErr = errors.Join(retErr, closeErr)
+			} else {
+				retErr = closeErr
+			}
+		}
+	}()
 	if cfg.TransportMode == TransportSDK {
-		return checkReadinessSDK(c)
+		retErr = checkReadinessSDK(c)
+		return retErr
 	}
 	// The branch below is deliberately restricted to the explicitly named
 	// compatibility transport.  Production wiring defaults to SDK and never
@@ -406,9 +431,12 @@ func CheckReadinessWithConfig(cfg ClientConfig, logger ports.Logger) error {
 		// Pin both canary operations to the address that passed the read
 		// probe. Retrying registration/cleanup against another server after a
 		// lost response could leave a canary behind on the first server.
-		probeClient := *c
-		probeClient.baseURL = base
-		probeClient.baseURLs = []*url.URL{base}
+		// Do not copy Client: it owns sync.Once lifecycle state. Build a
+		// short-lived pinned view explicitly for this canary probe.
+		probeClient := &Client{
+			baseURL: base, baseURLs: []*url.URL{base}, http: c.http,
+			logger: c.logger, config: c.config, clusterAdmin: c.clusterAdmin,
+		}
 		var pinnedSDK *sdkNamingFacade
 		if c.sdk != nil {
 			// The SDK facade owns its own NacosServer rotation list; changing
@@ -547,14 +575,34 @@ func (c *Client) Unsubscribe(service, group string, clusters []string, callback 
 // Close releases SDK gRPC resources. HTTP compatibility clients remain
 // stateless and require no explicit close.
 func (c *Client) Close() error {
-	var closeErr error
-	if c.clusterAdmin != nil {
-		closeErr = c.clusterAdmin.Close()
+	return c.CloseContext(context.Background())
+}
+
+// CloseContext closes the injected admin facade and SDK naming client under a
+// finite deadline. Close remains a compatibility wrapper with the configured
+// timeout (or RequestTimeout) as its bound.
+func (c *Client) CloseContext(parent context.Context) error {
+	if c == nil {
+		return nil
 	}
-	if c.sdk != nil {
-		c.sdk.client.CloseClient()
+	if parent == nil {
+		parent = context.Background()
 	}
-	return closeErr
+	c.closeOnce.Do(func() {
+		timeout := c.config.Timeout
+		if timeout <= 0 {
+			timeout = RequestTimeout
+		}
+		ctx, cancel := context.WithTimeout(parent, timeout)
+		defer cancel()
+		if c.clusterAdmin != nil {
+			c.closeErr = c.clusterAdmin.Close(ctx)
+		}
+		if c.sdk != nil {
+			c.sdk.client.CloseClient()
+		}
+	})
+	return c.closeErr
 }
 
 // UpdateCluster disables Nacos's server-side health check for one (service,
@@ -590,7 +638,10 @@ func (c *Client) UpdateCluster(serviceName, clusterName string) error {
 				ctx, cancel = context.WithTimeout(context.Background(), RequestTimeout)
 			}
 			defer cancel()
-			return c.clusterAdmin.UpdateHealthChecker(ctx, effectiveNamespace(c.config.NamespaceID), effectiveGroup(c.config.GroupName), serviceName, clusterName)
+			if err := c.clusterAdmin.UpdateHealthChecker(ctx, effectiveNamespace(c.config.NamespaceID), effectiveGroup(c.config.GroupName), serviceName, clusterName); err != nil {
+				return &ClusterAdminError{Err: err}
+			}
+			return nil
 		}
 		return fmt.Errorf("%w: cluster-health-check-update (official naming SDK v2.3.5 has no admin cluster API)", ErrUnsupportedOperation)
 	}

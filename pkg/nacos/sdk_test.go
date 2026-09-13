@@ -1,8 +1,10 @@
 package nacos
 
 import (
+	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,7 +15,50 @@ import (
 	"spotter/internal/ports"
 )
 
+type fakeClusterAdmin struct {
+	mu       sync.Mutex
+	events   *[]string
+	err      error
+	closeErr error
+	started  chan struct{}
+	release  chan struct{}
+	calls    int
+	closes   int
+}
+
+func (a *fakeClusterAdmin) UpdateHealthChecker(ctx context.Context, namespace, group, service, cluster string) error {
+	a.mu.Lock()
+	a.calls++
+	if a.events != nil {
+		*a.events = append(*a.events, "admin:"+service+"/"+cluster)
+	}
+	started, release, err := a.started, a.release, a.err
+	a.mu.Unlock()
+	if started != nil {
+		close(started)
+	}
+	if release != nil {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return err
+}
+
+func (a *fakeClusterAdmin) Close(context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.closes++
+	return a.closeErr
+}
+
+func (a *fakeClusterAdmin) count() int      { a.mu.Lock(); defer a.mu.Unlock(); return a.calls }
+func (a *fakeClusterAdmin) closeCount() int { a.mu.Lock(); defer a.mu.Unlock(); return a.closes }
+
 type fakeSDKNaming struct {
+	mu           sync.Mutex
 	registered   []vo.RegisterInstanceParam
 	batched      []vo.BatchRegisterInstanceParam
 	deregistered []vo.DeregisterInstanceParam
@@ -24,10 +69,16 @@ type fakeSDKNaming struct {
 	serviceErr   error
 	healthyState *bool
 	servicePages map[uint32]model.ServiceList
+	events       *[]string
 }
 
 func (f *fakeSDKNaming) RegisterInstance(p vo.RegisterInstanceParam) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.registered = append(f.registered, p)
+	if f.events != nil {
+		*f.events = append(*f.events, "register:"+p.ServiceName+"/"+p.ClusterName)
+	}
 	return f.err == nil, f.err
 }
 func (f *fakeSDKNaming) BatchRegisterInstance(p vo.BatchRegisterInstanceParam) (bool, error) {
@@ -223,6 +274,94 @@ func TestSDKSinkConstructionFailsFastOnUnsupportedClusterAdmin(t *testing.T) {
 	_, err := NewSinkWithConfig(ClientConfig{ServerURL: "127.0.0.1:8848", TransportMode: TransportSDK}, ports.NopLogger{})
 	if !errors.Is(err, ErrUnsupportedOperation) {
 		t.Fatalf("NewSinkWithConfig(sdk) error = %v, want ErrUnsupportedOperation", err)
+	}
+}
+
+func adminTestSink(admin NacosClusterAdmin, naming *fakeSDKNaming, timeout time.Duration) *Sink {
+	return &Sink{
+		client: &Client{sdk: &sdkNamingFacade{client: naming, group: DefaultGroup}, clusterAdmin: admin, config: ClientConfig{Timeout: timeout}},
+		logger: ports.NopLogger{}, groupName: DefaultGroup,
+	}
+}
+
+func adminTestInstance() *instance.Instance {
+	return &instance.Instance{InstanceId: "pod-a", AppCode: "svc", Provider: "k8s", Ip: "10.0.0.1", Status: instance.InstanceStatusOnline, Enabled: true}
+}
+
+func TestSDKAdminRunsBeforeBusinessRegister(t *testing.T) {
+	events := []string{}
+	naming := &fakeSDKNaming{events: &events}
+	admin := &fakeClusterAdmin{events: &events}
+	sink := adminTestSink(admin, naming, time.Second)
+	if err := sink.register(adminTestInstance()); err != nil {
+		t.Fatalf("register() error = %v", err)
+	}
+	if len(events) != 2 || events[0] != "admin:svc/k8s" || events[1] != "register:svc/k8s" {
+		t.Fatalf("events = %v, want admin before register", events)
+	}
+}
+
+func TestSDKAdminFailurePreventsBusinessRegister(t *testing.T) {
+	naming := &fakeSDKNaming{}
+	admin := &fakeClusterAdmin{err: errors.New("admin unavailable")}
+	sink := adminTestSink(admin, naming, time.Second)
+	err := sink.register(adminTestInstance())
+	if err == nil {
+		t.Fatal("register() error = nil, want admin failure")
+	}
+	if len(naming.registered) != 0 {
+		t.Fatalf("business register calls = %d, want 0", len(naming.registered))
+	}
+	var retryable interface{ Retryable() bool }
+	if !errors.As(err, &retryable) || !retryable.Retryable() {
+		t.Fatalf("register error = %T (%v), want retryable admin error", err, err)
+	}
+}
+
+func TestSDKAdminConcurrentRegistrationsShareOneUpdate(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	admin := &fakeClusterAdmin{started: started, release: release}
+	naming := &fakeSDKNaming{}
+	sink := adminTestSink(admin, naming, time.Second)
+	results := make(chan error, 2)
+	go func() { results <- sink.register(adminTestInstance()) }()
+	<-started
+	go func() { results <- sink.register(adminTestInstance()) }()
+	select {
+	case <-time.After(100 * time.Millisecond):
+		// The second register must wait for the first admin claim.
+	case <-results:
+		t.Fatal("concurrent register completed before admin update release")
+	}
+	close(release)
+	if err := <-results; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-results; err != nil {
+		t.Fatal(err)
+	}
+	if admin.count() != 1 {
+		t.Fatalf("admin calls = %d, want 1", admin.count())
+	}
+}
+
+func TestSDKAdminTimeoutPreventsRegister(t *testing.T) {
+	admin := &fakeClusterAdmin{release: make(chan struct{})}
+	sink := adminTestSink(admin, &fakeSDKNaming{}, 20*time.Millisecond)
+	if err := sink.register(adminTestInstance()); err == nil {
+		t.Fatal("register() error = nil, want timeout")
+	}
+}
+
+func TestClientAdminCloseIsBoundedAndIdempotent(t *testing.T) {
+	admin := &fakeClusterAdmin{closeErr: errors.New("close failed")}
+	client := &Client{clusterAdmin: admin, config: ClientConfig{Timeout: time.Second}}
+	if err := client.Close(); err == nil || !strings.Contains(err.Error(), "close failed") {
+		t.Fatalf("Close() error = %v, want admin close failure", err)
+	}
+	if err := client.Close(); err == nil || admin.closeCount() != 1 {
+		t.Fatalf("second Close() error=%v calls=%d, want idempotent one close", err, admin.closeCount())
 	}
 }
 
