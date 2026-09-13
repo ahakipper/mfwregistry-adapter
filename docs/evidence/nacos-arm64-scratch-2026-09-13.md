@@ -123,5 +123,5 @@ Commands and outcomes:
 
 ```bash
 go test -vet=off -tags=nacos_restart ./tests/e2e/... -run TestNacosRealRestartPersistence -count=1  # PASS
-go test -race -vet=off -tags=nacos_restart ./tests/e2e/... -run TestNacosRealRestartPersistence -count=1  # FAIL: vendor RpcClient race
+go test -race -vet=off -tags=nacos_restart ./tests/e2e/... -run TestNacosRealRestartPersistence -count=1  # historical v2.3.5 (before 0024865): FAIL vendor RpcClient race
 ```
