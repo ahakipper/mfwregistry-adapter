@@ -48,10 +48,10 @@ func TestObserveConsistency(t *testing.T) {
 
 	// --- static prerequisites -------------------------------------------
 	if _, err := os.Stat(cfg.SpotterBin); err != nil {
-		t.Fatalf("spotter binary %s not found (go build -o %s .): %v", cfg.SpotterBin, cfg.SpotterBin, err)
+		t.Skipf("NOT VERIFIED: EnvError spotter binary %s not found (go build -o %s .): %v; cleanup_status=not_started", cfg.SpotterBin, cfg.SpotterBin, err)
 	}
 	if _, err := os.Stat(cfg.Kubeconfig); err != nil {
-		t.Fatalf("kwok kubeconfig %s not found: %v", cfg.Kubeconfig, err)
+		t.Skipf("NOT VERIFIED: EnvError kwok kubeconfig %s not found: %v; cleanup_status=not_started", cfg.Kubeconfig, err)
 	}
 	appCodes := make([]string, cfg.Services)
 	for i := range appCodes {
@@ -59,40 +59,42 @@ func TestObserveConsistency(t *testing.T) {
 	}
 	driver := newChurnDriver(cfg.Kubeconfig, appCodes, observePodPrefix)
 	if _, err := driver.kubectlStdin("", "get", "nodes"); err != nil {
-		t.Fatalf("kubectl cannot reach the kwok cluster with %s: %v", cfg.Kubeconfig, err)
+		t.Skipf("NOT VERIFIED: EnvError kwok/kubectl preflight failed with %s: %v; cleanup_status=not_started", cfg.Kubeconfig, err)
 	}
 
 	// --- harness workdir + record writers -------------------------------
 	if err := os.MkdirAll(cfg.WorkDir, 0o755); err != nil {
-		t.Fatalf("workdir: %v", err)
+		t.Skipf("NOT VERIFIED: InfraError create observe workdir: %v; cleanup_status=not_started", err)
 	}
 	if err := os.MkdirAll(cfg.WorkDir+"/log", 0o755); err != nil {
-		t.Fatalf("workdir log dir: %v", err)
+		t.Skipf("NOT VERIFIED: InfraError create observe log directory: %v; cleanup_status=not_started", err)
 	}
 	stamp := time.Now().Format("20060102-1504")
 	harnessLog, err := newHarnessLog(filepath.Join(cfg.WorkDir, fmt.Sprintf("observe-%s.log", stamp)))
 	if err != nil {
-		t.Fatalf("harness log: %v", err)
+		t.Skipf("NOT VERIFIED: InfraError create harness log: %v; cleanup_status=not_started", err)
 	}
 	defer func() { _ = harnessLog.close() }()
 	records, err := newRecordWriter(filepath.Join(cfg.ResultsDir, fmt.Sprintf("%s-ticks.jsonl", stamp)))
 	if err != nil {
-		t.Fatalf("record writer: %v", err)
+		t.Skipf("NOT VERIFIED: InfraError create observe record writer: %v; cleanup_status=not_started", err)
 	}
 	defer func() { _ = records.close() }()
 
 	// --- the observe stack ------------------------------------------------
 	// The throwaway nacos: owned container, scratch port, health-gated.
 	if err := dockerRunNacos(nacosHostPortAsInt(cfg.NacosAddr)); err != nil {
-		t.Fatalf("throwaway nacos: %v", err)
+		t.Skipf("NOT VERIFIED: EnvError/InfraError throwaway Nacos startup failed: %v; cleanup_status=not_started", err)
 	}
 	t.Cleanup(func() {
 		if err := dockerStopNacos(); err != nil {
-			t.Logf("throwaway nacos teardown: %v", err)
+			t.Errorf("NOT VERIFIED: InfraError throwaway Nacos teardown failed: %v; cleanup_status=failed", err)
+		} else {
+			t.Logf("observe cleanup: nacos status=passed residual_unknown=false")
 		}
 	})
 	if err := nacosHealthWait(cfg.NacosAddr, 10*time.Minute); err != nil {
-		t.Fatalf("throwaway nacos health: %v", err)
+		t.Skipf("NOT VERIFIED: EnvError/InfraError throwaway Nacos health failed: %v; cleanup_status=pending", err)
 	}
 	harnessLog.event("throwaway nacos ready at %s", cfg.NacosAddr)
 
@@ -103,7 +105,7 @@ func TestObserveConsistency(t *testing.T) {
 	// etcd at 12379 is never shared).
 	etcd, err := etcdmock.Start()
 	if err != nil {
-		t.Fatalf("embedded etcd: %v", err)
+		t.Skipf("NOT VERIFIED: InfraError embedded etcd startup failed: %v; cleanup_status=pending", err)
 	}
 	defer etcd.Close()
 	harnessLog.event("embedded etcd ready: %v", etcd.ClientEndpoints())
@@ -112,7 +114,7 @@ func TestObserveConsistency(t *testing.T) {
 	// scratch TCP port — the child fails fast without a reachable Atlas.
 	standin, err := discoverymock.StartTCP(fmt.Sprintf("127.0.0.1:%d", cfg.AtlasPort))
 	if err != nil {
-		t.Fatalf("atlas stand-in: %v", err)
+		t.Skipf("NOT VERIFIED: InfraError Atlas stand-in startup failed: %v; cleanup_status=pending", err)
 	}
 	defer standin.Close()
 	atlasAddr := standin.Addr()
@@ -121,9 +123,13 @@ func TestObserveConsistency(t *testing.T) {
 	// The child.
 	child := newSpotterChild(cfg.SpotterBin, cfg.WorkDir, cfg.Kubeconfig,
 		etcd.ClientEndpoints(), atlasAddr, cfg.NacosAddr, cfg.MetricsPort)
-	defer child.kill()
+	defer func() {
+		if err := child.kill(); err != nil {
+			t.Errorf("NOT VERIFIED: InfraError spotter child teardown failed: %v; cleanup_status=failed", err)
+		}
+	}()
 	if err := child.start(context.Background()); err != nil {
-		t.Fatalf("start spotter: %v", err)
+		t.Fatalf("spotter child start failed after prerequisites passed: %v", err)
 	}
 	if err := child.waitForHealthy(120 * time.Second); err != nil {
 		t.Fatalf("spotter startup: %v", err)
@@ -134,11 +140,11 @@ func TestObserveConsistency(t *testing.T) {
 	// Apply the harness's pods (the existing kwok pods of the same prefix
 	// are torn down first: one clean population, one ledger).
 	if err := driver.deleteAll(); err != nil {
-		t.Fatalf("pre-run pod cleanup: %v", err)
+		t.Skipf("NOT VERIFIED: EnvError/InfraError pre-run kwok cleanup failed: %v; cleanup_status=pending", err)
 	}
 	harnessLog.event("cold attach: applying %d pods", cfg.BaseInstances)
 	if _, err := driver.applyBatch(cfg.BaseInstances, 100, time.Now()); err != nil {
-		t.Fatalf("cold attach apply: %v", err)
+		t.Skipf("NOT VERIFIED: EnvError/InfraError cold-attach kwok apply failed: %v; cleanup_status=pending", err)
 	}
 	harnessLog.event("cold attach applied: %d pods across %d services", cfg.BaseInstances, cfg.Services)
 
@@ -210,9 +216,13 @@ func TestObserveConsistency(t *testing.T) {
 
 	// --- teardown: the harness's pods (the kwok cluster itself stays) -----
 	if err := driver.deleteAll(); err != nil {
-		t.Logf("pod teardown: %v", err)
+		t.Errorf("NOT VERIFIED: InfraError pod teardown failed: %v; cleanup_status=failed", err)
+	} else {
+		t.Logf("observe cleanup: pods status=passed residual_unknown=false")
 	}
-	_ = view.probeRemove()
+	if err := view.probeRemove(); err != nil {
+		t.Errorf("NOT VERIFIED: InfraError Nacos probe teardown failed: %v; cleanup_status=failed", err)
+	}
 }
 
 // nacosHostPortAsInt extracts the host port of a host:port address.
