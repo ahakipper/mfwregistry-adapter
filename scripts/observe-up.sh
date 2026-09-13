@@ -3,6 +3,7 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 out="$root/build/observe"
 mkdir -p "$out"
+[[ ! -e "$out/observe-state" && ! -e "$out/observe-state.sha256" ]] || { echo "EnvError: owned Observe state already exists; run observe-down first" >&2; exit 2; }
 kc="${OBS_KUBECONFIG:-$out/kubeconfig}"
 if [[ -n "${OBS_KUBECONFIG:-}" ]]; then
   [[ -r "$kc" ]] || { echo "EnvError: OBS_KUBECONFIG is not readable: $kc" >&2; exit 2; }
@@ -23,7 +24,7 @@ printf 'cluster=%s\nkubeconfig=%s\napi=%s\netcd=%s\n' "$cluster" "$kc" "$api" "$
 mv "$out/observe-state.tmp" "$out/observe-state"
 sha256sum "$out/observe-state" > "$out/observe-state.sha256"
 cleanup_enabled=1
-cleanup() { rc=$?; if [ "$cleanup_enabled" -eq 1 ]; then if ! kwokctl delete cluster --name "$cluster" --kubeconfig "$kc" >/dev/null 2>"$out/cleanup-error"; then echo "residual_unknown=true" > "$out/cleanup-status"; else echo "residual_unknown=false" > "$out/cleanup-status"; fi; fi; exit $rc; }
+cleanup() { rc=$?; if [ "$cleanup_enabled" -eq 1 ]; then if ! kwokctl delete cluster --name "$cluster" --kubeconfig "$kc" >/dev/null 2>"$out/cleanup-error"; then echo "residual_unknown=true" > "$out/cleanup-status"; else echo "residual_unknown=false" > "$out/cleanup-status"; rm -f "$out/observe-state" "$out/observe-state.sha256"; fi; fi; exit $rc; }
 trap cleanup EXIT
 kwokctl create cluster --name "$cluster" --kubeconfig "$kc" --kube-apiserver-port "$api" --etcd-port "$etcd"
 for i in {1..30}; do [[ -s "$kc" ]] && kubectl --kubeconfig "$kc" get --raw=/readyz >/dev/null 2>&1 && break; sleep 1; done
