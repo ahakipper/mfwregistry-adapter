@@ -38,9 +38,10 @@ TLS/auth, HA/restart, and non-public namespace evidence remain outstanding.
 The scratch artifact includes guarded username/password and token runs plus
 the `tenant-a`/`blue` scope; those results do not replace production TLS/auth
 or HA evidence.
-The `nacos_restart` gate is an additional opt-in check for persistent canary
-survival and is currently `NOT VERIFIED` until run with its strict scratch
-container guards.
+The `nacos_restart` gate passed a non-race persistent/new-client scratch run
+with cleanup evidence, but its race-enabled run exposed a vendor SDK
+reconnect race and is `FAIL / RACE_BLOCKED`; automatic reconnect and production
+SDK lifecycle remain `NOT VERIFIED`.
 
 ## Build
 

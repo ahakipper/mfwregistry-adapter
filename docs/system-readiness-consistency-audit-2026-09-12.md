@@ -18,8 +18,10 @@
 > The artifact also records the guarded auth-enabled `38848/39848/39849` run
 > and the `tenant-a`/`blue` namespace/group run, plus the intentional rejection
 > of plaintext auth without scratch/write guards.
-> The separate `nacos_restart` persistence gate is implemented with strict
-> container-name/restart guards but remains NOT VERIFIED until executed.
+> The separate `nacos_restart` persistence gate passed a non-race
+> persistent/new-client scratch run with cleanup evidence; its race-enabled
+> run exposed a real vendor SDK reconnect race and is **FAIL / RACE_BLOCKED**.
+> Automatic reconnect and production SDK lifecycle remain NOT VERIFIED.
 > An externally injected `NacosClusterAdmin` now runs before business register;
 > same-pair concurrent claims wait on one result, admin failures retain typed
 > retryability, and client/readiness close is bounded, idempotent, and surfaced.
