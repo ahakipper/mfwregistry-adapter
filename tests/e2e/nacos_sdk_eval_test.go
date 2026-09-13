@@ -4,6 +4,7 @@
 package e2e
 
 import (
+	"github.com/nacos-group/nacos-sdk-go/v2/vo"
 	"os"
 	"strings"
 	"testing"
@@ -60,6 +61,14 @@ func TestNacosSDKPersistentLifecycle(t *testing.T) {
 	if err := client.RegisterInstance(params); err != nil {
 		t.Fatalf("SDK persistent register: %v", err)
 	}
+	batchService := service + "_batch"
+	batchParam := vo.BatchRegisterInstanceParam{ServiceName: batchService, GroupName: cfg.client.GroupName, Instances: []vo.RegisterInstanceParam{{Ip: "127.0.0.2", Port: 2, Enable: true, Ephemeral: true}}}
+	if err := client.BatchRegisterEphemeral(batchParam); err != nil {
+		t.Fatalf("SDK ephemeral batch register: %v", err)
+	}
+	defer func() {
+		_ = client.DeregisterInstance(nacos.InstanceParams{ServiceName: batchService, IP: "127.0.0.2", Port: 2, ClusterName: "DEFAULT", GroupName: cfg.client.GroupName, NamespaceID: cfg.client.NamespaceID, Ephemeral: true})
+	}()
 	if _, err := client.ListInstances(service); err != nil {
 		t.Fatalf("SDK SelectAll query: %v", err)
 	}
