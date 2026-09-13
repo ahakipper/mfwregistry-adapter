@@ -541,6 +541,8 @@ contract checks should run with `bash -n scripts/observe-*.sh`; missing
 kwokctl/docker/nc and occupied ports remain explicit EnvError/InfraError.
 The 2h/1000+ real run remains `NOT VERIFIED` when kwokctl or its prerequisites
 are unavailable.
+When `OBS_KUBECONFIG` is set, `make test-observe` runs only read-only
+`TestObserveUnit` cases and exits before any apply/delete driver operation.
 ### Nacos SDK startup capability gate
 
 The SDK-only code path is covered by unit and race tests. A production SDK sink must fail before readiness or canary side effects while the pinned SDK lacks the required cluster-admin health-check operation; real Nacos/Admin verification is therefore `BLOCKED / NOT VERIFIED`.
