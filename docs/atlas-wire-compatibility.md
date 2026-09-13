@@ -16,6 +16,9 @@ Status: **DEFERRED (future entry gate; not a current release blocker)**.
 
 > Deferred does not mean Atlas is production-ready; if Atlas is re-enabled,
 > this real wire gate becomes a release blocker again.
+> The current server still constructs Atlas by default. Deployments retaining
+> that path must provide and verify an Atlas endpoint; removing this runtime
+> dependency requires a separate Atlas-optional wiring code change.
 
 The repository still ships a self-contained mirror of the private
 `beehive-proto api/service/v2` surface.  `pkg/beehive/service/v2/v2.go` defines
