@@ -191,9 +191,19 @@ func (s *Server) SetInstances(hosts []Host, group, service string, cluster strin
 	s.SetInstancesInNamespace(hosts, defaultNamespaceID, group, service, cluster)
 }
 
+// SetInstancesPreservingMetadata seeds raw catalog metadata for ownership and
+// compatibility tests; unlike SetInstances it does not inject spotterOwner.
+func (s *Server) SetInstancesPreservingMetadata(hosts []Host, group, service, cluster string) {
+	s.setInstances(hosts, defaultNamespaceID, group, service, cluster, false)
+}
+
 // SetInstancesInNamespace replaces one scoped service state in a non-public
 // namespace. It is the namespace-aware companion to SetInstances.
 func (s *Server) SetInstancesInNamespace(hosts []Host, namespace, group, service, cluster string) {
+	s.setInstances(hosts, namespace, group, service, cluster, true)
+}
+
+func (s *Server) setInstances(hosts []Host, namespace, group, service, cluster string, injectOwner bool) {
 	if namespace == "" {
 		namespace = defaultNamespaceID
 	}
@@ -207,10 +217,12 @@ func (s *Server) SetInstancesInNamespace(hosts []Host, namespace, group, service
 		if host.Metadata == nil {
 			host.Metadata = map[string]string{}
 		}
-		if _, ok := host.Metadata["spotterOwner"]; !ok {
-			// SetInstances models state previously written by Spotter. Tests
-			// that need foreign/unowned data can set an explicit owner value.
-			host.Metadata["spotterOwner"] = "spotter"
+		if injectOwner {
+			if _, ok := host.Metadata["spotterOwner"]; !ok {
+				// SetInstances models state previously written by Spotter. Tests
+				// that need foreign/unowned data can set an explicit owner value.
+				host.Metadata["spotterOwner"] = "spotter"
+			}
 		}
 		instance := fromHost(group, service, host)
 		instance.NamespaceID = namespace

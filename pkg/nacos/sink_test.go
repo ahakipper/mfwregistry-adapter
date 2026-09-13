@@ -1586,7 +1586,7 @@ func TestBlackboxSinkPruneSkipsForeignOwner(t *testing.T) {
 
 func TestBlackboxSinkGetAllExcludesForeignAndUnowned(t *testing.T) {
 	sink, server := newSinkAt(t)
-	server.SetInstances([]nacosmock.Host{
+	server.SetInstancesPreservingMetadata([]nacosmock.Host{
 		{IP: "10.8.0.1", Port: 8080, Metadata: map[string]string{"instanceId": "owned", "spotterOwner": "spotter", "status": "1", "schemaVersion": "1"}},
 		{IP: "10.8.0.2", Port: 8080, Metadata: map[string]string{"instanceId": "foreign", "spotterOwner": "other-writer", "status": "1"}},
 		{IP: "10.8.0.3", Port: 8080, Metadata: map[string]string{"instanceId": "legacy", "status": "1"}},
