@@ -66,6 +66,8 @@ type HTTPNotifier struct {
 	mu        sync.Mutex
 	closed    bool
 	wg        sync.WaitGroup
+	ctx       context.Context
+	cancel    context.CancelFunc
 	succeeded atomic.Uint64
 	failed    atomic.Uint64
 }
@@ -101,7 +103,8 @@ func NewHTTP(cfg HTTPConfig, logger ports.Logger) (*HTTPNotifier, error) {
 	if logger == nil {
 		logger = ports.NopLogger{}
 	}
-	return &HTTPNotifier{cfg: cfg, client: &http.Client{}, logger: logger}, nil
+	ctx, cancel := context.WithCancel(context.Background())
+	return &HTTPNotifier{cfg: cfg, client: &http.Client{}, logger: logger, ctx: ctx, cancel: cancel}, nil
 }
 
 // Notify submits a notice asynchronously.  Every failure increments the
@@ -140,6 +143,9 @@ func (n *HTTPNotifier) Close() error {
 	}
 	n.mu.Lock()
 	n.closed = true
+	if n.cancel != nil {
+		n.cancel()
+	}
 	n.mu.Unlock()
 	n.wg.Wait()
 	return nil
@@ -163,7 +169,11 @@ func (n *HTTPNotifier) SuccessCount() uint64 {
 func (n *HTTPNotifier) send(message Message) error {
 	var lastErr error
 	for attempt := 0; attempt <= n.cfg.MaxRetries; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), n.cfg.Timeout)
+		parent := n.ctx
+		if parent == nil {
+			parent = context.Background()
+		}
+		ctx, cancel := context.WithTimeout(parent, n.cfg.Timeout)
 		req, err := n.cfg.BuildRequest(ctx, n.cfg.Endpoint, message)
 		if err == nil && req != nil {
 			req = req.WithContext(ctx)
@@ -197,7 +207,12 @@ func (n *HTTPNotifier) send(message Message) error {
 		cancel()
 		if attempt < n.cfg.MaxRetries && n.cfg.RetryBackoff > 0 {
 			timer := time.NewTimer(n.cfg.RetryBackoff)
-			<-timer.C
+			select {
+			case <-timer.C:
+			case <-parent.Done():
+				timer.Stop()
+				return parent.Err()
+			}
 		}
 	}
 	return lastErr
