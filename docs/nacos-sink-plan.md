@@ -25,6 +25,9 @@
 > so the fail-closed block remains active until a real adapter is verified.
 > The seam uses per-pair claim/wait coordination, typed retryable/permanent
 > errors, and context-bounded/idempotent close; readiness joins close failures.
+> Server composition accepts a per-start `ClusterAdminFactory`; each Nacos sink
+> lifecycle receives a fresh admin and closes it with the sink. A nil factory
+> intentionally preserves the SDK fail-closed block.
 >
 > The remaining F5/soak descriptions in this document describe the historical
 > local implementation stage; they do not constitute a production PASS.

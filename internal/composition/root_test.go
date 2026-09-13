@@ -16,7 +16,15 @@ import (
 	infranotice "spotter/internal/infra/notice"
 	"spotter/internal/ports"
 	"spotter/internal/testkit/fakes"
+	"spotter/pkg/nacos"
 )
+
+type compositionAdmin struct{}
+
+func (compositionAdmin) UpdateHealthChecker(context.Context, string, string, string, string) error {
+	return nil
+}
+func (compositionAdmin) Close(context.Context) error { return nil }
 
 // testConfig returns a config whose log settings point at a temp directory,
 // so Build exercises the real logging adapter without touching the working
@@ -214,6 +222,29 @@ func TestBuildSelectsConfiguredHTTPNotifierOrFailClosed(t *testing.T) {
 	}
 	if _, ok := rt.Notifier.(*infranotice.FailClosedNotifier); !ok {
 		t.Fatalf("missing-builder notifier = %T, want *FailClosedNotifier", rt.Notifier)
+	}
+}
+
+func TestBuildCarriesFreshNacosAdminFactory(t *testing.T) {
+	cfg := testConfig(t)
+	calls := 0
+	factory := func() (nacos.NacosClusterAdmin, error) {
+		calls++
+		return compositionAdmin{}, nil
+	}
+	rt, err := Build(cfg, Deps{NacosClusterAdminFactory: factory})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	defer rt.LogCloser.Close()
+	if rt.NacosClusterAdminFactory == nil {
+		t.Fatal("Runtime.NacosClusterAdminFactory = nil")
+	}
+	if _, err := rt.NacosClusterAdminFactory(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("factory calls=%d, want 1", calls)
 	}
 }
 

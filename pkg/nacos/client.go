@@ -144,18 +144,19 @@ type ClientConfig struct {
 	ServerURL string
 	// ServerURLs is an ordered list of Nacos addresses. Transport and 5xx
 	// failures advance to the next address; a 4xx is returned immediately.
-	ServerURLs         []string
-	NamespaceID        string
-	GroupName          string
-	Username           string
-	Password           string
-	AccessToken        string
-	CAFile             string
-	ServerName         string
-	InsecureSkipVerify bool
-	Timeout            time.Duration
-	MaxConnsPerHost    int
-	ClusterAdmin       NacosClusterAdmin
+	ServerURLs          []string
+	NamespaceID         string
+	GroupName           string
+	Username            string
+	Password            string
+	AccessToken         string
+	CAFile              string
+	ServerName          string
+	InsecureSkipVerify  bool
+	Timeout             time.Duration
+	MaxConnsPerHost     int
+	ClusterAdmin        NacosClusterAdmin
+	ClusterAdminFactory func() (NacosClusterAdmin, error)
 }
 
 // NacosClusterAdmin is an injected official or approved admin facade.
@@ -252,6 +253,19 @@ func NewClientWithConfig(cfg ClientConfig, logger ports.Logger) (*Client, error)
 	if len(addresses) == 0 {
 		return nil, errors.New("nacos: address is required")
 	}
+	if cfg.TransportMode == TransportSDK && cfg.ClusterAdmin == nil && cfg.ClusterAdminFactory != nil {
+		admin, factoryErr := cfg.ClusterAdminFactory()
+		if factoryErr != nil {
+			if admin != nil {
+				_ = closeAdminWithTimeout(admin, cfg.Timeout)
+			}
+			return nil, fmt.Errorf("nacos: create cluster-admin facade: %w", factoryErr)
+		}
+		if admin == nil {
+			return nil, errors.New("nacos: cluster-admin factory returned nil admin")
+		}
+		cfg.ClusterAdmin = admin
+	}
 	parsedURLs := make([]*url.URL, 0, len(addresses))
 	for _, address := range addresses {
 		addr := address
@@ -323,6 +337,18 @@ func NewClientWithConfig(cfg ClientConfig, logger ports.Logger) (*Client, error)
 		client.sdk = facade
 	}
 	return client, nil
+}
+
+func closeAdminWithTimeout(admin NacosClusterAdmin, timeout time.Duration) error {
+	if admin == nil {
+		return nil
+	}
+	if timeout <= 0 {
+		timeout = RequestTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return admin.Close(ctx)
 }
 
 func loadRootCAs(path string) (*x509.CertPool, error) {

@@ -29,6 +29,8 @@ are SDK-default; raw HTTP is available only through the explicitly named
 An approved `NacosClusterAdmin` must be injected to unlock SDK startup; its
 health-check update precedes business registration, concurrent first claims are
 coalesced, failures are typed for retry policy, and close is bounded/idempotent.
+The server obtains it through a per-start factory, so leadership restarts never
+reuse a closed admin; absent or failed factories remain a startup block.
 
 ## Build
 

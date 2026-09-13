@@ -14,6 +14,8 @@
 > An externally injected `NacosClusterAdmin` now runs before business register;
 > same-pair concurrent claims wait on one result, admin failures retain typed
 > retryability, and client/readiness close is bounded, idempotent, and surfaced.
+> Server starts obtain a fresh admin via per-start `ClusterAdminFactory`; nil or
+> failed factories stop startup before readiness and never select HTTP fallback.
 
 本文是对当前工程的一次总盘点，作为后续全面优化的主要参考。它把已有设计文档、当前代码、测试结果和已提交的观察产物放在同一份证据链中；结论优先以当前工作树和实际命令输出为准，不以旧文档中的历史基线为准。
 

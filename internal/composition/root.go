@@ -17,6 +17,7 @@ import (
 	inframetrics "spotter/internal/infra/metrics"
 	infranotice "spotter/internal/infra/notice"
 	"spotter/internal/ports"
+	"spotter/pkg/nacos"
 )
 
 // Legacy notice identifiers copied from pkg/notice/notice.go
@@ -47,6 +48,10 @@ type Deps struct {
 	NoticeRequestBuilder infranotice.RequestBuilder
 	// MetricsRecorder overrides the constructed metrics recorder.
 	Metrics ports.MetricsRecorder
+	// NacosClusterAdminFactory creates a fresh admin facade for each Nacos
+	// sink lifecycle. A nil factory intentionally leaves SDK startup
+	// fail-closed until an approved implementation is supplied.
+	NacosClusterAdminFactory func() (nacos.NacosClusterAdmin, error)
 	// Config is the resolved runtime configuration.
 	Config infraconfig.Config
 	// LocalIP resolves the current node IP for leader-loss notices. When
@@ -66,7 +71,8 @@ type Runtime struct {
 	// Notifier sends operational notices.
 	Notifier ports.Notifier
 	// Metrics records synchronization metrics.
-	Metrics ports.MetricsRecorder
+	Metrics                  ports.MetricsRecorder
+	NacosClusterAdminFactory func() (nacos.NacosClusterAdmin, error)
 	// Config is the resolved runtime configuration.
 	Config infraconfig.Config
 	// LocalIP resolves the current node IP (never nil).
@@ -155,6 +161,7 @@ func Build(cfg infraconfig.Config, deps Deps) (*Runtime, error) {
 	if runtime.Metrics == nil {
 		runtime.Metrics = inframetrics.New()
 	}
+	runtime.NacosClusterAdminFactory = deps.NacosClusterAdminFactory
 
 	return runtime, nil
 }
