@@ -125,7 +125,10 @@ func TestNacosRealRestartPersistence(t *testing.T) {
 		if registered {
 			cleanupAttempted = true
 			cleanupStatus = "passed"
-			if cleanupErr := client.DeregisterInstance(params); cleanupErr != nil {
+			if client == nil {
+				cleanupStatus = "failed"
+				t.Errorf("Nacos restart canary cleanup unavailable: no active SDK client")
+			} else if cleanupErr := client.DeregisterInstance(params); cleanupErr != nil {
 				cleanupStatus = "failed"
 				t.Errorf("Nacos restart canary cleanup failed: %v", cleanupErr)
 			}
@@ -138,10 +141,22 @@ func TestNacosRealRestartPersistence(t *testing.T) {
 	if err := client.RegisterInstance(params); err != nil {
 		t.Fatalf("restart canary register: %v", err)
 	}
+	// The official SDK v2.3.5 has a race in its automatic reconnect path when
+	// the server restarts. Close the old client before Docker restart and
+	// create a fresh SDK client afterwards; this gate proves persistence and
+	// avoids suppressing the vendor race detector.
+	if err := client.Close(); err != nil {
+		t.Fatalf("close pre-restart SDK client: %v", err)
+	}
 	if err := runNacosRestartCommand(ctx, container); err != nil {
 		t.Fatalf("restart scratch container: %v", err)
 	}
 	deadline := time.Now().Add(timeout)
+	postRestartClient, err := nacos.NewClientWithConfig(cfg.client, nil)
+	if err != nil {
+		t.Fatalf("create post-restart SDK client: %v", err)
+	}
+	client = postRestartClient
 	for {
 		if _, err := client.ListServices(100); err == nil {
 			if hosts, queryErr := client.ListInstances(service); queryErr == nil && len(hosts) > 0 {
@@ -164,5 +179,5 @@ func TestNacosRealRestartPersistence(t *testing.T) {
 		t.Fatalf("Nacos restart canary deregister: %v", err)
 	}
 	registered = false
-	t.Logf("NACOS_RESTART PASS: endpoint=%s container=%s transport=sdk restart=persistence latency_ms=%d", cfg.endpoint, container, time.Since(deadline.Add(-timeout)).Milliseconds())
+	t.Logf("NACOS_RESTART PASS: endpoint=%s container=%s transport=sdk restart=persistence new_client=true sdk_auto_reconnect=NOT_VERIFIED/RACE_BLOCKED latency_ms=%d", cfg.endpoint, container, time.Since(deadline.Add(-timeout)).Milliseconds())
 }

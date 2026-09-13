@@ -94,3 +94,7 @@ The repository also contains a separate `nacos_restart` gate for persistent
 canary survival across a single-node restart. It is guarded by a strict
 `dsca-*`/`test-*` container name and explicit restart/write flags; it has not
 been run as part of this artifact and therefore remains **NOT VERIFIED**.
+The gate deliberately closes the old SDK client before restart and creates a
+fresh one afterwards: the vendor SDK v2.3.5 automatic reconnect path has a
+known race under restart, so `sdk_auto_reconnect=NOT_VERIFIED/RACE_BLOCKED` is
+recorded rather than being presented as a PASS.
