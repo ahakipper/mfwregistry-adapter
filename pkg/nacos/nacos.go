@@ -194,6 +194,7 @@ type Sink struct {
 	// bounded-parallelism register group from duplicating a pair's PUT (see
 	// ensureClusterHealthCheckDisabled). Guarded by rememberedMu.
 	healthCheckClaims map[clusterKeyOf]bool
+	healthCheckWait   map[clusterKeyOf]*healthCheckAttempt
 	// rememberedMu guards remembered, healthCheckDone and healthCheckClaims.
 	rememberedMu sync.Mutex
 }
@@ -204,6 +205,11 @@ type Sink struct {
 type clusterKeyOf struct {
 	service string
 	cluster string
+}
+
+type healthCheckAttempt struct {
+	done chan struct{}
+	err  error
 }
 
 // Sink satisfies the internal/ports.InstanceSink port exactly (the
@@ -273,6 +279,7 @@ func NewSinkWithConfig(config ClientConfig, logger ports.Logger) (*Sink, error) 
 		remembered:        map[clusterKeyOf]bool{},
 		healthCheckDone:   map[clusterKeyOf]bool{},
 		healthCheckClaims: map[clusterKeyOf]bool{},
+		healthCheckWait:   map[clusterKeyOf]*healthCheckAttempt{},
 	}, nil
 }
 
@@ -582,17 +589,17 @@ func (s *Sink) pushOne(ins *instance.Instance) error {
 func (s *Sink) register(ins *instance.Instance) error {
 	// The sink's persistent-instance contract requires Nacos's server-side
 	// health checker to be disabled before any business registration is
-	// accepted. The official naming SDK v2.3.5 exposes no cluster-admin method;
-	// fail closed before issuing RegisterInstance rather than create a remote
-	// record whose health semantics Spotter cannot control. This guard is
-	// intentionally limited to SDK mode; the explicit HTTP compatibility mode
-	// still performs the audited UpdateCluster call below.
-	if s.client != nil && s.client.sdk != nil {
-		return fmt.Errorf("nacos: register %s: %w: cluster-health-check-update (official naming SDK v2.3.5 has no admin cluster API)", ins.InstanceId, ErrUnsupportedOperation)
-	}
+	// accepted. ensureClusterHealthCheckDisabled performs that control-plane
+	// operation first and SDK mode fails closed when no approved admin facade is
+	// injected; compatibility HTTP retains its warning-only legacy behavior.
 	enabled := ins.Enabled
 	if ins.Status == instance.InstanceStatusUnhealthy {
 		enabled = false
+	}
+	if s.client.sdk != nil {
+		if err := s.ensureClusterHealthCheckDisabled(ins.AppCode, clusterOf(ins)); err != nil {
+			return fmt.Errorf("nacos: register %s blocked by cluster health-check setup: %w", ins.InstanceId, err)
+		}
 	}
 	err := s.client.RegisterInstance(InstanceParams{
 		ServiceName: ins.AppCode,
@@ -607,7 +614,13 @@ func (s *Sink) register(ins *instance.Instance) error {
 		return fmt.Errorf("nacos: register %s: %w", ins.InstanceId, err)
 	}
 	s.logger.Infof("nacos: registered instance %s as %s", ins.InstanceId, s.compositeID(ins))
-	s.ensureClusterHealthCheckDisabled(ins.AppCode, clusterOf(ins))
+	if s.client.sdk == nil {
+		if err := s.ensureClusterHealthCheckDisabled(ins.AppCode, clusterOf(ins)); err != nil {
+			// HTTP compatibility preserves its historical warning-only behavior;
+			// the next push retries the failed claim.
+			s.logger.Warnf("nacos: disabling server-side health check for %s/%s failed, will retry on the next push: %v", ins.AppCode, clusterOf(ins), err)
+		}
+	}
 	return nil
 }
 
@@ -651,34 +664,57 @@ func (s *Sink) register(ins *instance.Instance) error {
 // duplicate idempotent PUT. The claim is released on failure so the retry
 // semantics above survive; the residual duplicate window is a second Push
 // call racing a FAILED first attempt (bounded, idempotent, harmless).
-func (s *Sink) ensureClusterHealthCheckDisabled(service, cluster string) {
+func (s *Sink) ensureClusterHealthCheckDisabled(service, cluster string) error {
 	key := clusterKeyOf{service: service, cluster: cluster}
 	s.rememberedMu.Lock()
+	if s.healthCheckDone == nil {
+		s.healthCheckDone = map[clusterKeyOf]bool{}
+	}
+	if s.healthCheckClaims == nil {
+		s.healthCheckClaims = map[clusterKeyOf]bool{}
+	}
+	if s.healthCheckWait == nil {
+		s.healthCheckWait = map[clusterKeyOf]*healthCheckAttempt{}
+	}
 	if s.healthCheckDone[key] {
 		s.rememberedMu.Unlock()
-		return
+		return nil
+	}
+	if s.healthCheckClaims[key] {
+		attempt := s.healthCheckWait[key]
+		s.rememberedMu.Unlock()
+		<-attempt.done
+		return attempt.err
 	}
 	// Claim before the control-plane call: exactly one in-flight attempt per pair.
-	claimed := s.healthCheckClaims[key]
 	s.healthCheckClaims[key] = true
+	attempt := &healthCheckAttempt{done: make(chan struct{})}
+	s.healthCheckWait[key] = attempt
 	s.rememberedMu.Unlock()
-	if claimed {
-		return // another worker's PUT for this pair is in flight
-	}
-	if err := s.client.UpdateCluster(service, cluster); err != nil {
+	err := s.client.UpdateCluster(service, cluster)
+	if err != nil {
+		var typed *ClusterAdminError
+		if !errors.As(err, &typed) {
+			err = &ClusterAdminError{Err: err}
+		}
 		s.logger.Warnf("nacos: disabling server-side health check for %s/%s failed, will retry on the next push: %v",
 			service, cluster, err)
-		// Release the claim so the next push retries (failure discipline).
 		s.rememberedMu.Lock()
 		delete(s.healthCheckClaims, key)
+		attempt.err = err
+		close(attempt.done)
+		delete(s.healthCheckWait, key)
 		s.rememberedMu.Unlock()
-		return
+		return err
 	}
 	s.rememberedMu.Lock()
 	s.healthCheckDone[key] = true
 	delete(s.healthCheckClaims, key) // the claim graduates into the done marker
+	close(attempt.done)
+	delete(s.healthCheckWait, key)
 	s.rememberedMu.Unlock()
 	s.logger.Infof("nacos: disabled server-side health check for %s/%s", service, cluster)
+	return nil
 }
 
 // deregister deletes one instance by its composite id parameters — the
