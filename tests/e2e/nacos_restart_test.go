@@ -211,3 +211,49 @@ func TestNacosRealRestartPersistence(t *testing.T) {
 	registered = false
 	t.Logf("NACOS_RESTART PASS: endpoint=%s container=%s transport=sdk restart=persistence new_client=true sdk_auto_reconnect=NOT_VERIFIED/RACE_BLOCKED latency_ms=%d", cfg.endpoint, container, time.Since(deadline.Add(-timeout)).Milliseconds())
 }
+
+// TestNacosRealAutoReconnect keeps one SDK client across a scratch restart.
+// It is an opt-in vendor compatibility gate; a race or reconnect failure is
+// a hard failure when enabled and never promoted to production evidence.
+func TestNacosRealAutoReconnect(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("NACOS_SERVER")) == "" {
+		t.Skip("NOT VERIFIED: NACOS_SERVER is not configured")
+	}
+	if err := restartGuard(); err != nil {
+		t.Skipf("NOT VERIFIED: %v", err)
+	}
+	cfg, err := parseNacosRealConfig()
+	if err != nil {
+		t.Fatalf("invalid config: %v", err)
+	}
+	client, err := nacos.NewClientWithConfig(cfg.client, nil)
+	if err != nil {
+		t.Fatalf("create SDK client: %v", err)
+	}
+	defer client.Close()
+	service := "__spotter_reconnect_" + time.Now().UTC().Format("20060102T150405.000000000")
+	params := nacos.InstanceParams{ServiceName: service, IP: "127.0.0.1", Port: 1, ClusterName: "spotter-reconnect", GroupName: cfg.client.GroupName, NamespaceID: cfg.client.NamespaceID, Enabled: true, Ephemeral: false}
+	registered := false
+	defer func() {
+		if registered {
+			_ = client.DeregisterInstance(params)
+		}
+	}()
+	if err := client.RegisterInstance(params); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	registered = true
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout)
+	defer cancel()
+	if err := runNacosRestartCommand(ctx, os.Getenv("NACOS_REAL_CONTAINER")); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if err := warmNacosSDK(ctx, client); err != nil {
+		t.Fatalf("automatic reconnect visibility failed: %v", err)
+	}
+	hosts, err := client.ListInstances(service)
+	if err != nil || len(hosts) == 0 {
+		t.Fatalf("reconnected canary missing: hosts=%d err=%v", len(hosts), err)
+	}
+	t.Logf("NACOS_RECONNECT PASS: endpoint=%s transport=sdk restart=single-client sdk_auto_reconnect=VERIFIED cleanup_deferred=true", cfg.endpoint)
+}
