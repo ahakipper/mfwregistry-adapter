@@ -2,6 +2,15 @@
 
 Status: **NOT VERIFIED (P1)**.
 
+> **Current-status addendum (2026-09-13, authoritative HEAD `7231049`):** The
+> guarded `atlas_real` gate now supports explicit TLS/CA/server-name and
+> scratch-only insecure-auth controls, marks canary cleanup before the first
+> write, validates cleanup responses, and reports redacted endpoint/latency/
+> residual status. No real Atlas endpoint, proto source, or production result
+> is available. The local discoverymock remains a JSON mirror only; real
+> protobuf, method path, TLS, authentication, and payload compatibility stay
+> **NOT VERIFIED**.
+
 The repository still ships a self-contained mirror of the private
 `beehive-proto api/service/v2` surface.  `pkg/beehive/service/v2/v2.go` defines
 ordinary Go structs and aliases them to the domain model; it does not contain

@@ -8,7 +8,7 @@ per tier, and specifies the exact Makefile targets that will implement the
 matrix. It is the implementation brief for the test work that follows; it does
 not change any code by itself.
 
-**Current status (2026-09-13, implementation baseline `b38505c`):** the default unit, full and
+**Current status (2026-09-13, authoritative HEAD `7231049`; implementation baseline `b38505c`):** the default unit, full and
 race suites are green and `go vet ./...` is clean. The Nacos naming path is
 SDK-backed by default; `http-compat` is an explicit test/rollback mode. The
 SDK mode allocates no compatibility HTTP client; service-list, SelectAll-based
@@ -22,6 +22,15 @@ declared scratch endpoint, so they are not production evidence. Observe's
 timestamp/ledger harness defects are fixed, but a complete self-contained 2h
 run remains unverified. Consul scale observation remains an accepted non-goal
 until ECS/machine deployment is re-enabled.
+
+The current release gates are explicit: SDK-only Nacos product startup is
+blocked before readiness until official cluster-admin support exists;
+`http-compat` is test/rollback only. Guarded Nacos/Atlas real tags and the
+Observe harness skip as `NOT VERIFIED` when no scratch target exists. The
+current code evidence includes `go vet ./...`, race package gates,
+`go test -race -tags=observe ./tests/observe/...`, and guarded
+`nacos_real`/`atlas_real` tag runs. None of these skips is production protocol
+or scale evidence.
 
 The Observe harness command, health probes, and child lifecycle are now
 context-bounded: kubectl/docker calls default to a 30-second deadline, health

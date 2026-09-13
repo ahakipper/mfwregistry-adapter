@@ -9,6 +9,14 @@
 > fail-closed behavior, but appcenter endpoint/auth/SLA evidence is still
 > required before removing the shims. See remediation plan §13.
 
+> **Current-status addendum (authoritative HEAD `7231049`):** The active graph
+> has explicit ports and no direct legacy imports; `legacycompat` is the sole
+> compatibility read boundary and aggregate is excluded by build tag. Nacos
+> real-gate and Observe harness lifecycles are bounded and fail-closed, while
+> real AppCenter/Atlas/Nacos evidence remains unavailable. Discovery-center
+> empty-provider retrieval and provider cache deletion now preserve unfiltered,
+> nil-safe, deep-copy and unique-legacy-identity semantics.
+
 The remaining compatibility reads are centralized in
 `internal/infra/legacycompat`; provider, conversion, elector, and metrics
 packages no longer import `pkg/log`, `pkg/notice`, or the mutable `config`
