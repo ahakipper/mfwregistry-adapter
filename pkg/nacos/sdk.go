@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 
@@ -86,8 +87,20 @@ type sdkNamingClient interface {
 var _ sdkNamingClient = (naming_client.INamingClient)(nil)
 
 type sdkNamingFacade struct {
-	client sdkNamingClient
-	group  string
+	client     sdkNamingClient
+	group      string
+	cacheDir   string
+	ownedCache bool
+}
+
+func (f *sdkNamingFacade) close() {
+	if f == nil {
+		return
+	}
+	f.client.CloseClient()
+	if f.ownedCache && f.cacheDir != "" {
+		_ = os.RemoveAll(f.cacheDir)
+	}
 }
 
 // sdkAPIError preserves the retry classification that the official SDK
@@ -172,6 +185,16 @@ func newSDKNamingFacade(cfg ClientConfig) (*sdkNamingFacade, error) {
 	if ns == DefaultNamespaceID {
 		ns = ""
 	}
+	cacheDir := cfg.CacheDir
+	owned := false
+	if cacheDir == "" {
+		var err error
+		cacheDir, err = os.MkdirTemp("", "spotter-nacos-sdk-")
+		if err != nil {
+			return nil, fmt.Errorf("nacos sdk: create isolated cache: %w", err)
+		}
+		owned = true
+	}
 	clientCfg := &constant.ClientConfig{
 		TimeoutMs:           timeoutMs,
 		NamespaceId:         ns,
@@ -179,13 +202,17 @@ func newSDKNamingFacade(cfg ClientConfig) (*sdkNamingFacade, error) {
 		Password:            cfg.Password,
 		NotLoadCacheAtStart: true,
 		DisableUseSnapShot:  true,
+		CacheDir:            cacheDir,
 		TLSCfg:              constant.TLSConfig{Appointed: true, Enable: servers[0].Scheme == "https", TrustAll: cfg.InsecureSkipVerify, CaFile: cfg.CAFile, ServerNameOverride: cfg.ServerName},
 	}
 	naming, err := clients.NewNamingClient(vo.NacosClientParam{ClientConfig: clientCfg, ServerConfigs: servers})
 	if err != nil {
+		if owned {
+			_ = os.RemoveAll(cacheDir)
+		}
 		return nil, fmt.Errorf("nacos sdk: create naming client: %w", err)
 	}
-	return &sdkNamingFacade{client: naming, group: effectiveGroup(cfg.GroupName)}, nil
+	return &sdkNamingFacade{client: naming, group: effectiveGroup(cfg.GroupName), cacheDir: cacheDir, ownedCache: owned}, nil
 }
 
 func normalizeNacosURL(raw string) (*url.URL, error) {

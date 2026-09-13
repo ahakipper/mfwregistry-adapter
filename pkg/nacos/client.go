@@ -154,6 +154,7 @@ type ClientConfig struct {
 	CAFile              string
 	ServerName          string
 	InsecureSkipVerify  bool
+	CacheDir            string
 	Timeout             time.Duration
 	MaxConnsPerHost     int
 	ClusterAdmin        NacosClusterAdmin
@@ -479,7 +480,7 @@ func CheckReadinessWithConfig(cfg ClientConfig, logger ports.Logger) (retErr err
 				return fmt.Errorf("nacos: readiness SDK write probe: %w", sdkErr)
 			}
 			probeClient.sdk = pinnedSDK
-			defer pinnedSDK.client.CloseClient()
+			defer pinnedSDK.close()
 		}
 		canary := InstanceParams{
 			ServiceName: fmt.Sprintf("__spotter_readiness_%d", time.Now().UnixNano()),
@@ -627,7 +628,7 @@ func (c *Client) CloseContext(parent context.Context) error {
 			c.closeErr = c.clusterAdmin.Close(ctx)
 		}
 		if c.sdk != nil {
-			c.sdk.client.CloseClient()
+			c.sdk.close()
 		}
 	})
 	return c.closeErr
@@ -699,7 +700,7 @@ func (c *Client) ListInstances(serviceName string) ([]Host, error) {
 			if err != nil {
 				return nil, err
 			}
-			defer fresh.client.CloseClient()
+			defer fresh.close()
 			return fresh.list(serviceName, "")
 		}
 		return c.sdk.list(serviceName, "")
@@ -732,7 +733,7 @@ func (c *Client) ListCatalogInstances(serviceName, clusterName string) ([]Host, 
 			if err != nil {
 				return nil, err
 			}
-			defer fresh.client.CloseClient()
+			defer fresh.close()
 			return fresh.catalog(serviceName, clusterName)
 		}
 		return c.sdk.catalog(serviceName, clusterName)
