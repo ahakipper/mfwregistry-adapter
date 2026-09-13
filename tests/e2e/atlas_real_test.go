@@ -37,6 +37,9 @@ func parseAtlasRealConfig() (atlasRealConfig, error) {
 	if c.addr == "" {
 		return c, errors.New("ATLAS_REAL_ADDR is required")
 	}
+	if c.auth != "" && !strings.HasPrefix(strings.ToLower(c.addr), "https://") && os.Getenv("ATLAS_REAL_ALLOW_INSECURE_AUTH") != "1" {
+		return c, errors.New("ATLAS_REAL_AUTH_TOKEN requires https or explicit scratch ATLAS_REAL_ALLOW_INSECURE_AUTH=1")
+	}
 	if c.insecure && os.Getenv("ATLAS_REAL_SCRATCH") != "1" {
 		return c, errors.New("insecure TLS requires scratch guard")
 	}
@@ -156,6 +159,31 @@ func TestAtlasReal(t *testing.T) {
 		Reversion:  time.Now().UnixNano(),
 		Ports:      []*instance.PortInfo{{Name: "atlas-real", Protocol: instance.ProtoGRPC, Port: 1}},
 	}}
+	registered := false
+	cleanupStatus := "not_attempted"
+	var cleanupErr error
+	defer func() {
+		if !registered {
+			return
+		}
+		cleanup := *payload[0]
+		cleanup.Status = instance.InstanceStatusOffline
+		cleanup.Enabled = false
+		cleanup.Reversion++
+		started := time.Now()
+		resp, err := client.Sync([]*instance.Instance{&cleanup})
+		if err != nil {
+			cleanupErr = err
+		} else if resp == nil || resp.GetCode() != 0 {
+			cleanupErr = fmt.Errorf("cleanup response invalid")
+		}
+		if cleanupErr != nil {
+			cleanupStatus = "failed"
+		} else {
+			cleanupStatus = "passed"
+		}
+		t.Logf("ATLAS_REAL cleanup_attempted=true status=%s latency_ms=%d error=%v residual_unknown=%t", cleanupStatus, time.Since(started).Milliseconds(), cleanupErr, cleanupErr != nil)
+	}()
 
 	response, err := client.Sync(payload)
 	if err != nil {
@@ -164,6 +192,7 @@ func TestAtlasReal(t *testing.T) {
 	if response == nil || response.GetCode() != 0 {
 		t.Fatalf("SynInstance returned non-success response: %#v", response)
 	}
+	registered = true
 
 	fullResponse, err := client.SyncAll(payload)
 	if err != nil {
@@ -193,12 +222,5 @@ func TestAtlasReal(t *testing.T) {
 	// Atlas exposes synchronization rather than a dedicated delete endpoint;
 	// close the scratch canary through the same operation using offline status
 	// so a successful gate does not leave test data behind.
-	cleanupPayload := *payload[0]
-	cleanupPayload.Status = instance.InstanceStatusOffline
-	cleanupPayload.Enabled = false
-	cleanupPayload.Reversion++
-	if _, err := client.Sync([]*instance.Instance{&cleanupPayload}); err != nil {
-		t.Fatalf("Atlas canary cleanup failed: %v", err)
-	}
 	t.Logf("ATLAS_REAL PASS: addr=%s codec=json methods=SynInstance, SynAllInstance, GetAllInstance appCode=%s instance=%s records=%d", addr, appCode, instanceID, len(list.Instance))
 }
