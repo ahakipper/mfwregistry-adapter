@@ -173,11 +173,13 @@ func newSDKNamingFacade(cfg ClientConfig) (*sdkNamingFacade, error) {
 		ns = ""
 	}
 	clientCfg := &constant.ClientConfig{
-		TimeoutMs:   timeoutMs,
-		NamespaceId: ns,
-		Username:    cfg.Username,
-		Password:    cfg.Password,
-		TLSCfg:      constant.TLSConfig{Appointed: true, Enable: servers[0].Scheme == "https", TrustAll: cfg.InsecureSkipVerify, CaFile: cfg.CAFile, ServerNameOverride: cfg.ServerName},
+		TimeoutMs:           timeoutMs,
+		NamespaceId:         ns,
+		Username:            cfg.Username,
+		Password:            cfg.Password,
+		NotLoadCacheAtStart: true,
+		DisableUseSnapShot:  true,
+		TLSCfg:              constant.TLSConfig{Appointed: true, Enable: servers[0].Scheme == "https", TrustAll: cfg.InsecureSkipVerify, CaFile: cfg.CAFile, ServerNameOverride: cfg.ServerName},
 	}
 	naming, err := clients.NewNamingClient(vo.NacosClientParam{ClientConfig: clientCfg, ServerConfigs: servers})
 	if err != nil {
