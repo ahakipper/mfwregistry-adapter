@@ -20,14 +20,22 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"spotter/config"
 	"spotter/internal"
 	"spotter/internal/composition"
 	infraconfig "spotter/internal/infra/config"
-	"spotter/internal/infra/legacycompat"
-	"spotter/pkg/log"
-	"spotter/pkg/notice"
 	"spotter/pkg/providers"
+)
+
+// adapterRunner is the small command seam used by tests to exercise startup
+// composition without entering the long-running server loop.
+type adapterRunner interface{ Run() }
+
+var (
+	loadAdapterConfig   = infraconfig.Load
+	buildAdapterRuntime = composition.Build
+	newAdapterServer    = func(rt *composition.Runtime) (adapterRunner, error) {
+		return internal.NewServerFromDeps(rt)
+	}
 )
 
 // adapterCmd represents the adapter command
@@ -38,57 +46,14 @@ var adapterCmd = &cobra.Command{
 
 It watches the configured providers (Kubernetes clusters and Consul servers),
 converts the observed pods/endpoints into instance data, and pushes the
-resulting instance events (incremental and full) to the discovery center
-(Atlas) over gRPC.`,
+	resulting instance events (incremental and full) to the discovery center
+	(Atlas) over gRPC.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("starting adapter")
-		// init flags
-		flags := adapterFlags(cmd)
-		// init noticer
-		env, err := cmd.Flags().GetString("env")
-		if err != nil {
+		if err := executeAdapter(cmd); err != nil {
 			fmt.Println(err.Error())
 			os.Exit(1)
 		}
-		if env != "product" && env != "dev" && env != "test" {
-			// the legacy code panicked on an invalid env; keep the exit code
-			// (1) and the message shape, but return instead of panicking.
-			fmt.Println("invalid env param")
-			os.Exit(1)
-		}
-		// resolve config
-		cfg, err := infraconfig.Load(env, flags)
-		if err != nil {
-			fmt.Println(err.Error())
-			os.Exit(1)
-		}
-		// build the composition root (logger, notifier, metrics)
-		rt, err := composition.Build(cfg, composition.Deps{})
-		if err != nil {
-			fmt.Println(err.Error())
-			os.Exit(1)
-		}
-		// Temporary bridge: the k8s/consul providers, the k8s conversion
-		// code and pkg/distribute/election still read the pkg/log global
-		// logger and send notices through the pkg/notice global Noticer.
-		// Copy the resolved config into the legacy globals and initialize
-		// both globals so those packages keep working unchanged until they
-		// are migrated to the injected logger/notifier.
-		assignLegacyGlobals(cfg)
-		// Note on rt.LogCloser: it is not closed explicitly here. Run()
-		// blocks forever (the server only exits through process
-		// termination), and the legacy code equally relied on process exit
-		// to flush the log sink, so this preserves the existing lifecycle
-		// behavior.
-		_ = rt.LogCloser
-		// server init
-		server, err := internal.NewServerFromDeps(rt)
-		if err != nil {
-			fmt.Println(err.Error())
-			return
-		}
-		// run
-		server.Run()
 
 		// notify signal
 		// c := make(chan os.Signal)
@@ -98,6 +63,35 @@ resulting instance events (incremental and full) to the discovery center
 		// log.Logger.Info("receive quit signal: ", quit)
 		// server.Stop()
 	},
+}
+
+// executeAdapter resolves flags, builds the explicit composition runtime, and
+// starts the server. It deliberately has no writes to the deprecated config,
+// logger, or notifier globals; compatibility remains available only to legacy
+// callers that explicitly invoke their deprecated wrappers.
+func executeAdapter(cmd *cobra.Command) error {
+	flags := adapterFlags(cmd)
+	env, err := cmd.Flags().GetString("env")
+	if err != nil {
+		return err
+	}
+	if env != "product" && env != "dev" && env != "test" {
+		return fmt.Errorf("invalid env param")
+	}
+	cfg, err := loadAdapterConfig(env, flags)
+	if err != nil {
+		return err
+	}
+	rt, err := buildAdapterRuntime(cfg, composition.Deps{})
+	if err != nil {
+		return err
+	}
+	server, err := newAdapterServer(rt)
+	if err != nil {
+		return err
+	}
+	server.Run()
+	return nil
 }
 
 func init() {
@@ -221,74 +215,6 @@ func adapterFlags(cmd *cobra.Command) infraconfig.Flags {
 // intPtr and boolPtr box flag values for the tri-state Flags fields.
 func intPtr(v int) *int    { return &v }
 func boolPtr(v bool) *bool { return &v }
-
-// assignLegacyGlobals copies the resolved configuration into the legacy
-// global config package and initializes the pkg/log global logger and the
-// pkg/notice global Noticer, for the packages that are not wired through
-// the composition root yet (k8s and consul providers, k8s conversion,
-// pkg/distribute/election, pkg/metrics proserver).
-func assignLegacyGlobals(cfg infraconfig.Config) {
-	applyLegacyGlobals(cfg)
-	_ = log.LoggerInit()
-	// The legacy notice call sites (pkg/providers/k8s, pkg/providers/consul,
-	// pkg/distribute/election) send through the pkg/notice global; without
-	// this call the global Noticer stays nil and their notices silently
-	// no-op.
-	notice.InitNoticeClient(cfg.Env)
-}
-
-// applyLegacyGlobals mirrors the legacy initAdapterFlags global assignment
-// from the resolved config. Etcd endpoints, TLS file paths, kubeconfig
-// paths, consul addresses, providers and the campaign key come from the
-// environment preset of the resolved config.
-func applyLegacyGlobals(cfg infraconfig.Config) {
-	config.EtcdEndpoints = cfg.Endpoints.EtcdEndpoints
-	legacycompat.RecordWrite()
-	config.CertFile = cfg.Endpoints.CertFile
-	legacycompat.RecordWrite()
-	config.KeyFile = cfg.Endpoints.KeyFile
-	legacycompat.RecordWrite()
-	config.CAFile = cfg.Endpoints.CAFile
-	legacycompat.RecordWrite()
-	config.KubeConfigPath = cfg.Endpoints.KubeConfigPath
-	legacycompat.RecordWrite()
-	config.ConsulAddress = cfg.Endpoints.ConsulAddress
-	legacycompat.RecordWrite()
-	config.LockCampaignKey = cfg.Endpoints.LockCampaignKey
-	legacycompat.RecordWrite()
-	// log
-	config.LogFilePath = cfg.LogFilePath
-	legacycompat.RecordWrite()
-	config.LogSize = cfg.LogSize
-	legacycompat.RecordWrite()
-	config.LogLevel = cfg.LogLevel
-	legacycompat.RecordWrite()
-	config.LogBackups = cfg.LogBackups
-	legacycompat.RecordWrite()
-	config.LogAge = cfg.LogAge
-	legacycompat.RecordWrite()
-	config.LogToStd = cfg.LogToStd
-	legacycompat.RecordWrite()
-	config.LogEncoding = cfg.LogEncoding
-	legacycompat.RecordWrite()
-	// push
-	config.PushAllInterval = cfg.PushAllInterval
-	legacycompat.RecordWrite()
-	// grpc
-	config.GrpcAddr = cfg.GrpcAddr
-	legacycompat.RecordWrite()
-	// disable push worker action
-	config.DisablePushWorker = cfg.DisablePushWorker
-	legacycompat.RecordWrite()
-	config.Providers = cfg.Providers
-	legacycompat.RecordWrite()
-	config.PushAppCodes = cfg.PushAppCodes
-	legacycompat.RecordWrite()
-	config.EnableLeaderElection = cfg.EnableLeaderElection
-	legacycompat.RecordWrite()
-	config.MetricsAddr = cfg.MetricsAddr
-	legacycompat.RecordWrite()
-}
 
 // flag helpers: they read the named flag and fall back to the zero value,
 // exactly like the legacy `flag, _ := cmd.Flags().GetX(...)` calls.

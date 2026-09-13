@@ -7,15 +7,157 @@
 package cmd
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
 
 	"spotter/config"
+	"spotter/internal/composition"
 	infraconfig "spotter/internal/infra/config"
 	"spotter/internal/infra/legacycompat"
+	"spotter/internal/testkit/fakes"
+	"spotter/pkg/log"
+	"spotter/pkg/notice"
 )
+
+type adapterRunnerFake struct{}
+
+func (adapterRunnerFake) Run() {}
+
+// applyLegacyGlobals is retained as a test-only helper for compatibility
+// contract tests. Normal command startup must never call this bridge.
+func applyLegacyGlobals(cfg infraconfig.Config) {
+	config.EtcdEndpoints = cfg.Endpoints.EtcdEndpoints
+	legacycompat.RecordWrite()
+	config.CertFile = cfg.Endpoints.CertFile
+	legacycompat.RecordWrite()
+	config.KeyFile = cfg.Endpoints.KeyFile
+	legacycompat.RecordWrite()
+	config.CAFile = cfg.Endpoints.CAFile
+	legacycompat.RecordWrite()
+	config.KubeConfigPath = cfg.Endpoints.KubeConfigPath
+	legacycompat.RecordWrite()
+	config.ConsulAddress = cfg.Endpoints.ConsulAddress
+	legacycompat.RecordWrite()
+	config.LockCampaignKey = cfg.Endpoints.LockCampaignKey
+	legacycompat.RecordWrite()
+	config.LogFilePath = cfg.LogFilePath
+	legacycompat.RecordWrite()
+	config.LogSize = cfg.LogSize
+	legacycompat.RecordWrite()
+	config.LogLevel = cfg.LogLevel
+	legacycompat.RecordWrite()
+	config.LogBackups = cfg.LogBackups
+	legacycompat.RecordWrite()
+	config.LogAge = cfg.LogAge
+	legacycompat.RecordWrite()
+	config.LogToStd = cfg.LogToStd
+	legacycompat.RecordWrite()
+	config.LogEncoding = cfg.LogEncoding
+	legacycompat.RecordWrite()
+	config.PushAllInterval = cfg.PushAllInterval
+	legacycompat.RecordWrite()
+	config.GrpcAddr = cfg.GrpcAddr
+	legacycompat.RecordWrite()
+	config.DisablePushWorker = cfg.DisablePushWorker
+	legacycompat.RecordWrite()
+	config.Providers = cfg.Providers
+	legacycompat.RecordWrite()
+	config.PushAppCodes = cfg.PushAppCodes
+	legacycompat.RecordWrite()
+	config.EnableLeaderElection = cfg.EnableLeaderElection
+	legacycompat.RecordWrite()
+	config.MetricsAddr = cfg.MetricsAddr
+	legacycompat.RecordWrite()
+}
+
+// TestAdapterStartupDoesNotAssignLegacyGlobals verifies that normal command
+// startup composes an explicit runtime without mutating the deprecated config,
+// logger, or notifier globals. The command seams are replaced with fakes so
+// the test never opens a network connection or starts a long-running server.
+func TestAdapterStartupDoesNotAssignLegacyGlobals(t *testing.T) {
+	oldLoad, oldBuild, oldNew := loadAdapterConfig, buildAdapterRuntime, newAdapterServer
+	oldConfig := config.EtcdEndpoints
+	oldKubeConfig := config.KubeConfigPath
+	oldConsul := config.ConsulAddress
+	oldCampaign := config.LockCampaignKey
+	oldLogPath := config.LogFilePath
+	oldPushInterval := config.PushAllInterval
+	oldGRPC := config.GrpcAddr
+	oldProviders := config.Providers
+	oldAppCodes := config.PushAppCodes
+	oldElection := config.EnableLeaderElection
+	oldMetrics := config.MetricsAddr
+	oldLogger := log.Logger
+	oldNoticer := notice.Noticer
+	t.Cleanup(func() {
+		loadAdapterConfig, buildAdapterRuntime, newAdapterServer = oldLoad, oldBuild, oldNew
+		config.EtcdEndpoints, config.KubeConfigPath, config.ConsulAddress = oldConfig, oldKubeConfig, oldConsul
+		config.LockCampaignKey, config.LogFilePath = oldCampaign, oldLogPath
+		config.PushAllInterval, config.GrpcAddr = oldPushInterval, oldGRPC
+		config.Providers, config.PushAppCodes = oldProviders, oldAppCodes
+		config.EnableLeaderElection, config.MetricsAddr = oldElection, oldMetrics
+		log.Logger, notice.Noticer = oldLogger, oldNoticer
+	})
+
+	config.EtcdEndpoints = []string{"sentinel-etcd"}
+	config.KubeConfigPath = []string{"sentinel-kube"}
+	config.ConsulAddress = []string{"sentinel-consul"}
+	config.LockCampaignKey = "sentinel-campaign"
+	config.LogFilePath = "sentinel-log"
+	config.PushAllInterval = 111
+	config.GrpcAddr = "sentinel-grpc"
+	config.Providers = []string{"sentinel-provider"}
+	config.PushAppCodes = []string{"sentinel-app"}
+	config.EnableLeaderElection = false
+	config.MetricsAddr = "sentinel-metrics"
+	log.Logger = zap.NewNop().Sugar()
+	notice.Noticer = nil
+	legacycompat.ResetAccessCounts()
+	t.Cleanup(legacycompat.ResetAccessCounts)
+
+	cfg := infraconfig.Config{Env: "test", Providers: []string{"k8s"}}
+	loadAdapterConfig = func(string, infraconfig.Flags) (infraconfig.Config, error) {
+		return cfg, nil
+	}
+	buildAdapterRuntime = func(got infraconfig.Config, _ composition.Deps) (*composition.Runtime, error) {
+		if !reflect.DeepEqual(got, cfg) {
+			return nil, errors.New("unexpected config passed to composition")
+		}
+		return &composition.Runtime{
+			Config:   got,
+			Logger:   &fakes.FakeLogger{},
+			Notifier: &fakes.FakeNotifier{},
+			Metrics:  &fakes.FakeMetricsRecorder{},
+		}, nil
+	}
+	newAdapterServer = func(*composition.Runtime) (adapterRunner, error) {
+		return adapterRunnerFake{}, nil
+	}
+
+	if err := executeAdapter(newAdapterCommand()); err != nil {
+		t.Fatalf("executeAdapter() error = %v", err)
+	}
+
+	if got := config.EtcdEndpoints; !reflect.DeepEqual(got, []string{"sentinel-etcd"}) {
+		t.Fatalf("EtcdEndpoints mutated to %v", got)
+	}
+	if got := config.Providers; !reflect.DeepEqual(got, []string{"sentinel-provider"}) {
+		t.Fatalf("Providers mutated to %v", got)
+	}
+	if log.Logger == nil {
+		t.Fatal("legacy logger global was replaced")
+	}
+	if notice.Noticer != nil {
+		t.Fatal("legacy notifier global was replaced")
+	}
+	if counts := legacycompat.AccessCountsSnapshot(); counts.Writes != 0 {
+		t.Fatalf("legacy globals recorded %d writes", counts.Writes)
+	}
+}
 
 // newAdapterCommand builds a fresh adapter command with the same flags the
 // package init registers (a fresh instance keeps flag value state out of the
