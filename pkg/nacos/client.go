@@ -126,6 +126,7 @@ type Client struct {
 	config       ClientConfig
 	clusterAdmin NacosClusterAdmin
 	sdk          *sdkNamingFacade
+	sdkFactory   func(ClientConfig) (*sdkNamingFacade, error)
 	closeOnce    sync.Once
 	closeErr     error
 }
@@ -335,6 +336,7 @@ func NewClientWithConfig(cfg ClientConfig, logger ports.Logger) (*Client, error)
 			return nil, err
 		}
 		client.sdk = facade
+		client.sdkFactory = newSDKNamingFacade
 	}
 	return client, nil
 }
@@ -692,6 +694,14 @@ func (c *Client) UpdateCluster(serviceName, clusterName string) error {
 // disabled instances; the prune still uses the explicit catalog facade.
 func (c *Client) ListInstances(serviceName string) ([]Host, error) {
 	if c.sdk != nil {
+		if c.sdkFactory != nil {
+			fresh, err := c.sdkFactory(c.config)
+			if err != nil {
+				return nil, err
+			}
+			defer fresh.client.CloseClient()
+			return fresh.list(serviceName, "")
+		}
 		return c.sdk.list(serviceName, "")
 	}
 	values := url.Values{}
@@ -717,6 +727,14 @@ func (c *Client) ListInstances(serviceName string) ([]Host, error) {
 // handling for migration/test fixtures.
 func (c *Client) ListCatalogInstances(serviceName, clusterName string) ([]Host, error) {
 	if c.sdk != nil {
+		if c.sdkFactory != nil {
+			fresh, err := c.sdkFactory(c.config)
+			if err != nil {
+				return nil, err
+			}
+			defer fresh.client.CloseClient()
+			return fresh.catalog(serviceName, clusterName)
+		}
 		return c.sdk.catalog(serviceName, clusterName)
 	}
 	hosts := make([]Host, 0)
