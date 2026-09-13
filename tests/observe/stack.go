@@ -238,7 +238,7 @@ func runCommandContext(ctx context.Context, name string, args ...string) (string
 
 func isContainerNotFound(err error, output string) bool {
 	text := strings.ToLower(errString(err) + " " + output)
-	return strings.Contains(text, "no such container") || strings.Contains(text, "no such object") || strings.Contains(text, "not found")
+	return strings.Contains(text, "no such container") || strings.Contains(text, "no such object") || strings.Contains(text, "no such image")
 }
 
 func errString(err error) string {
