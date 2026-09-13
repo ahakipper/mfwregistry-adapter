@@ -106,6 +106,24 @@ func (cache *CacheBtree) Delete(id string) *sv.Instance {
 		},
 	}
 	item := cache.btree.Delete(key)
+	// Legacy callers may still delete by wire InstanceId. Preserve that
+	// compatibility only when the wire ID maps to exactly one stored object;
+	// an ambiguous same-name multi-source set must remain untouched.
+	if item == nil && !strings.Contains(id, ":") && !strings.Contains(id, "/") {
+		var candidate *InstanceCacheItem
+		matches := 0
+		cache.btree.Ascend(func(existing btree.Item) bool {
+			stored := existing.(*InstanceCacheItem)
+			if stored.Instance != nil && stored.Instance.InstanceId == id {
+				candidate = stored
+				matches++
+			}
+			return true
+		})
+		if matches == 1 {
+			item = cache.btree.Delete(candidate)
+		}
+	}
 	if item == nil {
 		return nil
 	}

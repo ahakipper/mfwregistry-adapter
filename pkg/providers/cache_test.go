@@ -43,3 +43,21 @@ func TestCacheDeleteReturnsDeepCopy(t *testing.T) {
 		t.Fatalf("Get(%q) after Delete = %#v, want nil", key, got)
 	}
 }
+
+func TestCacheDeleteLegacyWireIDFallbackRequiresUniqueMatch(t *testing.T) {
+	cache := NewCache(2)
+	unique := &sv.Instance{InstanceId: "pod-unique", SourceKey: "cluster-a/uid-a", SourceCluster: "cluster-a"}
+	cache.ReplaceOrInsert(unique)
+	if got := cache.Delete("pod-unique"); got == nil || got.InstanceId != "pod-unique" {
+		t.Fatalf("unique legacy Delete = %#v, want deleted instance", got)
+	}
+
+	cache.ReplaceOrInsert(&sv.Instance{InstanceId: "pod-shared", SourceKey: "cluster-a/uid-a", SourceCluster: "cluster-a"})
+	cache.ReplaceOrInsert(&sv.Instance{InstanceId: "pod-shared", SourceKey: "cluster-b/uid-b", SourceCluster: "cluster-b"})
+	if got := cache.Delete("pod-shared"); got != nil {
+		t.Fatalf("ambiguous legacy Delete = %#v, want nil", got)
+	}
+	if cache.Get("cluster-a/uid-a") == nil || cache.Get("cluster-b/uid-b") == nil {
+		t.Fatal("ambiguous legacy Delete removed one of the source-scoped entries")
+	}
+}
