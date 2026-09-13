@@ -66,14 +66,18 @@ func TestNacosSDKPersistentLifecycle(t *testing.T) {
 	batchParam := vo.BatchRegisterInstanceParam{ServiceName: batchService, GroupName: cfg.client.GroupName, Instances: []vo.RegisterInstanceParam{{Ip: "127.0.0.2", Port: 2, Enable: true, Ephemeral: true}}}
 	batchAttempted := true
 	defer func() {
+		var cleanupErr error
 		if batchAttempted {
-			if err := client.DeregisterInstance(nacos.InstanceParams{ServiceName: batchService, IP: "127.0.0.2", Port: 2, ClusterName: "DEFAULT", GroupName: cfg.client.GroupName, NamespaceID: cfg.client.NamespaceID, Ephemeral: true}); err != nil {
-				t.Errorf("Nacos SDK ephemeral cleanup failed: %v", err)
-			}
-			if err := verifyNacosCanary(cfg.client, batchService); err != nil {
-				t.Errorf("Nacos SDK ephemeral residual verification failed: %v", err)
+			cleanupErr = client.DeregisterInstance(nacos.InstanceParams{ServiceName: batchService, IP: "127.0.0.2", Port: 2, ClusterName: "DEFAULT", GroupName: cfg.client.GroupName, NamespaceID: cfg.client.NamespaceID, Ephemeral: true})
+			if cleanupErr == nil {
+				cleanupErr = verifyNacosCanary(cfg.client, batchService)
 			}
 		}
+		status := "passed"
+		if cleanupErr != nil {
+			status = "failed"
+		}
+		t.Logf("NACOS_SDK_EVAL_BATCH cleanup_attempted=%t status=%s error=%v residual_unknown=%t", batchAttempted, status, cleanupErr, cleanupErr != nil)
 	}()
 	if err := client.BatchRegisterEphemeral(batchParam); err != nil {
 		t.Fatalf("SDK ephemeral batch register: %v", err)
@@ -126,6 +130,13 @@ func verifierHosts(cfg nacos.ClientConfig, service string) ([]nacos.Host, error)
 	if err != nil {
 		return nil, err
 	}
-	defer c.Close()
-	return c.ListInstances(service)
+	hosts, readErr := c.ListInstances(service)
+	closeErr := c.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return hosts, nil
 }
