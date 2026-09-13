@@ -359,12 +359,27 @@ The adversarial review found that §6's script, while its loop and its verdict w
 
 ---
 
-## 8. BOUNDARIES AND NON-GOALS (this track)
+## 8. CURRENT EXECUTION STATUS
+
+The OBS-full `observe-up.sh`/`observe-down.sh` lifecycle is implemented with
+owned kwok cluster, scratch kubeconfig and ports, readyz and node-capacity
+gates, and failure cleanup. The definitive 2h/1000 run remains NOT VERIFIED
+because this host lacks `kwokctl`. OBS-mini supports external
+`OBS_KUBECONFIG` read-only operation; down never deletes an external cluster.
+
+## 9. BOUNDARIES AND NON-GOALS (this track)
 
 - The kwok vehicle's internals (fake-pod stage design, node simulation, resource envelope) are track 1's; this document pins only the driver contract (§4.2) and the observation interface to it.
 - Latency SLOs and the bound values are track 2's; the observation harness parameterizes `OBS_BOUND` and consumes track 2's measurements at the gate (§5.1.2).
 - The reconcile-source change (Atlas → nacos) is track 3's; the observation run judges whatever is shipped at run time and the gate records the lead's decision (§5.1.3).
 - The scenario soak (a)–(h) and its environment findings (ARM/colima nacos restart pathology, etc.) are inherited as-is; this track does not redesign scenario coverage, only the standing observation contract.
 - The consul leg stays at soak scale (the plan's scale axis is the k8s path); consul-scale churn is a follow-up if the lead wants it.
+
+Current OBS-full orchestration is provided by `scripts/observe-up.sh` and
+`scripts/observe-down.sh`: it owns a dedicated kwok cluster, checks scratch
+ports and Docker/kwok prerequisites, waits for API/node readiness, verifies
+pod capacity and state ownership, and tears down only its recorded state.
+OBS-mini may use `OBS_KUBECONFIG` in external read-only mode. The definitive
+2h/1000+ run remains **NOT VERIFIED** until executed on the owned stack.
 
 **Artifacts produced by this audit (all outside the repo, per the read-only rule):** `/tmp/ds4-rehearse.py` (the observation script — comparison engine corrected in the review pass, the three P1-3 defects documented in its header), `/tmp/ds4-rehearsal.log` (90 per-tick console lines, original run) and `/tmp/ds4-rehearsal-ticks.jsonl` (90 per-tick JSON records, original run) + `/tmp/ds4-rehearsal-summary.json`, and the review-pass re-run's `/tmp/ds4-rehearsal2.log` (48 per-tick console lines), `/tmp/ds4-rehearsal2-ticks.jsonl` (48 per-tick JSON records), `/tmp/ds4-rehearsal2-summary.json`. The only repo file written is this document.
