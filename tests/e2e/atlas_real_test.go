@@ -29,15 +29,17 @@ import (
 type atlasRealConfig struct {
 	addr, auth, ca, serverName string
 	insecure                   bool
+	tls                        bool
 }
 
 func parseAtlasRealConfig() (atlasRealConfig, error) {
 	c := atlasRealConfig{addr: strings.TrimSpace(os.Getenv("ATLAS_REAL_ADDR")), auth: strings.TrimSpace(os.Getenv("ATLAS_REAL_AUTH_TOKEN")), ca: strings.TrimSpace(os.Getenv("ATLAS_REAL_CA_FILE")), serverName: strings.TrimSpace(os.Getenv("ATLAS_REAL_SERVER_NAME"))}
 	c.insecure = os.Getenv("ATLAS_REAL_INSECURE_SKIP_VERIFY") == "1"
+	c.tls = strings.HasPrefix(strings.ToLower(c.addr), "https://") || os.Getenv("ATLAS_REAL_TLS") == "1"
 	if c.addr == "" {
 		return c, errors.New("ATLAS_REAL_ADDR is required")
 	}
-	if c.auth != "" && !strings.HasPrefix(strings.ToLower(c.addr), "https://") && os.Getenv("ATLAS_REAL_ALLOW_INSECURE_AUTH") != "1" {
+	if c.auth != "" && !c.tls && os.Getenv("ATLAS_REAL_ALLOW_INSECURE_AUTH") != "1" {
 		return c, errors.New("ATLAS_REAL_AUTH_TOKEN requires https or explicit scratch ATLAS_REAL_ALLOW_INSECURE_AUTH=1")
 	}
 	if c.insecure && os.Getenv("ATLAS_REAL_SCRATCH") != "1" {
@@ -48,7 +50,7 @@ func parseAtlasRealConfig() (atlasRealConfig, error) {
 
 func atlasDialOptions(c atlasRealConfig) ([]grpc.DialOption, error) {
 	opts := []grpc.DialOption{grpc.WithDefaultCallOptions(grpc.ForceCodec(jsonCodec{})), grpc.WithBlock()}
-	if c.ca != "" || c.serverName != "" || c.insecure {
+	if c.tls || c.ca != "" || c.serverName != "" || c.insecure {
 		pool, err := x509.SystemCertPool()
 		if err != nil || pool == nil {
 			pool = x509.NewCertPool()
@@ -64,17 +66,20 @@ func atlasDialOptions(c atlasRealConfig) ([]grpc.DialOption, error) {
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 	if c.auth != "" {
-		opts = append(opts, grpc.WithPerRPCCredentials(bearerCredentials{token: c.auth}))
+		opts = append(opts, grpc.WithPerRPCCredentials(bearerCredentials{token: c.auth, secure: c.tls}))
 	}
 	return opts, nil
 }
 
-type bearerCredentials struct{ token string }
+type bearerCredentials struct {
+	token  string
+	secure bool
+}
 
 func (b bearerCredentials) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
 	return map[string]string{"authorization": "Bearer " + b.token}, nil
 }
-func (b bearerCredentials) RequireTransportSecurity() bool { return false }
+func (b bearerCredentials) RequireTransportSecurity() bool { return b.secure }
 
 type jsonCodec struct{}
 
@@ -179,12 +184,14 @@ func TestAtlasReal(t *testing.T) {
 		}
 		if cleanupErr != nil {
 			cleanupStatus = "failed"
+			t.Errorf("Atlas canary cleanup failed: %v", cleanupErr)
 		} else {
 			cleanupStatus = "passed"
 		}
 		t.Logf("ATLAS_REAL cleanup_attempted=true status=%s latency_ms=%d error=%v residual_unknown=%t", cleanupStatus, time.Since(started).Milliseconds(), cleanupErr, cleanupErr != nil)
 	}()
 
+	registered = true // a request may have reached Atlas even when transport returns an error
 	response, err := client.Sync(payload)
 	if err != nil {
 		t.Fatalf("SynInstance failed using JSON codec: %v", err)
@@ -192,7 +199,6 @@ func TestAtlasReal(t *testing.T) {
 	if response == nil || response.GetCode() != 0 {
 		t.Fatalf("SynInstance returned non-success response: %#v", response)
 	}
-	registered = true
 
 	fullResponse, err := client.SyncAll(payload)
 	if err != nil {
