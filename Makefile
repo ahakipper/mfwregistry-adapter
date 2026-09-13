@@ -129,10 +129,10 @@ OBS_CHURN_EVERY ?= 20s
 OBS_CHURN_RATE ?= 5
 
 test-observe:
-	./scripts/observe-up.sh
-	@mkdir -p build/observe
-	go build -o build/observe/spotter .
-	@status=0; \
+	@status=0; trap './scripts/observe-down.sh' EXIT INT TERM; \
+	./scripts/observe-up.sh || status=$$?; \
+	if [ $$status -eq 0 ]; then mkdir -p build/observe && go build -o build/observe/spotter . || status=$$?; fi; \
+	if [ $$status -ne 0 ]; then exit $$status; fi; \
 	OBS_DURATION=$(OBS_DURATION) OBS_SCALE=$(OBS_SCALE) OBS_SERVICES=$(OBS_SERVICES) \
 	OBS_TICK=$(OBS_TICK) OBS_CHURN_EVERY=$(OBS_CHURN_EVERY) OBS_CHURN_RATE=$(OBS_CHURN_RATE) \
 	SPOTTER_BIN=build/observe/spotter \
