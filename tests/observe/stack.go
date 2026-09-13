@@ -28,7 +28,7 @@ const observeNacosContainer = "dsca-observe-nacos"
 
 // nacosImage is the throwaway stack's nacos image (the soak stack's tag).
 const nacosImage = "nacos/nacos-server:v2.1.0-slim"
-const nacosImageDigest = "sha256:237e6eb663468c5a000505d06ed8306da7c946933a44f2048c9a7b49ec31c7d9"
+const nacosImageDigest = "sha256:e689b1c79ca4a391fc478b6b28eac74916bfe569f37abaa8145c156cefe45067"
 const nacosPlatform = "linux/arm64"
 
 // nacosHealthWait boot-waits a fresh standalone nacos: the container start
@@ -145,29 +145,35 @@ func dockerRunNacos(hostPort int) error {
 	if !has {
 		return fmt.Errorf("observe: nacos image %s not present (docker pull %s)", image, image)
 	}
-	if err := validateNacosImage(image); err != nil {
+	canonical, err := validateNacosImage(image)
+	if err != nil {
 		return err
 	}
 	out, err := runCommand("docker", "run", "-d", "--name", observeNacosContainer,
 		"--platform", nacosPlatform,
 		"-e", "MODE=standalone", "-e", "JVM_XMS=512m", "-e", "JVM_XMX=512m",
-		"-p", fmt.Sprintf("%d:8848", hostPort), image)
+		"-p", fmt.Sprintf("%d:8848", hostPort), canonical)
 	if err != nil {
 		return fmt.Errorf("observe: docker run nacos: %w: %s", err, strings.TrimSpace(out))
 	}
 	return nil
 }
 
-func validateNacosImage(image string) error {
-	out, err := runCommand("docker", "image", "inspect", "--format", "{{.Architecture}} {{index .RepoDigests 0}}", image)
+func validateNacosImage(image string) (string, error) {
+	out, err := runCommand("docker", "image", "inspect", "--format", "{{.Architecture}} {{.RepoDigests}}", image)
 	if err != nil {
-		return fmt.Errorf("observe: EnvError inspect Nacos image architecture/digest: %w", err)
+		return "", fmt.Errorf("observe: EnvError inspect Nacos image architecture/digest: %w", err)
 	}
-	parts := strings.Fields(out)
-	if len(parts) < 2 || parts[0] != "arm64" || !strings.Contains(parts[1], "@"+nacosImageDigest) {
-		return fmt.Errorf("observe: EnvError Nacos image %s must prove arm64 and digest %s (got %q)", image, nacosImageDigest, strings.TrimSpace(out))
+	parts := strings.Fields(strings.NewReplacer("[", "", "]", "", ",", "").Replace(out))
+	if len(parts) < 2 || parts[0] != "arm64" {
+		return "", fmt.Errorf("observe: EnvError Nacos image %s must prove arm64 and digest %s (got %q)", image, nacosImageDigest, strings.TrimSpace(out))
 	}
-	return nil
+	for _, digest := range parts[1:] {
+		if strings.HasSuffix(digest, "@"+nacosImageDigest) {
+			return digest, nil
+		}
+	}
+	return "", fmt.Errorf("observe: EnvError Nacos image %s missing digest %s", image, nacosImageDigest)
 }
 
 // dockerStopNacos removes the throwaway nacos container (idempotent).
