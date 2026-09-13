@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/panjf2000/ants/v2"
 	v1 "k8s.io/api/core/v1"
-	legacycompat "spotter/internal/infra/legacycompat"
 	"spotter/internal/ports"
 	sv "spotter/pkg/beehive/service/v2"
 	k8srobot "spotter/pkg/k8srobot"
@@ -72,11 +71,6 @@ func (k *k8s) ensureDeps() {
 	k.depsOnce.Do(func() {
 		if k.done == nil {
 			k.done = make(chan struct{})
-		}
-		if !k.depsConfigured {
-			// Preserve zero-value white-box compatibility; explicit constructors
-			// set depsConfigured and never enter this fallback.
-			k.pushAppCodes = legacycompat.PushAppCodes()
 		}
 		if k.logger == nil {
 			k.logger = ports.NopLogger{}

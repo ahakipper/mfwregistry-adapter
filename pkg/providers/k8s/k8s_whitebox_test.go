@@ -152,6 +152,8 @@ func TestMonitorCancelsPopErrorBackoff(t *testing.T) {
 	w := &fakeWorker{getAllResponse: &sv.InstanceList{}}
 	ctx, cancel := context.WithCancel(context.Background())
 	k := newTestProvider(robot, w)
+	k.pushAppCodes = []string{"pay-user"}
+	k.depsConfigured = true
 	k.ctx = ctx
 	done := make(chan struct{})
 	go func() {
@@ -1273,6 +1275,8 @@ func TestCompareAndFlushPushAppCodesFiltersRemoteList(t *testing.T) {
 	robot := newFakeRobot(nil, []interface{}{pod}, false)
 	w := &fakeWorker{getAllResponse: &sv.InstanceList{Instance: []*sv.Instance{remoteAllowed, remoteOther}}}
 	k := newTestProvider(robot, w)
+	k.pushAppCodes = []string{"pay-user"}
+	k.depsConfigured = true
 
 	k.CompareAndFlush()
 
