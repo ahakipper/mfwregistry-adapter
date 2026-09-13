@@ -12,7 +12,7 @@
 
 **版本变更：** v6 将“禁止 Nacos 生产路径裸 HTTP、统一经官方 Nacos SDK/facade”从可选 POC 提升为 P1 强制整改和 Nacos 启用时的发布门禁，并补充 SDK 迁移、例外管理和完整测试矩阵。
 
-> **Current-status addendum (2026-09-13, implementation baseline `c986632`):** SDK-only Nacos production startup is **BLOCKED / NOT VERIFIED** before readiness until an official Admin/Maintainer cluster-health capability is available; the production SDK is pinned to pseudo-version `v2.3.6-0.20260902123754-002486583df5` (commit `0024865`). Its guarded ARM64 single-client reconnect `-race` gate passed locally; historical v2.3.5 race output is provenance only. Authoritative GetAll/prune use one fresh SDK read session per snapshot with an isolated temporary cache. Atlas protobuf/TLS/auth, full 2h Observe, AppCenter delivery, and production HA/TLS/auth evidence remain **NOT VERIFIED**; Consul scale remains an accepted non-goal.
+> **Current-status addendum (2026-09-13, implementation baseline `c986632`):** SDK-only Nacos production startup remains **BLOCKED / NOT VERIFIED** before readiness because the pinned SDK lacks an official Admin/Maintainer cluster-health capability. Deployment-level Nacos HA/multi-node/TLS/auth/namespace/leaderless checks are outside current Spotter scope; single-Sink SDK integration remains in scope. Atlas is an optional existing Sink/mock deferred to a future entry gate, not a current release blocker. Full 2h Observe and AppCenter delivery remain pending; Consul scale remains an accepted non-goal.
 > Exported Nacos `NewClient`/`NewSink` now default to SDK and fail closed on the
 > cluster-admin capability gap; raw HTTP is reachable only through explicitly
 > named `NewHTTPCompatClient`/`NewHTTPCompatSink` compatibility constructors and
