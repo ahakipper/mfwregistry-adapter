@@ -7,6 +7,8 @@ import (
 )
 
 func TestLegacyAdaptersAreNilSafeAndCopyMutableConfig(t *testing.T) {
+	ResetAccessCounts()
+	t.Cleanup(ResetAccessCounts)
 	if Logger() == nil || Notifier() == nil {
 		t.Fatal("legacy adapters must never be nil")
 	}
@@ -25,5 +27,21 @@ func TestLegacyAdaptersAreNilSafeAndCopyMutableConfig(t *testing.T) {
 	endpoints[0] = "mutated"
 	if config.EtcdEndpoints[0] != "127.0.0.1:2379" {
 		t.Fatalf("EtcdConfig returned aliased slice: %v", config.EtcdEndpoints)
+	}
+	counts := AccessCountsSnapshot()
+	if counts.Reads == 0 {
+		t.Fatal("compatibility adapters recorded no reads")
+	}
+	if counts.Writes != 0 {
+		t.Fatalf("compatibility adapter reads unexpectedly recorded writes: %+v", counts)
+	}
+}
+
+func TestRecordWriteTracksLegacyBridgeMutation(t *testing.T) {
+	ResetAccessCounts()
+	t.Cleanup(ResetAccessCounts)
+	RecordWrite()
+	if got := AccessCountsSnapshot().Writes; got != 1 {
+		t.Fatalf("writes = %d, want 1", got)
 	}
 }

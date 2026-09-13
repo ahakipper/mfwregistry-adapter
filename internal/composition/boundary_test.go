@@ -1,12 +1,38 @@
 package composition
 
 import (
+	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+// TestActiveGraphDoesNotImportLegacyGlobals runs the repository-wide checker
+// rather than duplicating a partial package allowlist in this test. The test
+// is deliberately RED until command startup and every active provider have
+// migrated to injected collaborators; compatibility readers remain confined
+// to internal/infra/legacycompat and the explicitly exempt legacy packages.
+func TestActiveGraphDoesNotImportLegacyGlobals(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
+	cmd := exec.Command("bash", filepath.Join(root, "scripts", "check_no_legacy_globals.sh"))
+	cmd.Dir = root
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("legacy-global checker failed: %v\n%s", err, output.String())
+	}
+	if !strings.Contains(output.String(), "legacy-global-boundary: PASS") {
+		t.Fatalf("legacy-global checker omitted PASS marker: %s", output.String())
+	}
+}
 
 // TestProductionCompositionHasNoLegacyGlobalImports guards the C2 boundary:
 // the server/composition path must use injected ports. Legacy globals remain
