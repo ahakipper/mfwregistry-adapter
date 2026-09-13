@@ -63,7 +63,7 @@ while IFS= read -r path; do
 		while IFS=: read -r assign_line _; do
 			[ -n "${assign_line:-}" ] || continue
 			append_violation "$path:$assign_line:assign legacy global package symbol"
-		done < <(rg -n "(^|[^[:alnum:]_])${alias}\\.[A-Z][A-Za-z0-9_]*[[:space:]]*=" "$path" || true)
+		done < <(rg -n "(^|[^[:alnum:]_])${alias}\\.[A-Z][A-Za-z0-9_]*([[:space:]]*(\\+=|-=|\\+\\+|--|=([^=]|$)))" "$path" || true)
 	done < <(rg -n '^[[:space:]]*([A-Za-z_.][A-Za-z0-9_.]*[[:space:]]+)?"spotter/(config|pkg/log|pkg/notice)"' "$path" || true)
 done < <(rg --files cmd internal pkg config tools | rg '\.go$' | rg -v '_test\.go$' || true)
 

@@ -40,7 +40,7 @@ entries, and deregisters all entries. Cleanup must report
 | Application / cluster | Unique per run; cluster is `spotter-real-batch` |
 | Desired entries | 201 persistent instances |
 | Batch size | Maximum 100; expected partition `100 + 100 + 1` |
-| Max observed concurrency | Sink bounded SDK item-call limit (`DefaultPushConcurrency=8`); the gate records this configured bound in its PASS line |
+| Configured concurrency cap | Sink bounded SDK item-call limit (`DefaultPushConcurrency=8`); the gate records this configured cap in its PASS line |
 | Injected error / retry | One deterministic cluster-admin request failure, followed by a successful full-batch retry |
 | Final catalog hash | Recorded in the guarded test PASS log; pending until a writable target is supplied |
 | Cleanup | All 201 entries deregistered through the persistent application-batch path; `residual_unknown=false` required |

@@ -135,7 +135,7 @@ func TestNacosRealPersistentApplicationBatch(t *testing.T) {
 			t.Fatalf("catalog entry %s is ephemeral, want persistent (ephemeral=false)", host.InstanceID)
 		}
 	}
-	t.Logf("NACOS_REAL_PERSISTENT_APPLICATION_BATCH PASS: transport=sdk persistent=true protocol_batch=unsupported_by_pinned_sdk application_batch=true application=%s namespace=%s group=%s cluster=%s entries=%d batch_max=%d batches=%d max_observed_concurrency=%d injected_request_failure=true retry=passed final_catalog_hash=%s", service, cfg.client.NamespaceID, cfg.client.GroupName, cluster, len(hosts), nacos.MaxPersistentBatchSize, (len(items)+nacos.MaxPersistentBatchSize-1)/nacos.MaxPersistentBatchSize, nacos.DefaultPushConcurrency, catalogHash(hosts))
+	t.Logf("NACOS_REAL_PERSISTENT_APPLICATION_BATCH PASS: transport=sdk persistent=true protocol_batch=unsupported_by_pinned_sdk application_batch=true application=%s namespace=%s group=%s cluster=%s entries=%d batch_max=%d batches=%d configured_concurrency_cap=%d injected_request_failure=true retry=passed final_catalog_hash=%s", service, cfg.client.NamespaceID, cfg.client.GroupName, cluster, len(hosts), nacos.MaxPersistentBatchSize, (len(items)+nacos.MaxPersistentBatchSize-1)/nacos.MaxPersistentBatchSize, nacos.DefaultPushConcurrency, catalogHash(hosts))
 }
 
 func verifierCatalogHosts(cfg nacos.ClientConfig, service, cluster string) ([]nacos.Host, error) {
