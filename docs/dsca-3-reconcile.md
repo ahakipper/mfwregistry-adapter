@@ -1,7 +1,7 @@
 # DSCA Track 3 — Reconcile Correctness vs Nacos
 
 **Auditor:** DS-3 (reconcile correctness vs nacos)
-**Repo:** `spotter`, branch `refactor/all`, current HEAD `356aa75`
+**Repo:** `spotter`, branch `refactor/all`, current HEAD `b54b2b6`
 **Historical HEAD note:** the original audit was executed at `69b0105`; its live probes and code citations are retained as historical evidence below.
 
 > **Current-status addendum (2026-09-13, authoritative implementation HEAD `356aa75`):** Nacos startup now constructs and validates the SDK sink before readiness. The official SDK v2.3.5 lacks cluster-admin health-check update, so product startup fails closed before any readiness/canary write; if capability validation succeeds, `CheckReadinessWithConfig` performs SDK service-list read plus persistent register/deregister canary. `CheckReadiness` and `NewClient`/`NewSink` are SDK-default; only explicitly named HTTP compatibility helpers are allowed in fixtures/rollback. Ownership filtering, cache safety, and real-gate NOT VERIFIED status are governed by the current remediation plan. The historical ordering and live-demo claims below must not be read as current production behavior.
