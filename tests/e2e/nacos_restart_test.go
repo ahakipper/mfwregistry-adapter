@@ -316,20 +316,27 @@ func TestNacosRealAutoReconnect(t *testing.T) {
 				cleanupErr = err
 				t.Errorf("cleanup verifier: %v", err)
 			} else {
-				deadline := time.Now().Add(cfg.timeout)
+				cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), cfg.timeout)
 				for {
 					hosts, queryErr := verifier.ListInstances(params.ServiceName)
 					if queryErr == nil && len(hosts) == 0 {
 						break
 					}
-					if time.Now().After(deadline) {
+					if cleanupCtx.Err() != nil {
 						status = "failed"
 						cleanupErr = fmt.Errorf("residual instances or query error: %v", queryErr)
 						t.Errorf("cleanup residual: %v", cleanupErr)
 						break
 					}
-					time.Sleep(100 * time.Millisecond)
+					select {
+					case <-cleanupCtx.Done():
+						status = "failed"
+						cleanupErr = cleanupCtx.Err()
+						t.Errorf("cleanup deadline: %v", cleanupErr)
+					case <-time.After(100 * time.Millisecond):
+					}
 				}
+				cancelCleanup()
 				if err := verifier.Close(); err != nil {
 					status = "failed"
 					cleanupErr = err
@@ -361,7 +368,11 @@ func TestNacosRealAutoReconnect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create fresh verifier: %v", err)
 	}
-	defer verifier.Close()
+	defer func() {
+		if err := verifier.Close(); err != nil {
+			t.Errorf("fresh verifier close: %v", err)
+		}
+	}()
 	hosts, err := verifier.ListInstances(service)
 	if err != nil || len(hosts) == 0 || hosts[0].Enabled {
 		t.Fatalf("reconnected canary missing: hosts=%d err=%v", len(hosts), err)
