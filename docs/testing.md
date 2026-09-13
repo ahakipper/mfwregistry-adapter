@@ -8,7 +8,7 @@ per tier, and specifies the exact Makefile targets that will implement the
 matrix. It is the implementation brief for the test work that follows; it does
 not change any code by itself.
 
-**Current status (2026-09-13, authoritative HEAD `7231049`; implementation baseline `b38505c`):** the default unit, full and
+**Current status (2026-09-13, authoritative HEAD `cb16f73`; implementation baseline `b38505c`):** the default unit, full and
 race suites are green and `go vet ./...` is clean. The Nacos naming path is
 SDK-backed by default; `http-compat` is an explicit test/rollback mode. The
 SDK mode allocates no compatibility HTTP client; service-list, SelectAll-based
