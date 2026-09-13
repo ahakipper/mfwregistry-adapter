@@ -550,7 +550,9 @@ When `OBS_KUBECONFIG` is set, `make test-observe` runs only read-only
 
 The SDK eval classifies a Nacos 2.1.0 `RequestHandler Not Found` batch response
 as `NOT VERIFIED: batch unsupported by target`; it never promotes that target
-to PASS. Batch support is a capability introduced after 2.1.0 (2.1.1+), while
+to PASS. Batch support is target-dependent: only the observed 2.1.0 response
+is classified here; newer versions (including 2.1.1+) require independent
+verification, while
 Spotter's persistent sink does not depend on batch registration. Other batch
 errors remain hard failures and cleanup still runs.
 

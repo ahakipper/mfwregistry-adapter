@@ -119,6 +119,12 @@ under `-race`; cleanup reported `cleanup_attempted=true`,
 prove untagged SDK behavior, HA, TLS/production auth, Admin capability, or
 production readiness; all remain **NOT VERIFIED**.
 
+The ARM64 `nacos_sdk_eval` batch probe returned `RequestHandler Not Found`
+for ephemeral batch registration; its cleanup completed with
+`status=passed`, `residual_unknown=false`. Batch capability is therefore
+`NOT VERIFIED` for this target and requires independent validation on newer
+Nacos versions.
+
 Commands and outcomes:
 
 ```bash
