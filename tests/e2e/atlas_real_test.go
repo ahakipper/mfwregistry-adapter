@@ -8,6 +8,14 @@ package e2e
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"os"
 	"strconv"
 	"strings"
@@ -17,6 +25,59 @@ import (
 	"spotter/internal/domain/instance"
 	"spotter/pkg/discoverycenter"
 )
+
+type atlasRealConfig struct {
+	addr, auth, ca, serverName string
+	insecure                   bool
+}
+
+func parseAtlasRealConfig() (atlasRealConfig, error) {
+	c := atlasRealConfig{addr: strings.TrimSpace(os.Getenv("ATLAS_REAL_ADDR")), auth: strings.TrimSpace(os.Getenv("ATLAS_REAL_AUTH_TOKEN")), ca: strings.TrimSpace(os.Getenv("ATLAS_REAL_CA_FILE")), serverName: strings.TrimSpace(os.Getenv("ATLAS_REAL_SERVER_NAME"))}
+	c.insecure = os.Getenv("ATLAS_REAL_INSECURE_SKIP_VERIFY") == "1"
+	if c.addr == "" {
+		return c, errors.New("ATLAS_REAL_ADDR is required")
+	}
+	if c.insecure && os.Getenv("ATLAS_REAL_SCRATCH") != "1" {
+		return c, errors.New("insecure TLS requires scratch guard")
+	}
+	return c, nil
+}
+
+func atlasDialOptions(c atlasRealConfig) ([]grpc.DialOption, error) {
+	opts := []grpc.DialOption{grpc.WithDefaultCallOptions(grpc.ForceCodec(jsonCodec{})), grpc.WithBlock()}
+	if c.ca != "" || c.serverName != "" || c.insecure {
+		pool, err := x509.SystemCertPool()
+		if err != nil || pool == nil {
+			pool = x509.NewCertPool()
+		}
+		if c.ca != "" {
+			pem, err := os.ReadFile(c.ca)
+			if err != nil || !pool.AppendCertsFromPEM(pem) {
+				return nil, fmt.Errorf("invalid Atlas CA file")
+			}
+		}
+		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{RootCAs: pool, ServerName: c.serverName, InsecureSkipVerify: c.insecure}))) // #nosec G402 guarded scratch option
+	} else {
+		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}
+	if c.auth != "" {
+		opts = append(opts, grpc.WithPerRPCCredentials(bearerCredentials{token: c.auth}))
+	}
+	return opts, nil
+}
+
+type bearerCredentials struct{ token string }
+
+func (b bearerCredentials) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
+	return map[string]string{"authorization": "Bearer " + b.token}, nil
+}
+func (b bearerCredentials) RequireTransportSecurity() bool { return false }
+
+type jsonCodec struct{}
+
+func (jsonCodec) Marshal(v interface{}) ([]byte, error)      { return json.Marshal(v) }
+func (jsonCodec) Unmarshal(data []byte, v interface{}) error { return json.Unmarshal(data, v) }
+func (jsonCodec) Name() string                               { return "json" }
 
 // TestAtlasReal exercises the current Atlas wire contract end to end:
 // Dial -> SynInstance -> SynAllInstance -> GetAllInstance.  The current
@@ -30,9 +91,13 @@ import (
 // messages), the call fails and the B4 gate remains open until a generated
 // client or an explicitly versioned compatibility adapter is supplied.
 func TestAtlasReal(t *testing.T) {
-	addr := strings.TrimSpace(os.Getenv("ATLAS_REAL_ADDR"))
+	cfg, cfgErr := parseAtlasRealConfig()
+	addr := cfg.addr
 	if addr == "" {
 		t.Skip("NOT VERIFIED: ATLAS_REAL_ADDR is not configured")
+	}
+	if cfgErr != nil {
+		t.Fatalf("invalid Atlas config: %v", cfgErr)
 	}
 	if os.Getenv("ATLAS_REAL_ALLOW_WRITE") != "1" || os.Getenv("ATLAS_REAL_SCRATCH") != "1" {
 		t.Skip("NOT VERIFIED: set ATLAS_REAL_ALLOW_WRITE=1 and ATLAS_REAL_SCRATCH=1 for an explicit scratch target")
@@ -49,7 +114,11 @@ func TestAtlasReal(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	client, err := discoverycenter.Dial(ctx, addr, nil, nil)
+	opts, err := atlasDialOptions(cfg)
+	if err != nil {
+		t.Fatalf("invalid Atlas transport config: %v", err)
+	}
+	client, err := discoverycenter.Dial(ctx, addr, nil, nil, opts...)
 	if err != nil {
 		t.Fatalf("Atlas JSON-codec dial failed (wire compatibility remains unverified): %v", err)
 	}
