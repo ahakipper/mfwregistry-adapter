@@ -11,7 +11,7 @@ violations=""
 
 is_exempt() {
 	case "$1" in
-		internal/infra/legacycompat/*|config/*|pkg/log/*|pkg/notice/*)
+		internal/infra/legacycompat/*|config/*|pkg/log/*|pkg/notice/*|*_test.go|*/legacy_compat.go|*/legacy_provider_compat.go|*_legacy_compat.go)
 			return 0
 			;;
 		*)
@@ -20,7 +20,7 @@ is_exempt() {
 	esac
 }
 
-append_violation() {
+	append_violation() {
 	if [ -n "$violations" ]; then
 		violations="$violations\n"
 	fi
@@ -30,6 +30,12 @@ append_violation() {
 while IFS= read -r path; do
 	[ -n "$path" ] || continue
 	is_exempt "$path" && continue
+
+	# Only dedicated compatibility wrappers and tests may import legacycompat.
+	while IFS=: read -r line _; do
+		[ -n "${line:-}" ] || continue
+		append_violation "$path:$line:import legacycompat outside compatibility boundary"
+	done < <(rg -n '"spotter/internal/infra/legacycompat"' "$path" || true)
 
 	# Imports are reported from the import declaration itself. This covers
 	# both ordinary package imports and explicit aliases in grouped imports.

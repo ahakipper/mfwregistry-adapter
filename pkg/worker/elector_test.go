@@ -15,11 +15,17 @@ import (
 	"spotter/pkg/distribute/election"
 )
 
+type depsTestLogger struct{ ports.NopLogger }
+
 func TestElectorWithDepsDoesNotReadLegacyGlobals(t *testing.T) {
 	legacycompat.ResetAccessCounts()
-	_, err := NewElectorWithCandidate(context.Background(), &fakeCandidate{}, make(chan bool, 1), ports.NopLogger{})
+	logger := depsTestLogger{}
+	e, err := NewElectorWithCandidate(context.Background(), &fakeCandidate{}, make(chan bool, 1), logger)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got := e.(*ElectWorker).logger; got != logger {
+		t.Fatalf("explicit logger not retained")
 	}
 	if got := legacycompat.AccessCountsSnapshot().Reads; got != 0 {
 		t.Fatalf("legacy reads=%d", got)
