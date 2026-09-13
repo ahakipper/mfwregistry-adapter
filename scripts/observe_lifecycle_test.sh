@@ -42,6 +42,11 @@ if [[ "${1:-}" == delete ]]; then
 fi
 exit 0
 EOF
+cat >"$fake/sha256sum" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == -c ]]; then grep -q bad-hash "${2:-}" && exit 1; exit 0; fi
+printf '0000000000000000000000000000000000000000000000000000000000000000  %s\n' "${1:-}"
+EOF
 chmod +x "$fake"/*
 
 assert_fail() { set +e; "$@" >/dev/null 2>&1; rc=$?; set -e; [[ $rc -ne 0 ]] || { echo "expected failure: $*" >&2; exit 1; }; }
