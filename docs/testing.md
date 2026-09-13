@@ -531,7 +531,26 @@ Supporting work (not tests, prerequisite): fix
   files).
 - **Budget**: measured race-suite time is ~130 s of package time; the
   aggregate `test-all` (unit + blackbox + smoke + e2e) is designed to stay
-  under ~3 minutes wall clock on a dev machine.
+under ~3 minutes wall clock on a dev machine.
+
+Observe lifecycle commands: `scripts/observe-up.sh` and
+`scripts/observe-down.sh` own the OBS-full kwok stack, validate scratch
+ports/API/node capacity, and verify state hashes. `OBS_KUBECONFIG` selects an
+external read-only OBS-mini mode; teardown never deletes it. Fake-PATH shell
+contract checks should run with `bash -n scripts/observe-*.sh`; missing
+kwokctl/docker/nc and occupied ports remain explicit EnvError/InfraError.
+The 2h/1000+ real run remains `NOT VERIFIED` when kwokctl or its prerequisites
+are unavailable.
 ### Nacos SDK startup capability gate
 
 The SDK-only code path is covered by unit and race tests. A production SDK sink must fail before readiness or canary side effects while the pinned SDK lacks the required cluster-admin health-check operation; real Nacos/Admin verification is therefore `BLOCKED / NOT VERIFIED`.
+
+### Observe lifecycle status
+
+`scripts/observe-up.sh` and `scripts/observe-down.sh` provide the OBS-full
+self-contained kwok lifecycle with dedicated kubeconfig, API/etcd ports,
+readyz and node-capacity checks. The 2h/1000-instance OBS-full run has not
+been executed here because `kwokctl` is unavailable. OBS-mini may use
+`OBS_KUBECONFIG` external read-only mode; teardown never deletes that cluster.
+Run `scripts/observe_lifecycle_test.sh` for fake-PATH failure and cleanup
+coverage.
