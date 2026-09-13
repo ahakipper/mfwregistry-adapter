@@ -1,8 +1,10 @@
 # DSCA Track 3 — Reconcile Correctness vs Nacos
 
 **Auditor:** DS-3 (reconcile correctness vs nacos)
-**Repo:** `spotter`, branch `refactor/all`, HEAD `69b0105`
-**HEAD note:** audited at `69b0105`; the current HEAD `0ff71f7` is docs-only (it adds the five DSCA phase-1 documents and nothing else) — the code under audit is identical between the two.
+**Repo:** `spotter`, branch `refactor/all`, current HEAD `05e9d14`
+**Historical HEAD note:** the original audit was executed at `69b0105`; its live probes and code citations are retained as historical evidence below.
+
+> **Current-status addendum (2026-09-13, authoritative implementation HEAD `05e9d14`):** Nacos startup now constructs and validates the SDK sink before readiness. The official SDK v2.3.5 lacks cluster-admin health-check update, so product startup fails closed before any readiness/canary write; if capability validation succeeds, `CheckReadinessWithConfig` performs SDK service-list read plus persistent register/deregister canary. `CheckReadiness` and `NewClient`/`NewSink` are SDK-default; only explicitly named HTTP compatibility helpers are allowed in fixtures/rollback. Ownership filtering, cache safety, and real-gate NOT VERIFIED status are governed by the current remediation plan. The historical ordering and live-demo claims below must not be read as current production behavior.
 **Method:** full code reading of the three reconcile surfaces + read-only live probes against the demo nacos at `127.0.0.1:18848` (GETs only: `service/list`, `instance/list`, `catalog/instances`, `catalog/services`) + read-only `kubectl get pods` against the demo k3s + analysis of the running spotter's own log (`build/demo/app.log`, PID 30306, `--push-interval 60`). No repo files were modified; the demo stack was not touched.
 
 ---
@@ -279,7 +281,7 @@ Two corrections to the folklore that the task description asked me to verify:
 With the nacos view as the diff source, the **existing** boot `CompareAndFlush` (unchanged schedule, k8s.go:101 / consul.go:93) becomes a real startup heal:
 
 - **Drift accumulated while spotter was down is healed at boot**: pods deleted while down → the nacos view has them, local lacks them → case-3 → deregister (the reconstructed host supplies a well-formed composite id). New pods while down → ADD → push. Field drift (labels/env changed while down) → UPDATE → push. Services that vanished entirely while down → their nacos ghosts are remote-only → case-3 → deregistered — **this closes the 416e62a residual for the vanished-service case**, which today (demo) is unhealed because the remembered map died with the process and the Atlas view is empty. The nacos *catalog itself* replaces the in-memory `remembered` memory as the boot-time record of what spotter used to own — a strictly more durable source of the same information.
-- The readiness gate already orders the dependencies: nacos is probed before the sink is even constructed (`CheckReadiness`, server.go:304-307), so at boot the nacos view is reachable; if nacos dies between startup and the first tick, the new skip-on-error semantics defer the heal rather than assert a false state.
+- **Current startup ordering (superseding this historical wording):** the server first constructs and validates the configured Nacos SDK sink; when SDK cluster-admin health-check capability is unavailable, construction fails closed before any readiness/canary side effect. If construction succeeds, `CheckReadinessWithConfig` then performs the SDK service-list read plus persistent register/deregister canary. If Nacos dies between startup and the first tick, the skip-on-error semantics defer the heal rather than assert a false state. The older “readiness before sink construction” description is retained only as historical context.
 
 **Residuals that remain (honest accounting):**
 
@@ -351,7 +353,7 @@ With the nacos view as the diff source, the **existing** boot `CompareAndFlush` 
 - consul compare: `pkg/providers/consul/consul.go:400-500`; `pkg/providers/consul/convertion.go:93-120` (Cluster "").
 - nacos prune + reconstruct: `pkg/nacos/nacos.go:161-266` (PushAll/prune), `289-312` (GetAll, instance-list), `498-535` (reconstruct/parseStatus), `455-476` (clusterOf/firstPort/compositeID), `480-493` (metadataOf).
 - nacos client views: `pkg/nacos/client.go:221-235` (ListInstances, hiding), `250-286` (ListCatalogInstances), `291-313` (ListServices).
-- Wiring: `internal/server.go:301-326` (sink construction order, readiness gate), `internal/infra/config/config.go:250-253` (NacosAddr precedent), `cmd/adapter.go:123-126, 159`.
+- Wiring (historical line references): `internal/server.go:301-326` (sink construction order, readiness gate), `internal/infra/config/config.go:250-253` (NacosAddr precedent), `cmd/adapter.go:123-126, 159`. Current ordering is captured in the addendum above: SDK sink capability validation precedes readiness; readiness is SDK read/write only after construction succeeds.
 - Domain scaffolding: `internal/domain/instance/rules.go:109-172`.
 - Live probes (GET-only): `service/list` (3 services); `catalog/instances` for demo-order-service/k8s (8 hosts, ids and revisions matching the 8 running pods and their resourceVersions — e.g. pod `demo-order-service-676b75dfb7-n2l6w`, RV 38491 = metadata reversion "38491", ip 10.42.0.25); `catalog/instances` demo-pay-service/ecs (2 hosts incl. enabled=false); `instance/list` demo-pay-service (1 host — the F8 live proof); `catalog/services` (3 services, per-service counts); catalog 500 behaviors (no clusterName / bogus cluster / missing service).
 - Live kubectl (read-only): 10 demo pods + 2 kube-system pods; field extraction for the round-trip table (§1).
