@@ -1,10 +1,10 @@
 # DSCA Track 3 — Reconcile Correctness vs Nacos
 
 **Auditor:** DS-3 (reconcile correctness vs nacos)
-**Repo:** `spotter`, branch `refactor/all`, current HEAD `b54b2b6`
+**Repo:** `spotter`, branch `refactor/all`, implementation baseline `c986632`
 **Historical HEAD note:** the original audit was executed at `69b0105`; its live probes and code citations are retained as historical evidence below.
 
-> **Current-status addendum (2026-09-13, authoritative implementation HEAD `356aa75`):** Nacos startup now constructs and validates the SDK sink before readiness. The official SDK v2.3.5 lacks cluster-admin health-check update, so product startup fails closed before any readiness/canary write; if capability validation succeeds, `CheckReadinessWithConfig` performs SDK service-list read plus persistent register/deregister canary. `CheckReadiness` and `NewClient`/`NewSink` are SDK-default; only explicitly named HTTP compatibility helpers are allowed in fixtures/rollback. Ownership filtering, cache safety, and real-gate NOT VERIFIED status are governed by the current remediation plan. The historical ordering and live-demo claims below must not be read as current production behavior.
+> **Current-status addendum (2026-09-13, authoritative implementation baseline `c986632`):** Nacos startup constructs and validates the SDK sink before readiness. The current pinned SDK pseudo-version `0024865` still lacks cluster-admin health-check update, so product startup fails closed before any readiness/canary write. The historical v2.3.5 reconnect race is **FAIL / RACE_BLOCKED**; the current ARM64 pseudo-pin single-client reconnect `-race` scratch gate passed with cleanup evidence. GetAll/prune use fresh SDK read sessions with isolated temporary caches. TLS/auth/HA/Admin/Atlas production evidence remains **NOT VERIFIED**.
 **Method:** full code reading of the three reconcile surfaces + read-only live probes against the demo nacos at `127.0.0.1:18848` (GETs only: `service/list`, `instance/list`, `catalog/instances`, `catalog/services`) + read-only `kubectl get pods` against the demo k3s + analysis of the running spotter's own log (`build/demo/app.log`, PID 30306, `--push-interval 60`). No repo files were modified; the demo stack was not touched.
 
 ---

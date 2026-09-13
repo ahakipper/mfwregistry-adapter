@@ -2,10 +2,10 @@
 
 **审计日期：** 2026-09-12（当前状态增量更新至 2026-09-13）
 **仓库：** `/Users/d-robotics/go/src/github.com/ahakipper/mfwregistry-adapter`  
-**分支/提交：** `refactor/all` / `b54b2b6`
+**分支/提交：** `refactor/all` / `c986632` (implementation baseline; docs synced after)
 **文档状态：** FINAL（已完成第二轮独立 reviewer 复核）
 
-> **当前状态增补（2026-09-13，代码基线 `356aa75`）：** 生产 Nacos 默认仍为 SDK-only，但因官方 Nacos Go SDK v2.3.5 没有 cluster-admin health-check update，启动在 readiness/canary 前 **BLOCKED / NOT VERIFIED**；`http-compat` 仅测试/回滚。Nacos real/sdk-eval harness 已加入 TLS/CA/server-name/auth guards、redacted evidence 和 write-attempt cleanup，本地 scratch 目标已补充但不能宣称生产协议 PASS。Atlas 仍是普通 Go struct + JSON codec 的 discoverymock stand-in，真实 protobuf/TLS/auth/method compatibility **NOT VERIFIED**。Observe harness 的命令、健康检查和 teardown 已 context-bounded，clean host 缺外部依赖会显式 `NOT VERIFIED: EnvError/InfraError` skip；完整 2h OBS 未运行。Nacos GetAll 只返回 `spotterOwner` 自有条目；Cache Delete/GetAll 已修复 nil、深拷贝、空 provider 和 legacy 唯一匹配。Notifier 有 owned context/Close/retry/fail-closed 生命周期，但真实 AppCenter endpoint/payload/auth/SLA 未提供。DDD active graph 使用显式 ports，legacy bridge 集中于 `internal/infra/legacycompat`；Consul 同规模观察按当前无机器部署列为 accepted non-goal。`go vet ./...`、相关 race/unit/tagged gates 已通过；真实 Nacos/Atlas/OBS-full 证据仍保持 NOT VERIFIED。
+> **当前状态增补（2026-09-13，实现基线 `c986632`）：** 生产 Nacos 默认仍为 SDK-only，但因当前 pinned Nacos SDK pseudo-version `0024865` 没有 cluster-admin health-check update，启动在 readiness/canary 前 **BLOCKED / NOT VERIFIED**；`http-compat` 仅测试/回滚。Nacos real/sdk-eval harness 已加入 TLS/CA/server-name/auth guards、redacted evidence 和 write-attempt cleanup，本地 scratch 目标已补充但不能宣称生产协议 PASS。Atlas 仍是普通 Go struct + JSON codec 的 discoverymock stand-in，真实 protobuf/TLS/auth/method compatibility **NOT VERIFIED**。Observe harness 的命令、健康检查和 teardown 已 context-bounded，clean host 缺外部依赖会显式 `NOT VERIFIED: EnvError/InfraError` skip；完整 2h OBS 未运行。Nacos GetAll 只返回 `spotterOwner` 自有条目；Cache Delete/GetAll 已修复 nil、深拷贝、空 provider 和 legacy 唯一匹配。Notifier 有 owned context/Close/retry/fail-closed 生命周期，但真实 AppCenter endpoint/payload/auth/SLA 未提供。DDD active graph 使用显式 ports，legacy bridge 集中于 `internal/infra/legacycompat`；Consul 同规模观察按当前无机器部署列为 accepted non-goal。`go vet ./...`、相关 race/unit/tagged gates 已通过；真实 Nacos/Atlas/OBS-full 证据仍保持 NOT VERIFIED。
 
 > Nacos exported `NewClient`/`NewSink` now default to SDK; raw HTTP is
 > available only through explicitly named compatibility constructors, and SDK
@@ -48,7 +48,7 @@
 |---|---|---|
 | A0–A3 身份、顺序、全量重试 | **IMPLEMENTED / TESTED** | source-aware identity、keyed per-identity gate、typed full retry、revalidation、tombstone scope 已提交；仍需真实 2h/生产观测验证。 |
 | K8s cache/worker | **IMPLEMENTED / RACE-TESTED** | cache pointer swap、stop-state、HasSynced cancel 竞态已修复；`--appcodes` 多值 membership、full SyncAll metadata、cross-provider tombstone 已修复；ants pool overload 现在 nonblocking 并计数 drop。 |
-| Nacos naming | **SDK DEFAULT / NO PRODUCTION RAW HTTP / REAL EVIDENCE PENDING** | 官方 SDK v2.3.5 facade 已接入；register/deregister/list/query/subscribe/service-list/catalog/prune/readiness 均经 SDK；SDK mode 不分配 compatibility HTTP client。cluster Admin 的 NONE health-check update 在 SDK v2.3.5 不存在，现于业务 register 前返回 typed `ErrUnsupportedOperation`、阻止远端写入并显式记录 release gap；HTTP 仅显式 compatibility/test，且 product wiring 拒绝。 |
+| Nacos naming | **SDK DEFAULT / NO PRODUCTION RAW HTTP / REAL EVIDENCE PARTIAL** | 当前 pinned SDK pseudo-version `0024865` facade 已接入；register/deregister/list/query/subscribe/service-list/catalog/prune/readiness 均经 SDK，GetAll/prune 使用 fresh session+isolated cache；cluster Admin 的 NONE health-check update 仍 typed fail-closed；ARM64 scratch lifecycle/reconnect 已通过，HA/TLS/生产证据仍缺。 |
 | Atlas wire | **NOT VERIFIED (P1)** | JSON mirror + guarded `atlas_real` harness；真实 protobuf/JSON、TLS/auth/method path 仍待 scratch。 |
 | Observe | **HARNESS FIXED / 2H NOT RUN** | zap `ts` 解析和 ledger-before-apply/delete 已修复；完整自包含 2h OBS 仍待执行。 |
 | DDD / notice | **CODE IMPLEMENTED / REAL DELIVERY PENDING** | active provider/elector/conversion/metrics graph uses injected ports; legacy constructors/bridge remain for compatibility; aggregate is build-gated; appcenter HTTP adapter is fail-closed until deployment contract is supplied. |
@@ -92,8 +92,7 @@ amd64，QEMU 下 Java 持续高 CPU 超过 5 分钟仍无 readiness 响应。容
 | Observe `logSlice` + ledger/apply 竞态 | **HARNESS FIXED; 2H PENDING** | zap JSON `ts`/行首时间解析和 apply/delete 前 ledger clock 已修复并有 deterministic tests；完整自包含 2h 观察尚未执行 | 是：旧缺口已修复，长时证据仍缺 |
 | Consul 同等规模观察 | **ACCEPTED NON-GOAL** | 2h/1000 观察只启动 `--providers k8s`；当前没有机器部署场景，按本次范围暂不展开 | 否；范围边界已明确 |
 | Nacos HTTP/SDK Sink | **SDK DEFAULT / PRODUCTION SDK-ONLY / REAL PARTIAL** | naming lifecycle/query/subscribe/service-list、catalog/prune 和 readiness read/write 走官方 SDK；cluster Admin 无 SDK 等价接口，SDK mode 在业务 register 前 fail-closed/显式报错且不产生远端写入；HTTP 仅集中 compatibility adapter，product 环境拒绝；真实 Nacos 2.x/auth/TLS/HA 证据仍缺 | 是：此前“catalog/readiness HTTP exception”描述已被当前实现取代 |
-| Nacos 官方 SDK gRPC 能力 | **SUPPORTED BY SDK AND WIRED** | v2.3.5 naming facade 已接入；persistent register/deregister 按 SDK 设计走 HTTP，ephemeral/batch 走 gRPC；真实 server round-trip 仍待执行 | 是 |
-| Nacos SDK 统一接入约束 | **CODE PASS / RELEASE NOT VERIFIED (P1)** | `TransportSDK` 默认、SDK mode 不分配 raw HTTP、catalog/prune/readiness 通过 SDK facade、cluster Admin typed unsupported、product 拒绝 `http-compat`；静态 raw-HTTP allowlist/negative tests 已补齐；真实 query/list/subscribe/batch/reconnect/auth/TLS 证据仍缺 | 是：代码门禁已落地，发布证据未闭环 |
+| Nacos 官方 SDK gRPC 能力 | **SUPPORTED BY SDK AND WIRED** | 当前 pseudo-pin `0024865` naming facade 已接入；persistent register/deregister 按 SDK 设计走 HTTP，ephemeral/batch 走 gRPC；ARM64 scratch lifecycle/reconnect 已有 `-race` 证据，目标 HA/TLS/auth 仍待执行 | 是 || Nacos SDK 统一接入约束 | **CODE PASS / RELEASE NOT VERIFIED (P1)** | `TransportSDK` 默认、SDK mode 不分配 raw HTTP、catalog/prune/readiness 通过 SDK facade、cluster Admin typed unsupported、product 拒绝 `http-compat`；静态 raw-HTTP allowlist/negative tests 已补齐；真实 query/list/subscribe/batch/reconnect/auth/TLS 证据仍缺 | 是：代码门禁已落地，发布证据未闭环 |
 | Atlas 真实 protobuf wire | **NOT VERIFIED / P1** | 本仓库模型是普通 Go struct；生产 `Dial` 强制 JSON codec，只有本地 discoverymock/e2e 证明 JSON 链路；未证明真实 Atlas 接受该 codec | 否；限制说明准确 |
 | Notice / appcenter 告警 | **CODE PARTIAL / REAL DELIVERY PENDING** | active graph 已使用注入式 `Notifier`，新增 HTTP adapter、重试、失败计数、redaction 和 fail-closed；真实 appcenter endpoint/payload/auth/SLA 尚未验证 | 是 |
 | DDD 目标架构 | **CODE PARTIAL / SHIM RETIREMENT PENDING** | active provider/elector/conversion/metrics graph 已使用显式依赖；legacy constructors/bridge 保留兼容，aggregate 已由 `legacyaggregate` build tag 隔离 | 是 |
@@ -105,14 +104,14 @@ amd64，QEMU 下 Java 持续高 CPU 超过 5 分钟仍无 readiness 响应。容
 
 ### 3.1 已经具备的能力
 
-当前 `pkg/nacos` 的生产路径通过官方 `nacos-sdk-go/v2@v2.3.5` naming facade；兼容
+当前 `pkg/nacos` 的生产路径通过官方 `nacos-sdk-go/v2` pseudo-pin `0024865` naming facade；兼容 HTTP 客户端仍保留，但只能由显式 `TransportHTTPCompat` 选择。SDK mode 不分配 compatibility `net/http` client，也不会在不支持的 SDK 操作上回退裸 HTTP。
 HTTP 客户端仍保留，但只能由显式 `TransportHTTPCompat` 选择。SDK mode 不分配
 compatibility `net/http` client，也不会在任何不支持的 SDK 操作上偷偷回退裸 HTTP。
 
 - 生产 Nacos 操作统一经官方 SDK（或官方 SDK 暴露的等价 facade）；不得在业务路径新增散落裸 `net/http` 调用。
-- persistent register/deregister 通过官方 SDK（SDK v2.3.5 按设计对 persistent 实例使用其内部 HTTP transport）；service-list、SelectAll/query、subscribe/unsubscribe 和 readiness read/write canary 均通过 SDK API。
+- persistent register/deregister 通过官方 SDK（persistent 的内部 HTTP 是 SDK 自身实现）；service-list、SelectAll/query、subscribe/unsubscribe、catalog/prune 和 readiness read/write canary 均通过 SDK API。
 - catalog/prune 在 SDK mode 通过 `SelectAllInstances` 完整视图实现（包含 `enabled=false`、unhealthy 和 zero-weight host），避免依赖 Admin catalog HTTP endpoint；HTTP catalog 仅保留在明确标注的兼容 fixture。
-- cluster health-check `UpdateCluster` 在官方 naming SDK v2.3.5 没有等价 Admin API；SDK mode 返回 typed `ErrUnsupportedOperation` 并输出 release blocker，绝不回退裸 HTTP。只有显式兼容模式允许该 PUT。
+- cluster health-check `UpdateCluster` 在当前 pseudo-pin `0024865` naming SDK 没有等价 Admin API；SDK mode 返回 typed `ErrUnsupportedOperation` 并输出 release blocker，绝不回退裸 HTTP。只有显式兼容模式允许该 PUT。
 - product 环境启动拒绝 `TransportHTTPCompat`；兼容 transport 只用于测试或有审批的迁移回滚。
 
 现有实现证据：
@@ -128,7 +127,7 @@ compatibility `net/http` client，也不会在任何不支持的 SDK 操作上�
 因此，“HTTP 是否完全就绪”要拆成两个答案：
 
 - **兼容功能：是。** 显式 HTTP compatibility adapter 的注册、删除、分页、catalog 清理、状态映射、错误分类和本地验证已具备。
-- **生产 SDK 路径：代码已统一，生产证据仍 PARTIAL。** SDK naming/catalog/readiness 路径和 product transport gate 已落地；cluster-admin health-check 仍是 SDK v2.3.5 的 typed unsupported release blocker，且真实 Nacos/Atlas/TLS/HA 尚未作为本仓库证据。
+- **生产 SDK 路径：代码已统一，生产证据仍 PARTIAL。** 当前 pseudo-pin `0024865` 的 ARM64 scratch lifecycle/reconnect 已通过；cluster-admin、HA/TLS/auth 和生产发布仍为 NOT VERIFIED。
 
 ### 3.2 当前 Sink 的一致性风险
 
@@ -196,7 +195,7 @@ Nacos scratch/pre-prod 上验证。
 
 原始问题是 `pkg/nacos` 直接拼接 Nacos v1 HTTP 请求，绕过官方 SDK 的认证、token
 刷新、gRPC/HTTP 路由、重连、redo/cache 和版本兼容处理。当前代码已将生产路径统一到
-`nacos-sdk-go/v2@v2.3.5` facade：catalog/prune 改用 `SelectAllInstances`，readiness
+`nacos-sdk-go/v2` pseudo-pin `0024865` facade：catalog/prune 改用 `SelectAllInstances`，readiness
 改用 SDK service-list + persistent canary，SDK mode 不分配 raw HTTP client；cluster
 health-check update 因 SDK 无 Admin API 而返回 typed `ErrUnsupportedOperation`，不再
 隐式回退。`TransportHTTPCompat` 仅保留隔离测试/审批回滚，product wiring 直接拒绝。
@@ -217,7 +216,7 @@ health-check update 因 SDK 无 Admin API 而返回 typed `ErrUnsupportedOperati
 **结论：官方 Go SDK 支持 Nacos 2.x gRPC，当前仓库已通过 facade 接入；生产路径
 不再裸 HTTP，但真实目标版本证据仍未提供。**
 
-本地核验 `github.com/nacos-group/nacos-sdk-go/v2@v2.3.5`：
+本地核验 `github.com/nacos-group/nacos-sdk-go/v2` pseudo-pin `v2.3.6-0.20260902123754-002486583df5`（commit `0024865`）：
 
 - `clients/naming_client/naming_grpc/naming_grpc_proxy.go` 提供 `RegisterInstance`、`BatchRegisterInstance`、`DeregisterInstance`、`GetServiceList` 等 gRPC proxy。
 - `clients/naming_client/naming_proxy_delegate.go` 的 `getExecuteClientProxy` 按 `instance.Ephemeral` 选择：persistent (`false`) 走 `naming_http`，ephemeral (`true`) 走 `naming_grpc`。
@@ -229,7 +228,7 @@ health-check update 因 SDK 无 Admin API 而返回 typed `ErrUnsupportedOperati
 
 - [Nacos Go SDK Usage](https://nacos.io/en/docs/latest/manual/user/go-sdk/usage/)：说明 Go SDK v2、Nacos > 2.x、`GrpcPort`、namespace、username/password 等配置。
 - [Nacos Open API Overview](https://nacos.io/en/docs/latest/manual/user/overview/api-overview/)：说明 Nacos 3.x 的 Client Open API 主要走 gRPC，Admin/Console API 仍走 HTTP；这意味着 Nacos 2.1 的 v1 HTTP 方案不能直接假定等同于 Nacos 3.x gRPC API。
-- [nacos-sdk-go v2.3.5 release](https://github.com/nacos-group/nacos-sdk-go/releases)：当前核验到的 v2 线版本。
+- [nacos-sdk-go upstream release history](https://github.com/nacos-group/nacos-sdk-go/releases)：正式 tag 仍停留在 v2.3.5；本仓库当前使用的 race 修复 pseudo-pin 见 [commit 0024865](https://github.com/nacos-group/nacos-sdk-go/commit/002486583df5ad370ab809cd19dfd97e71b2ef6d)。
 - [nacos-sdk-proto](https://github.com/nacos-group/nacos-sdk-proto)：统一 gRPC protobuf 定义。
 
 SDK 并不意味着可以直接替换当前 Sink，且 persistent register 的协议细节必须如实说明：
@@ -430,7 +429,7 @@ Reviewer 确认：
 1. R1 成立：`SyncAll` 失败进入 retry 后经 `PushTo` 降级为单实例 `Push`，不会重试 Nacos `PushAll` 的 catalog prune；该结论由 `worker.go:66-70`、`unsynced_service.go:221-241`、`fanout.go:397-404` 共同证明。
 2. R2 成立：Fanout 和 provider ants pool 允许同一实例的多个 revision 并行进入 Nacos；Nacos register 是无条件 upsert，retry queue 的最高 revision 规则不能保护已成功但乱序完成的 happy path。`fanout.go:288-320`、`k8s.go:217-219`、`nacos.go:81-117` 的注释/实现不一致已被确认。
 3. K1 成立：`QueueObject.Key`/`GetByKey`/`InstanceId` 缺少 cluster 维度，`items[0]` 选择可跨集群取错对象；证据为 `k8srobot.go:366-377`、`k8s.go:269-273`、`conversion.go:103-105`。
-4. Nacos SDK 判断成立：v2.3.5 的 `getExecuteClientProxy` 对 persistent instance 走 HTTP、ephemeral 走 gRPC，`BatchRegisterInstance` 走 gRPC；“SDK 有能力”不等于“本仓库已启用”。
+4. Nacos SDK 判断成立（历史审计基线）：v2.3.5 的 `getExecuteClientProxy` 对 persistent instance 走 HTTP、ephemeral 走 gRPC，`BatchRegisterInstance` 走 gRPC；当前实现已统一经 pseudo-pin `0024865` facade。
 5. HTTP Sink 保持“功能 PASS / 架构不合规 / 生产 PARTIAL”是正确边界；ready 200、auth/namespace、真实 HA/TLS、所有权和 SDK 统一接入仍不能被本地 mock 证明。
 6. 空源/ownership/readiness 结论应统一理解为“安全保护优先但闭环不完整”，而不是已完成闭环。
 7. Consul 同规模观察应改为 **accepted non-goal**，而不是当前范围内的缺陷；重新启用 ECS/机器部署时再打开该门禁。
@@ -444,7 +443,7 @@ catalog/prune/readiness routing、B2 scoped readiness、Atlas/Observe fail-close
 K8s cache pointer/stop-state race、multi-appcode membership、normal SyncAll metadata
 propagation、cross-provider tombstone scope、nonblocking provider pool submission 和
 `go vet` 两条诊断。仍为 P1/P2 REMAINING：真实 Nacos/Atlas/2h Observe 证据、DDD
-legacy globals、真实 appcenter 告警，以及 SDK v2.3.5 缺少 cluster-admin health-check
+legacy globals、真实 appcenter 告警，以及当前 SDK pseudo-pin `0024865` 缺少 cluster-admin health-check
 API 的有期限 typed unsupported 例外；这些不能由本地 mock、tagged skip 或计划 reviewer
 PASS 代替。
 

@@ -8,7 +8,7 @@
 
 **版本变更：** v6 将“禁止 Nacos 生产路径裸 HTTP、统一经官方 Nacos SDK/facade”从可选 POC 提升为 P1 强制整改和 Nacos 启用时的发布门禁，并补充 SDK 迁移、例外管理和完整测试矩阵。
 
-> **Current-status addendum (2026-09-13, code baseline `356aa75`):** SDK-only Nacos production startup is intentionally **BLOCKED / NOT VERIFIED** before readiness until an official Admin/Maintainer cluster-health capability is available; `http-compat` is test/rollback only. Nacos real gates are guarded and cleanup-safe with local ARM64 scratch evidence. Atlas remains a fake JSON mirror and real protobuf/TLS/auth compatibility is **NOT VERIFIED**. Observe harness command/health/teardown paths are bounded and clean-host missing prerequisites are explicit EnvError/InfraError skips; the full 2h run has not run. Nacos ownership filtering, notifier lifecycle, discovery-center empty-provider retrieval, and cache Delete nil/deep-copy/legacy-identity behavior are covered by deterministic/race tests. DDD globals are isolated behind `internal/infra/legacycompat`; aggregate is build-gated. Consul scale observation remains an accepted non-goal. The exact evidence commands are `go vet ./...`, targeted `go test -race` package gates, `go test -race -tags=observe ./tests/observe/...`, and guarded `nacos_real`/`atlas_real` tags; skipped real targets never count as production PASS.
+> **Current-status addendum (2026-09-13, implementation baseline `c986632`):** SDK-only Nacos production startup is **BLOCKED / NOT VERIFIED** before readiness until an official Admin/Maintainer cluster-health capability is available; the production SDK is pinned to pseudo-version `v2.3.6-0.20260902123754-002486583df5` (commit `0024865`). Its guarded ARM64 single-client reconnect `-race` gate passed locally; historical v2.3.5 race output is provenance only. Authoritative GetAll/prune use one fresh SDK read session per snapshot with an isolated temporary cache. Atlas protobuf/TLS/auth, full 2h Observe, AppCenter delivery, and production HA/TLS/auth evidence remain **NOT VERIFIED**; Consul scale remains an accepted non-goal.
 > Exported Nacos `NewClient`/`NewSink` now default to SDK and fail closed on the
 > cluster-admin capability gap; raw HTTP is reachable only through explicitly
 > named `NewHTTPCompatClient`/`NewHTTPCompatSink` compatibility constructors and
@@ -20,13 +20,13 @@
 > with cleanup evidence; see the artifact for the exact scope and negative
 > plaintext-auth guard result.
 
-**当前基线：** `refactor/all` / `356aa75`（实现基线 `b38505c`，其后为文档同步提交）。A0→A3、B1、B2 HTTP 过渡层、B3 SDK seam、B4 Atlas gate、C1 Observe 修复、D1 provider overflow/lifecycle、C2 logger/notifier/metrics 注入和两条 `go vet` 诊断清零已按阶段提交并通过 focused/full/race/cover 测试；`go vet ./...` 当前为 0。Nacos naming、service-list、SelectAll/query、subscribe/unsubscribe、catalog/prune 和 readiness read/write 已统一经官方 SDK；cluster Admin health-check update 在 SDK v2.3.5 中没有等价接口，SDK mode typed fail-closed，HTTP 仅显式 compatibility/test 且 product wiring 拒绝。真实 Nacos/Atlas 证据、appcenter endpoint contract、完整 2h Observe 和最终真实环境发布证据仍未闭环。
+**当前基线：** `refactor/all` / `c986632`（其后为文档同步提交）。A0→A3、B1、B2 HTTP 过渡层、B3 SDK seam、B4 Atlas gate、C1 Observe 修复、D1 provider overflow/lifecycle、C2 logger/notifier/metrics 注入和两条 `go vet` 诊断清零已按阶段提交并通过 focused/full/race/cover 测试；`go vet ./...` 当前为 0。Nacos naming、service-list、SelectAll/query、subscribe/unsubscribe、catalog/prune 和 readiness read/write 已统一经官方 SDK；cluster Admin health-check update 在 SDK pseudo-version `0024865` 中没有等价接口，SDK mode typed fail-closed，HTTP 仅显式 compatibility/test 且 product wiring 拒绝。真实 Nacos/Atlas 证据、appcenter endpoint contract、完整 2h Observe 和最终真实环境发布证据仍未闭环。
 
 **Current SDK evidence clarification (2026-09-13):** The implementation uses `github.com/nacos-group/nacos-sdk-go/v2` pseudo-pin `v2.3.6-0.20260902123754-002486583df5` (commit `0024865`). The guarded ARM64 single-client reconnect `-race` run passed; historical v2.3.5 race output is provenance only. Untagged SDK, HA, TLS, Admin/Maintainer and production readiness remain `NOT VERIFIED`.
 
 **范围边界：** K8s 是本阶段规模主路径；Consul 1000+ 规模观察是 accepted non-goal，只有重新启用 ECS/机器部署时才开启独立里程碑。Nacos SDK 统一接入是生产必做项；兼容验证完成前可保留 HTTP 回滚/对照通道，但不能把裸 HTTP 作为最终生产路径。
 
-**最新启动门禁（54768c9）：** `NewSinkWithConfig` 在 SDK 模式下会先检查 cluster-admin health-check 能力；官方 Nacos Go SDK v2.3.5 未提供该操作，因此在 readiness read/write canary 之前 fail-fast，禁止任何 Nacos side effect。生产 Nacos 状态为 `BLOCKED / NOT VERIFIED`，直至官方 Admin/Maintainer SDK 或经批准、版本化的 adapter 完成真实目标版本验证；`http-compat` 仅用于显式测试/回滚。
+**最新启动门禁（54768c9）：** `NewSinkWithConfig` 在 SDK 模式下会先检查 cluster-admin health-check 能力；当前 pinned Nacos SDK pseudo-version `0024865` 未提供该操作，因此在 readiness read/write canary 之前 fail-fast，禁止任何 Nacos side effect。生产 Nacos 状态为 `BLOCKED / NOT VERIFIED`，直至官方 Admin/Maintainer SDK 或经批准、版本化的 adapter 完成真实目标版本验证；`http-compat` 仅用于显式测试/回滚。
 
 当前代码提供 context-aware `NacosClusterAdmin` 注入 seam；它在业务
 `RegisterInstance` 前完成 health-check 更新、并以 typed/retryable error
@@ -46,7 +46,7 @@ readiness 前 fail-closed，且不会降级为 HTTP。
 only path：SDK mode 不分配 compatibility `net/http` client；`ListCatalogInstances`
 通过官方 `SelectAllInstances`（包括 disabled/unhealthy/zero-weight host）实现；
 `CheckReadinessWithConfig` 通过 SDK service-list RPC + persistent register/deregister
-canary 完成读写 gate。官方 naming SDK v2.3.5 没有 cluster Admin health-check update，
+canary 完成读写 gate。当前 pinned naming SDK pseudo-version `0024865` 没有 cluster Admin health-check update，
 因此 `UpdateCluster` 在 SDK mode 返回 typed `ErrUnsupportedOperation`，sink 在业务
 register 前 fail-closed（不产生远端写入）并记录明确 release gap，禁止 fallback。
 `TransportHTTPCompat` 只用于 mock/迁移回滚，
@@ -458,9 +458,9 @@ Nacos 运行状态机与队列动作：
 
 ### 10.1 已确认事实
 
-官方 Go SDK v2 支持 naming gRPC proxy；`BatchRegisterInstance` 走 gRPC；SDK 根据 `Ephemeral` 选择 persistent HTTP 或 ephemeral gRPC。当前仓库使用 persistent instance，因此直接引入 SDK 不会自动把现有单实例 register 变成 gRPC。SDK 能力存在不等于本仓库已经合规：当前 `pkg/nacos` 仍直接调用裸 HTTP，必须完成统一 SDK facade 和迁移门禁。
+官方 Go SDK v2 支持 naming gRPC proxy；`BatchRegisterInstance` 走 gRPC；SDK 根据 `Ephemeral` 选择 persistent HTTP 或 ephemeral gRPC。当前仓库使用 persistent instance，因此单实例 register 仍由官方 SDK 内部使用其 HTTP transport；这不是仓库的裸 HTTP。当前生产路径已统一通过 SDK facade，真实目标版本协议兼容仍需外部证据。
 
-**执行状态（2026-09-13，B3 SDK-only amendment）：** 工作树已接入 `github.com/nacos-group/nacos-sdk-go/v2 v2.3.5`，新增 `TransportMode` 和 `sdkNamingFacade`。生产 server wiring 默认选择 `sdk`；`http-compat` 只允许显式测试/回滚，并在 `Env=product` 直接拒绝。persistent register/deregister、SelectAll（含 disabled）、service list、subscribe/unsubscribe、catalog/prune（由 SelectAll complete view 实现）和 readiness read/write canary 通过官方 naming SDK；SDK 自动配置 gRPC 端口（server port + 1000）、namespace/group、username/password、TLS 和多 server list。该 SDK 没有 cluster Admin health-check update 等价接口，SDK mode 的 `UpdateCluster` 返回 typed `ErrUnsupportedOperation` 并输出 release blocker，永不回退 raw HTTP。静态 access token 在 SDK 模式下 fail-closed（SDK v2.3.5 没有等价静态 token 配置），避免“配置看似生效但实际未认证”。
+**执行状态（2026-09-13，B3 SDK-only amendment）：** 工作树已接入 `github.com/nacos-group/nacos-sdk-go/v2` pseudo-pin `v2.3.6-0.20260902123754-002486583df5`（commit `0024865`）。生产 server wiring 默认选择 `sdk`；`http-compat` 只允许显式测试/回滚，并在 `Env=product` 直接拒绝。persistent register/deregister、SelectAll（含 disabled）、service list、subscribe/unsubscribe、catalog/prune 和 readiness read/write canary 通过官方 naming SDK；当前 pinned SDK 没有 cluster Admin health-check update 等价接口，SDK mode typed fail-closed，静态 access token 也 fail-closed。GetAll/prune 每个完整快照复用一个 fresh SDK session，并使用隔离临时 CacheDir；ARM64 scratch single-client reconnect `-race` 已 PASS，但 untagged/HA/TLS/Admin/production 仍 NOT VERIFIED。
 
 **B3 发布判定：** SDK seam 与离线测试已通过，但生产门禁仍为 **NOT VERIFIED / REMAINING**。`go test -tags=nacos_sdk_eval ...` 与 `go test -tags=nacos_real ...` 在未提供 `NACOS_SERVER` 时只会 SKIP；必须在 scratch/pre-production Nacos 2.x 上补齐 query/list、subscribe、batch（persistent 明确不支持时保留 per-instance 证据）、catalog/prune、namespace/group、TLS/auth、重连/重启、错误恢复和最终集合 hash，才能关闭 `ID-NACOS-SDK-MANDATE`。
 
@@ -560,8 +560,7 @@ go test -tags=nacos_real -race ./tests/e2e/... -run 'TestNacosReal|TestNacosSDKR
 - `tests/e2e/nacos_real_test.go`（`nacos_real` tag；由 B2 创建）；
 - `tests/e2e/nacos_restart_test.go`（`nacos_restart` tag；仅允许严格命名的
   scratch 容器，关闭旧 SDK client 后用新 client 验证 persistent canary 在单节点
-  restart 后保留；non-race scratch PASS、race run 暴露 vendor SDK reconnect
-  data race，故自动 reconnect 标记 FAIL / RACE_BLOCKED）；
+  restart 后保留；另有单客户端 outage→write→fresh-query gate。历史 v2.3.5 race run 标记 FAIL / RACE_BLOCKED；当前 pseudo-pin `0024865` 的 ARM64 single-client reconnect `-race` scratch run 已 PASS）；
 - 动态 Nacos 端口、TLS/auth/namespace/group、leaderless/write probe、catalog/list；
 - 保存 summary 和 hash，不提交原始全量日志。
 
