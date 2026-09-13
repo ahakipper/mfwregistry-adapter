@@ -780,36 +780,44 @@ func (c *Client) ListCatalogInstances(serviceName, clusterName string) ([]Host, 
 // is the requested page size (the plan's default loop uses 100).
 func (c *Client) ListServices(pageSize int) ([]string, error) {
 	if c.sdk != nil {
-		if pageSize < 1 {
-			pageSize = 100
-		}
-		all := make([]string, 0)
-		for page := 1; page <= maxServiceListPages; page++ {
-			namespace := c.config.NamespaceID
-			if namespace == DefaultNamespaceID {
-				namespace = ""
-			}
-			names, count, err := c.sdk.services(page, pageSize, namespace)
-			if err != nil {
-				return nil, err
-			}
-			all = append(all, names...)
-			if len(names) < pageSize {
-				// The SDK exposes the server-declared total. A server-side
-				// page-size clamp can make a non-terminal page look short;
-				// continue until Count is collected instead of truncating the
-				// authoritative service view.
-				if count > 0 && len(all) < count {
-					continue
-				}
-				return all, nil
-			}
-			if count > 0 && len(all) >= count {
-				return all, nil
-			}
-		}
-		return nil, fmt.Errorf("nacos sdk: service list pagination exceeded %d pages", maxServiceListPages)
+		return listServicesSDK(c.sdk, pageSize, c.config.NamespaceID)
 	}
+	return c.listServicesHTTP(pageSize)
+}
+
+func listServicesSDK(sdk *sdkNamingFacade, pageSize int, namespaceID string) ([]string, error) {
+	if pageSize < 1 {
+		pageSize = 100
+	}
+	all := make([]string, 0)
+	for page := 1; page <= maxServiceListPages; page++ {
+		namespace := namespaceID
+		if namespace == DefaultNamespaceID {
+			namespace = ""
+		}
+		names, count, err := sdk.services(page, pageSize, namespace)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, names...)
+		if len(names) < pageSize {
+			// The SDK exposes the server-declared total. A server-side
+			// page-size clamp can make a non-terminal page look short;
+			// continue until Count is collected instead of truncating the
+			// authoritative service view.
+			if count > 0 && len(all) < count {
+				continue
+			}
+			return all, nil
+		}
+		if count > 0 && len(all) >= count {
+			return all, nil
+		}
+	}
+	return nil, fmt.Errorf("nacos sdk: service list pagination exceeded %d pages", maxServiceListPages)
+}
+
+func (c *Client) listServicesHTTP(pageSize int) ([]string, error) {
 	if pageSize < 1 {
 		pageSize = 100
 	}

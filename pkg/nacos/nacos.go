@@ -507,7 +507,18 @@ func isCatalogNotFound(err error) bool {
 // diff compares survives the round trip; the compared sets deliberately
 // stay inside that round-trippable intersection.
 func (s *Sink) GetAll(statuses []int32, provider string) (*instance.InstanceList, error) {
-	services, err := s.client.ListServices(100)
+	readClient := s.client
+	var session *sdkNamingFacade
+	if s.client.sdk != nil && s.client.sdkFactory != nil {
+		var err error
+		session, err = s.client.sdkFactory(s.client.config)
+		if err != nil {
+			return nil, err
+		}
+		defer session.close()
+		readClient = &Client{config: s.client.config, sdk: session}
+	}
+	services, err := readClient.ListServices(100)
 	if err != nil {
 		return nil, err
 	}
@@ -518,7 +529,7 @@ func (s *Sink) GetAll(statuses []int32, provider string) (*instance.InstanceList
 		// skipped (empty), exactly like the prune (nacos.go's prune walk);
 		// any other error aborts the view — a partial diff input must never
 		// be mistaken for a complete one.
-		hosts, err := s.client.ListCatalogInstances(service, provider)
+		hosts, err := readClient.ListCatalogInstances(service, provider)
 		if err != nil {
 			if isCatalogNotFound(err) {
 				continue
