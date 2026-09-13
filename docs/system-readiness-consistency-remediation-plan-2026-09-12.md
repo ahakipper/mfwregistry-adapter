@@ -19,8 +19,9 @@ only path：SDK mode 不分配 compatibility `net/http` client；`ListCatalogIns
 通过官方 `SelectAllInstances`（包括 disabled/unhealthy/zero-weight host）实现；
 `CheckReadinessWithConfig` 通过 SDK service-list RPC + persistent register/deregister
 canary 完成读写 gate。官方 naming SDK v2.3.5 没有 cluster Admin health-check update，
-因此 `UpdateCluster` 在 SDK mode 返回 typed `ErrUnsupportedOperation`，sink 记录
-明确 release gap，禁止 fallback。`TransportHTTPCompat` 只用于 mock/迁移回滚，
+因此 `UpdateCluster` 在 SDK mode 返回 typed `ErrUnsupportedOperation`，sink 在业务
+register 前 fail-closed（不产生远端写入）并记录明确 release gap，禁止 fallback。
+`TransportHTTPCompat` 只用于 mock/迁移回滚，
 `Env=product` 启动直接拒绝。新增 facade、raw-HTTP nil guard、SDK catalog/readiness
 negative tests 以及 product transport gate；真实 Nacos 目标版本证据仍必须在 scratch/pre-prod
 补齐，且 cluster-admin 例外在官方 Admin/Maintainer SDK 可用前不能宣称 production PASS。
@@ -381,7 +382,7 @@ type EventQueue interface {
 - 所有 register/deregister/list/catalog/cluster 请求统一注入 namespace/group/auth；禁止保留散落的 `DefaultNamespaceID` 常量作为唯一路径。SDK mode 的 register/deregister/list/query/catalog/service-list/subscribe/unsubscribe 走官方 facade；cluster Admin 不支持时必须返回 typed unsupported。
 - readiness 由 read probe + dedicated write probe 构成。write probe 使用 owner-scoped canary instance，成功后立即 deregister；清理失败必须告警，不得污染业务 scope。
 - 迁移完成后仅保留当前 HTTP bounded transport 作为隔离的回滚/对照 adapter；SDK mode 不分配该 client，禁止在业务包新增裸 `net/http` 调用。并发/连接/超时仍需配置化并暴露 metrics，但 HTTP compatibility 不能据此宣称生产 SDK 接入完成。
-- `UpdateCluster` 失败需要可重试、可观测；不能只写 warning 后无限等下一次偶然 register。
+- `UpdateCluster` 在 SDK mode 无等价 API 时必须在业务 register 前 fail-closed、可观测且 typed；显式 HTTP compatibility 模式的历史 retry/warning 语义只服务迁移回滚，不能影响 product。
 
 错误分类决策树：
 
