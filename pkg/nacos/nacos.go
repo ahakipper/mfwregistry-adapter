@@ -250,6 +250,12 @@ func NewSink(addr string, logger ports.Logger) (*Sink, error) {
 // TransportMode resolves to the official SDK; callers that need the temporary
 // HTTP path must set TransportHTTPCompat explicitly.
 func NewSinkWithConfig(config ClientConfig, logger ports.Logger) (*Sink, error) {
+	if config.TransportMode == "" || config.TransportMode == TransportSDK {
+		// The pinned naming SDK has no cluster-admin health-check operation.
+		// A persistent sink cannot safely start without proving that control
+		// plane is available; fail during startup before accepting writes.
+		return nil, fmt.Errorf("nacos: SDK sink startup blocked: %w (cluster-health-check-update requires an approved Admin/Maintainer SDK or explicit http-compat)", ErrUnsupportedOperation)
+	}
 	client, err := NewClientWithConfig(config, logger)
 	if err != nil {
 		return nil, err

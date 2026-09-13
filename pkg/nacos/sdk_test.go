@@ -219,6 +219,13 @@ func TestSDKUnsupportedClusterAdminFailsClosed(t *testing.T) {
 	}
 }
 
+func TestSDKSinkConstructionFailsFastOnUnsupportedClusterAdmin(t *testing.T) {
+	_, err := NewSinkWithConfig(ClientConfig{ServerURL: "127.0.0.1:8848", TransportMode: TransportSDK}, ports.NopLogger{})
+	if !errors.Is(err, ErrUnsupportedOperation) {
+		t.Fatalf("NewSinkWithConfig(sdk) error = %v, want ErrUnsupportedOperation", err)
+	}
+}
+
 func TestSDKSinkRegisterFailsClosedBeforeRemoteWrite(t *testing.T) {
 	fake := &fakeSDKNaming{}
 	sink := &Sink{
