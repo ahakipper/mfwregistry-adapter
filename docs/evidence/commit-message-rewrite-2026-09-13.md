@@ -3327,3 +3327,18 @@ Documentation-only wording can be reverted without changing runtime behavior.
 Documentation:
 docs/superpowers/plans/2026-09-13-spotter-batch-and-global-refactor.md, docs/superpowers/specs/2026-09-13-batch-and-global-refactor-design.md
 
+## Rewrite execution result
+
+The message-only rewrite was executed against the confirmed remediation range.
+
+- BASE: `838ad198fd30c37f48df17a13c4e5cbfcfac22fa`
+- Frozen OLD_HEAD: `e9ea7d28aabec14dd6222c51fa311e68b0496e3f`
+- Rewritten range head: `2f4a1b9c907893da46154639c720ed2a96d8d429`
+- Old current tip: `a768d6c46cd4e7f2507a779f803c41e3cedef3d3`
+- Final `refactor/all` tip: `fefeef26d5bfd96798fce0bb5bd165a9b29127b4`
+
+All 175 tree, parent, author/timestamp metadata, and structured-message checks
+passed. The three post-range commits were replayed with
+`git rebase --rebase-merges`; their patch set matched by `git range-diff`.
+The remote replacement completed with the exact
+`--force-with-lease` guard, and both pre-rewrite backup tags were pushed.
