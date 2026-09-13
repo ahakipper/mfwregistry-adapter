@@ -317,6 +317,7 @@ func TestNacosRealAutoReconnect(t *testing.T) {
 				t.Errorf("cleanup verifier: %v", err)
 			} else {
 				cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), cfg.timeout)
+			cleanupLoop:
 				for {
 					hosts, queryErr := verifier.ListInstances(params.ServiceName)
 					if queryErr == nil && len(hosts) == 0 {
@@ -333,6 +334,7 @@ func TestNacosRealAutoReconnect(t *testing.T) {
 						status = "failed"
 						cleanupErr = cleanupCtx.Err()
 						t.Errorf("cleanup deadline: %v", cleanupErr)
+						break cleanupLoop
 					case <-time.After(100 * time.Millisecond):
 					}
 				}
