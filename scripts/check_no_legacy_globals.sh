@@ -11,7 +11,7 @@ violations=""
 
 is_exempt() {
 	case "$1" in
-		internal/infra/legacycompat/*|config/*|pkg/log/*|pkg/notice/*|*_test.go|*/legacy_compat.go|*/legacy_provider_compat.go|*_legacy_compat.go)
+		internal/infra/legacycompat/*|config/*|pkg/log/*|pkg/notice/*|*_test.go|pkg/providers/k8s/legacy_compat.go|pkg/providers/k8s/legacy_provider_compat.go|pkg/providers/consul/legacy_compat.go|pkg/distribute/election/legacy_compat.go|pkg/worker/legacy_compat.go)
 			return 0
 			;;
 		*)

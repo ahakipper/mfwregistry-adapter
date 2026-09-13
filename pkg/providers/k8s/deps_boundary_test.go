@@ -17,7 +17,10 @@ func TestK8SProviderWithDepsDoesNotReadLegacyGlobals(t *testing.T) {
 	legacycompat.ResetAccessCounts()
 	logger := depsTestLogger{}
 	notifier := &depsTestNotifier{}
-	_, _ = NewK8SProviderWithDeps(context.Background(), nil, 17, []string{"/definitely/missing/config"}, logger, notifier, []string{"explicit"})
+	provider, err := NewK8SProviderWithDeps(context.Background(), nil, 17, []string{"/definitely/missing/config"}, logger, notifier, []string{"explicit"})
+	if err == nil || provider != nil {
+		t.Fatalf("constructor result=(%v,%v), want nil provider and configuration error", provider, err)
+	}
 	if got := legacycompat.AccessCountsSnapshot().Reads; got != 0 {
 		t.Fatalf("legacy reads=%d", got)
 	}
