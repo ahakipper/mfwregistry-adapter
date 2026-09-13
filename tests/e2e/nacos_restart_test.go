@@ -41,6 +41,25 @@ func runNacosRestartCommand(ctx context.Context, container string) error {
 	return nil
 }
 
+func warmNacosSDK(ctx context.Context, client *nacos.Client) error {
+	if client == nil {
+		return fmt.Errorf("nil Nacos SDK client")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		if _, err := client.ListServices(1); err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("Nacos SDK session warmup: %w", ctx.Err())
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
 // execCommandContext is a small variable seam so guard tests never need to
 // invoke Docker. The real test uses os/exec through this default.
 var execCommandContext = defaultExecCommandContext
@@ -84,6 +103,14 @@ func TestNacosRestartGuardRequiresExplicitFlags(t *testing.T) {
 	t.Setenv("NACOS_REAL_ALLOW_WRITE", "1")
 	if err := restartGuard(); err != nil {
 		t.Fatalf("restartGuard() error = %v", err)
+	}
+}
+
+func TestWarmNacosSDKHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := warmNacosSDK(ctx, &nacos.Client{}); err == nil {
+		t.Fatal("warmNacosSDK(canceled) returned nil")
 	}
 }
 
@@ -140,6 +167,9 @@ func TestNacosRealRestartPersistence(t *testing.T) {
 	}()
 	if err := client.RegisterInstance(params); err != nil {
 		t.Fatalf("restart canary register: %v", err)
+	}
+	if err := warmNacosSDK(ctx, client); err != nil {
+		t.Fatalf("warm pre-restart SDK session: %v", err)
 	}
 	// The official SDK v2.3.5 has a race in its automatic reconnect path when
 	// the server restarts. Close the old client before Docker restart and

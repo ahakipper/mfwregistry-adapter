@@ -84,6 +84,8 @@ arbitrary container or production endpoint is touched.
 Because nacos-sdk-go/v2.3.5 has a race in its automatic reconnect path during
 server restart, the gate closes the pre-restart client and uses a fresh
 post-restart client; automatic reconnect remains `NOT VERIFIED/RACE_BLOCKED`.
+The pre-restart client is first warmed by a bounded service-list call so a
+startup-session Close race is not mistaken for the vendor restart result.
 
 Companion documents: [architecture.md](architecture.md) (design),
 [data-model.md](data-model.md) (the `Instance` model),

@@ -97,4 +97,6 @@ been run as part of this artifact and therefore remains **NOT VERIFIED**.
 The gate deliberately closes the old SDK client before restart and creates a
 fresh one afterwards: the vendor SDK v2.3.5 automatic reconnect path has a
 known race under restart, so `sdk_auto_reconnect=NOT_VERIFIED/RACE_BLOCKED` is
-recorded rather than being presented as a PASS.
+recorded rather than being presented as a PASS. Before closing, the gate warms
+the old client's bounded service-list session; this avoids conflating a
+STARTING-session shutdown race with the vendor restart limitation.
