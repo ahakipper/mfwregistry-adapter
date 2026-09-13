@@ -22,6 +22,9 @@ cat >"$fake/kubectl" <<'EOF'
 #!/usr/bin/env bash
 case "${FAKE_KUBECTL_MODE:-ok}" in
   fail) exit 1;;
+  badcpu) [[ "$*" == *"allocatable.cpu"* ]] && { printf 'bogus'; exit 0; };;
+  badmem) [[ "$*" == *"allocatable.memory"* ]] && { printf 'bogus'; exit 0; };;
+  lowpods) [[ "$*" == *"allocatable.pods"* ]] && { printf '1'; exit 0; };;
   ready) [[ "$*" == *"--raw=/readyz"* ]] && exit 0; exit 1;;
   capacity) [[ "$*" == *"jsonpath"* ]] && { printf '1000'; exit 0; };;
 esac
@@ -88,6 +91,17 @@ assert_fail env PATH="$fake:/usr/bin:/bin" FAKE_KWOK_CREATE_RC=1 "$root/scripts/
 delete_log="$tmp/delete.log"
 assert_fail env PATH="$fake:/usr/bin:/bin" FAKE_KUBECTL_MODE=fail FAKE_DELETE_LOG="$delete_log" OBS_KWOK_CLUSTER=dsca-observe-readyfail "$root/scripts/observe-up.sh"
 grep -q '^delete$' "$delete_log" || { echo "readiness failure did not invoke kwok delete" >&2; exit 1; }
+
+# Invalid capacity quantities and insufficient pod capacity fail closed and clean up.
+for mode in badcpu badmem lowpods; do
+  rm -f "$root/build/observe/observe-state" "$root/build/observe/observe-state.sha256"
+  log="$tmp/$mode-delete.log"
+  assert_fail env PATH="$fake:/usr/bin:/bin" FAKE_KUBECTL_MODE="$mode" FAKE_DELETE_LOG="$log" OBS_KWOK_CLUSTER="dsca-observe-$mode" "$root/scripts/observe-up.sh"
+  grep -q '^delete$' "$log" || { echo "$mode did not invoke cleanup" >&2; exit 1; }
+  [[ -f "$root/build/observe/cleanup-status" ]] || { echo "$mode missing cleanup status" >&2; exit 1; }
+  grep -q 'residual_unknown=false' "$root/build/observe/cleanup-status" || { echo "$mode cleanup residual unknown" >&2; exit 1; }
+done
+rm -f "$root/build/observe/cleanup-status" "$root/build/observe/cleanup-error"
 
 # Teardown failure is surfaced and preserves owned state for investigation.
 mkdir -p "$root/build/observe"
