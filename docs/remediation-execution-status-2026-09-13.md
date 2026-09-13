@@ -7,7 +7,7 @@ remain unchanged and are not promoted to current PASS evidence.
 ## Current baseline
 
 - Branch: `refactor/all`
-- Implementation baseline: `c986632` (authoritative SDK read sessions)
+- Implementation baseline: `33606fa` (Consul payload-free monitor dispatch)
 - Latest pushed evidence: `47a5e02`
 - SDK: `github.com/nacos-group/nacos-sdk-go/v2`
   `v2.3.6-0.20260902123754-002486583df5` (upstream commit `0024865`)
@@ -30,6 +30,7 @@ remain unchanged and are not promoted to current PASS evidence.
 | Notifications | **CODE PASS; REAL DELIVERY NOT VERIFIED** | HTTP notifier has timeout/retry/Close/counters/redaction and fail-closed construction. AppCenter endpoint, payload, auth and SLA are deployment-owned and absent. |
 | Atlas | **FAIL-CLOSED / NOT VERIFIED** | Local Atlas is a JSON discoverymock stand-in. Real protobuf wire, TLS, auth and method compatibility have no supplied target endpoint. |
 | Consul scale | **ACCEPTED NON-GOAL** | No machine/ECS deployment is in scope; reopen only when that deployment mode returns. |
+| Consul monitor change payload | **CODE PASS** | Additive payload-free `InstanceChangeHandler`; legacy and new handlers both dispatch, with notifier/Warnf error semantics covered by race tests. Historical fabricated empty `CatalogService` finding is closed for migrated callers; legacy compatibility boundary remains. |
 | Static quality | **PASS** | `go vet ./...`, `go test ./... -count=1`, `go test -race ./... -count=1`, `make test-all`, Observe unit/race and lifecycle shell tests pass. |
 
 ## Reproducible gates
