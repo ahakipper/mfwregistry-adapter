@@ -168,6 +168,15 @@ func TestClientBatchRegisterEphemeralRejectsPersistent(t *testing.T) {
 	}
 }
 
+func TestSDKFacadeBatchRegisterPropagatesPartialError(t *testing.T) {
+	fake := &fakeSDKNaming{err: errors.New("partial batch failure")}
+	facade := &sdkNamingFacade{client: fake, group: DefaultGroup}
+	err := facade.batchRegister(vo.BatchRegisterInstanceParam{ServiceName: "svc", Instances: []vo.RegisterInstanceParam{{Ip: "10.0.0.1", Port: 80, Ephemeral: true}}})
+	if err == nil || len(fake.batched) != 1 {
+		t.Fatalf("batch error=%v calls=%d, want propagated error and one call", err, len(fake.batched))
+	}
+}
+
 func TestSDKFacadePreservesPermanentStatusClassification(t *testing.T) {
 	facade := &sdkNamingFacade{client: &fakeSDKNaming{err: errors.New("retry 3 times request failed!: request return error code 400")}, group: DefaultGroup}
 	err := facade.register(InstanceParams{ServiceName: "svc", IP: "10.0.0.1", Port: 80, ClusterName: "k8s"})
