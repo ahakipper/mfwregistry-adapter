@@ -311,14 +311,30 @@ func TestNacosRealAutoReconnect(t *testing.T) {
 				status = "failed"
 				cleanupErr = err
 				t.Errorf("cleanup: %v", err)
-			} else if hosts, err := client.ListInstances(params.ServiceName); err != nil {
+			} else if verifier, err := nacos.NewClientWithConfig(cfg.client, nil); err != nil {
 				status = "failed"
 				cleanupErr = err
-				t.Errorf("cleanup residual query: %v", err)
-			} else if len(hosts) != 0 {
-				status = "failed"
-				cleanupErr = fmt.Errorf("%d residual instances", len(hosts))
-				t.Errorf("cleanup residual: %v", cleanupErr)
+				t.Errorf("cleanup verifier: %v", err)
+			} else {
+				deadline := time.Now().Add(cfg.timeout)
+				for {
+					hosts, queryErr := verifier.ListInstances(params.ServiceName)
+					if queryErr == nil && len(hosts) == 0 {
+						break
+					}
+					if time.Now().After(deadline) {
+						status = "failed"
+						cleanupErr = fmt.Errorf("residual instances or query error: %v", queryErr)
+						t.Errorf("cleanup residual: %v", cleanupErr)
+						break
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+				if err := verifier.Close(); err != nil {
+					status = "failed"
+					cleanupErr = err
+					t.Errorf("cleanup verifier close: %v", err)
+				}
 			}
 		}
 		t.Logf("NACOS_RECONNECT cleanup_attempted=%t status=%s residual_unknown=%t error=%v", attempted, status, cleanupErr != nil, cleanupErr)
