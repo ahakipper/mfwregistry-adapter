@@ -4,7 +4,7 @@ Operational reference for building, running, monitoring and troubleshooting
 spotter. See [architecture.md](architecture.md) for design background and
 [data-model.md](data-model.md) for the pushed data model.
 
-## Current release status (2026-09-13, HEAD `356aa75`)
+## Current release status (2026-09-13, HEAD `33606fa`)
 
 - Nacos production startup defaults to the official SDK but is **BLOCKED / NOT
   VERIFIED** before readiness until an official Admin/Maintainer cluster-health

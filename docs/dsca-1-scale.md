@@ -5,7 +5,7 @@
 **Date:** 2026-09-11 (revised same day after adversarial review: event-arithmetic provenance, DS-1-2 regime split, drop-metric spec unified with dsca-2-latency.md §6, kwok stage-config and E9/E14 corrections)
 **Contract:** docs/dsca-plan.md, track #1
 
-> **Current-status addendum (2026-09-13, implementation HEAD `356aa75`):**
+> **Current-status addendum (2026-09-13, implementation HEAD `33606fa`):**
 > This scale audit preserves its historical kwok experiments and baseline
 > citations. The subsequent remediation added bounded provider overflow,
 > source-aware identity, ordered full retry, explicit Nacos SDK/compatibility

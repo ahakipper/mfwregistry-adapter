@@ -5,7 +5,7 @@
 **Repo:** module `spotter`, branch `refactor/all`, HEAD 69b0105, read-only
 **HEAD note:** audited at 69b0105; current HEAD 0ff71f7 is a docs-only delta (the five DSCA docs, no code change — every cited line number stands).
 
-> **Current-status addendum (2026-09-13, implementation HEAD `356aa75`):**
+> **Current-status addendum (2026-09-13, implementation HEAD `33606fa`):**
 > The model-fidelity tables and live conclusions below are historical audit
 > evidence. Subsequent code now has source-aware identity, ownership-filtered
 > Nacos reads, SDK-only production constructors/readiness, and explicit
