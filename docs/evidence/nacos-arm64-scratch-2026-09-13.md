@@ -17,7 +17,7 @@ security, HA, or compatibility with an external deployment.
 | HTTP mapping | host `28848` → container `8848` |
 | gRPC mapping | host `29848` → container `9848` |
 | control/Raft mapping | host `29849` → container `9849` |
-| SDK | `github.com/nacos-group/nacos-sdk-go/v2` v2.3.5 |
+| SDK | `github.com/nacos-group/nacos-sdk-go/v2` pseudo-pin `v2.3.6-0.20260902123754-002486583df5` (commit `0024865`) |
 | Scope | disposable local ARM64 scratch container; no corporate endpoint |
 
 The harness validated the local image architecture and every reported
@@ -100,7 +100,7 @@ restart/new-client visibility; cleanup reported
 inspection confirmed the container was removed.
 
 The corresponding race-enabled command exposed a real data race in the
-vendor `nacos-sdk-go/v2.3.5` RpcClient reconnect path and therefore **FAILED /
+vendor `nacos-sdk-go/v2` pseudo-pin `0024865` RpcClient reconnect path and therefore **FAILED /
 RACE_BLOCKED**. The gate deliberately closes the old SDK client before restart,
 warms its bounded service-list session, and creates a fresh one afterwards;
 automatic reconnect is explicitly `NOT VERIFIED/RACE_BLOCKED`, never masked or
