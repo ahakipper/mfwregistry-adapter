@@ -517,9 +517,9 @@ go test -tags=nacos_real -race ./tests/e2e/... -run 'TestNacosReal|TestNacosSDKR
 
 上述 tag 对应测试文件未创建、环境不可达或只运行 mock 时，SDK 接入状态必须保持 `NOT VERIFIED`，不得标记为完成。
 
-## 11. B4：Atlas 真实 codec/protobuf 验证（P1）
+## 11. B4：Atlas 真实 codec/protobuf 验证（Deferred follow-up）
 
-**目标：** 证明生产 Atlas 接受当前 wire，或明确切换到真实 protobuf 生成代码。
+**目标：** 作为后续版本 entry gate，证明生产 Atlas 接受当前 wire，或明确切换到真实 protobuf 生成代码；不阻塞当前 Spotter 发布。
 
 **步骤：**
 
