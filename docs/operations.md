@@ -38,6 +38,9 @@ TLS/auth, HA/restart, and non-public namespace evidence remain outstanding.
 The scratch artifact includes guarded username/password and token runs plus
 the `tenant-a`/`blue` scope; those results do not replace production TLS/auth
 or HA evidence.
+The `nacos_restart` gate is an additional opt-in check for persistent canary
+survival and is currently `NOT VERIFIED` until run with its strict scratch
+container guards.
 
 ## Build
 

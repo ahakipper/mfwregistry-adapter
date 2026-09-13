@@ -89,3 +89,8 @@ scratch result:
 
 The scratch container was stopped and removed after the run; any future run
 must retain equivalent cleanup status and residual-container verification.
+
+The repository also contains a separate `nacos_restart` gate for persistent
+canary survival across a single-node restart. It is guarded by a strict
+`dsca-*`/`test-*` container name and explicit restart/write flags; it has not
+been run as part of this artifact and therefore remains **NOT VERIFIED**.
