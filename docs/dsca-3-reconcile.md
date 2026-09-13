@@ -1,5 +1,10 @@
 # DSCA Track 3 — Reconcile Correctness vs Nacos
 
+### Historical findings (not current release scope)
+
+DS-3-1 through DS-3-7 below describe the historical/default Atlas reconcile
+mode and are retained for provenance, not as current release gates.
+
 > Current scope addendum: Atlas remains optional and deferred; historical Atlas
 > findings below are preserved. The current release evaluates the Nacos Sink.
 

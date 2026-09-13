@@ -576,3 +576,7 @@ Plain Chinese terminology: Nacos batch 是一次提交多个临时实例；clust
 health-check 是 Nacos 服务器主动探测实例健康的管理开关；AppCenter
 endpoint/payload/auth/SLA 分别是告警地址、消息格式、认证信息和时效承诺；
 legacy shim/globals 是为旧调用方保留的兼容包装和进程级全局变量。
+
+Atlas deferred 表示本版本不执行真实协议门禁，不代表 Atlas 已可用于生产。
+Deployment-level Nacos checks out-of-scope 表示本阶段不搭建或验收 HA/TLS 等部署条件，
+不代表这些条件已经通过。
