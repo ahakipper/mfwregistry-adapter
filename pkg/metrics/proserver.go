@@ -19,6 +19,8 @@ type PrometheusService struct {
 	stopMu sync.Mutex
 }
 
+var metricsHandlerOnce sync.Once
+
 func NewPrometheusServer(addr string) *PrometheusService {
 	return &PrometheusService{
 		Addr:   addr,
@@ -53,7 +55,7 @@ func (s *PrometheusService) Start() {
 	server := s.srv
 	s.mu.Unlock()
 	s.Logger.Info("prometheus server start ...")
-	http.Handle("/metrics", promhttp.Handler())
+	metricsHandlerOnce.Do(func() { http.Handle("/metrics", promhttp.Handler()) })
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		s.Logger.Errorf("prometheus server stopped: %s", err)
 	}
