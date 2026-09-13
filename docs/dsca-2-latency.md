@@ -7,6 +7,13 @@
 
 **Track scope restated (plan §1, track 2).** The chain K8s event → instance conversion → external store (nacos) must be measured and driven to millisecond-level end-to-end even under thousands of simultaneous instance changes. The consul path is out of scope (but see §3's unit-uniformity note — its Trigger producer sites are affected by the metric fix). No latency metric exists today — one is designed here and the baseline measured.
 
+> **Current-status addendum (2026-09-13, implementation HEAD `5df45d5`):**
+> This document's latency measurements and source citations are historical. The
+> current code carries event-to-store metrics through injected recorders and
+> bounded provider/worker paths; Observe command/child teardown is now
+> context-bounded. No complete 2h scale observation has been run after the
+> remediation, so production latency/SLO claims remain **NOT VERIFIED**.
+
 ---
 
 ## 1. EXECUTION SUMMARY
