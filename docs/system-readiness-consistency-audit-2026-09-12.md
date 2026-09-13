@@ -11,6 +11,10 @@
 > available only through explicitly named compatibility constructors, and SDK
 > startup remains fail-closed before readiness when cluster-admin capability is
 > absent.
+> A bounded ARM64 local scratch run is recorded in
+> [nacos-arm64-scratch-2026-09-13.md](evidence/nacos-arm64-scratch-2026-09-13.md):
+> both SDK lifecycle tags passed with cleanup evidence, but this is not
+> production evidence and does not close TLS/auth/HA/Admin/Atlas/Observe gates.
 > An externally injected `NacosClusterAdmin` now runs before business register;
 > same-pair concurrent claims wait on one result, admin failures retain typed
 > retryability, and client/readiness close is bounded, idempotent, and surfaced.

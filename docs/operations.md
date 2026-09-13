@@ -31,6 +31,10 @@ health-check update precedes business registration, concurrent first claims are
 coalesced, failures are typed for retry policy, and close is bounded/idempotent.
 The server obtains it through a per-start factory, so leadership restarts never
 reuse a closed admin; absent or failed factories remain a startup block.
+The ARM64 local Nacos SDK lifecycle result is recorded in
+[`docs/evidence/nacos-arm64-scratch-2026-09-13.md`](evidence/nacos-arm64-scratch-2026-09-13.md).
+It is not a production readiness approval; Admin/Maintainer capability,
+TLS/auth, HA/restart, and non-public namespace evidence remain outstanding.
 
 ## Build
 
