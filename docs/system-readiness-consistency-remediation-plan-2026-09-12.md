@@ -29,7 +29,7 @@
 
 **当前基线：** `refactor/all` / `c986632`（其后为文档同步提交）。A0→A3、B1、B2 HTTP 过渡层、B3 SDK seam、B4 Atlas gate、C1 Observe 修复、D1 provider overflow/lifecycle、C2 logger/notifier/metrics 注入和两条 `go vet` 诊断清零已按阶段提交并通过 focused/full/race/cover 测试；`go vet ./...` 当前为 0。Nacos naming、service-list、SelectAll/query、subscribe/unsubscribe、catalog/prune 和 readiness read/write 已统一经官方 SDK；cluster Admin health-check update 在 SDK pseudo-version `0024865` 中没有等价接口，SDK mode typed fail-closed，HTTP 仅显式 compatibility/test 且 product wiring 拒绝。真实 Nacos/Atlas 证据、appcenter endpoint contract、完整 2h Observe 和最终真实环境发布证据仍未闭环。
 
-**Current SDK evidence clarification (2026-09-13):** The implementation uses `github.com/nacos-group/nacos-sdk-go/v2` pseudo-pin `v2.3.6-0.20260902123754-002486583df5` (commit `0024865`). The guarded ARM64 single-client reconnect `-race` run passed; historical v2.3.5 race output is provenance only. Untagged SDK, HA, TLS, Admin/Maintainer and production readiness remain `NOT VERIFIED`.
+**Current SDK evidence clarification (2026-09-13):** The implementation uses `github.com/nacos-group/nacos-sdk-go/v2` pseudo-pin `v2.3.6-0.20260902123754-002486583df5` (commit `0024865`). The guarded ARM64 single-client reconnect `-race` run passed; historical v2.3.5 race output is provenance only. Untagged SDK/Admin capability remain `NOT VERIFIED`; deployment HA/TLS/auth/namespace/leaderless checks are outside current scope.
 
 **范围边界：** K8s 是本阶段规模主路径；Consul 1000+ 规模观察是 accepted non-goal，只有重新启用 ECS/机器部署时才开启独立里程碑。Nacos SDK 统一接入是生产必做项；兼容验证完成前可保留 HTTP 回滚/对照通道，但不能把裸 HTTP 作为最终生产路径。
 
