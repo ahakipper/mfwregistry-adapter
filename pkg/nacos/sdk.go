@@ -283,6 +283,11 @@ func (c *Client) BatchRegisterEphemeral(param vo.BatchRegisterInstanceParam) err
 	if c == nil || c.sdk == nil {
 		return ErrUnsupportedOperation
 	}
+	for _, ins := range param.Instances {
+		if !ins.Ephemeral {
+			return fmt.Errorf("nacos sdk: persistent instance in ephemeral batch")
+		}
+	}
 	return c.sdk.batchRegister(param)
 }
 

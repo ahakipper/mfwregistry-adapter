@@ -159,6 +159,15 @@ func TestSDKFacadeExposesBatchOperationForEphemeralOnlySDKContract(t *testing.T)
 	}
 }
 
+func TestClientBatchRegisterEphemeralRejectsPersistent(t *testing.T) {
+	fake := &fakeSDKNaming{}
+	c := &Client{sdk: &sdkNamingFacade{client: fake, group: DefaultGroup}}
+	err := c.BatchRegisterEphemeral(vo.BatchRegisterInstanceParam{Instances: []vo.RegisterInstanceParam{{Ip: "10.0.0.1", Port: 80, Ephemeral: false}}})
+	if err == nil || len(fake.batched) != 0 {
+		t.Fatalf("persistent batch err=%v calls=%d", err, len(fake.batched))
+	}
+}
+
 func TestSDKFacadePreservesPermanentStatusClassification(t *testing.T) {
 	facade := &sdkNamingFacade{client: &fakeSDKNaming{err: errors.New("retry 3 times request failed!: request return error code 400")}, group: DefaultGroup}
 	err := facade.register(InstanceParams{ServiceName: "svc", IP: "10.0.0.1", Port: 80, ClusterName: "k8s"})
