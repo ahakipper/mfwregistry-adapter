@@ -2,9 +2,11 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 if [[ -n "${OBS_KUBECONFIG:-}" ]]; then echo "external kubeconfig mode: no deletion"; exit 0; fi
-kc="${OBS_WORKDIR:-$root/build/observe}/owned-kubeconfig"
-[[ -r "$kc" ]] || exit 0
+state="$root/build/observe/observe-state"
+[[ -r "$state" ]] || exit 0
+source "$state"
+[[ "$cluster" =~ ^dsca-observe-[a-zA-Z0-9_-]+$ ]] || { echo "EnvError: invalid owned state" >&2; exit 2; }
+[[ "$kubeconfig" == "$root/build/observe/"* ]] || { echo "EnvError: foreign kubeconfig state" >&2; exit 2; }
 command -v kwokctl >/dev/null || { echo "InfraError: missing kwokctl for teardown" >&2; exit 2; }
-path=$(<"$kc")
-kwokctl delete cluster --name "${OBS_KWOK_CLUSTER:-dsca-observe}" --kubeconfig "$path" || { echo "InfraError: kwok teardown failed" >&2; exit 1; }
-rm -f "$kc"
+kwokctl delete cluster --name "$cluster" --kubeconfig "$kubeconfig" || { echo "InfraError: kwok teardown failed" >&2; exit 1; }
+rm -f "$state" "$root/build/observe/observe-state.sha256"
