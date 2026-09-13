@@ -10,7 +10,7 @@ if [[ -n "${OBS_KUBECONFIG:-}" ]]; then
   echo "external kubeconfig mode: $kc (read-only; observe-down will not delete it)"
   exit 0
 fi
-for bin in docker kwokctl kubectl nc; do command -v "$bin" >/dev/null || { echo "EnvError: missing $bin" >&2; exit 2; }; done
+for bin in docker kwokctl kubectl nc sha256sum; do command -v "$bin" >/dev/null || { echo "EnvError: missing $bin" >&2; exit 2; }; done
 docker info >/dev/null 2>&1 || { echo "InfraError: docker daemon unavailable" >&2; exit 3; }
 cluster="${OBS_KWOK_CLUSTER:-dsca-observe-$$}"
 [[ "$cluster" =~ ^dsca-observe-[a-zA-Z0-9_-]+$ ]] || { echo "EnvError: invalid cluster name" >&2; exit 2; }
@@ -20,12 +20,12 @@ for port in "$api" "$etcd" "${OBS_NACOS_PORT:-28848}" "${OBS_NACOS_GRPC_PORT:-29
   if nc -z 127.0.0.1 "$port" >/dev/null 2>&1; then echo "EnvError: scratch port already in use: $port" >&2; exit 2; fi
 done
 umask 077
-printf 'cluster=%s\nkubeconfig=%s\napi=%s\netcd=%s\n' "$cluster" "$kc" "$api" "$etcd" > "$out/observe-state.tmp"
-mv "$out/observe-state.tmp" "$out/observe-state"
-sha256sum "$out/observe-state" > "$out/observe-state.sha256"
 cleanup_enabled=1
 cleanup() { rc=$?; if [ "$cleanup_enabled" -eq 1 ]; then if ! kwokctl delete cluster --name "$cluster" --kubeconfig "$kc" >/dev/null 2>"$out/cleanup-error"; then echo "residual_unknown=true" > "$out/cleanup-status"; else echo "residual_unknown=false" > "$out/cleanup-status"; rm -f "$out/observe-state" "$out/observe-state.sha256"; fi; fi; exit $rc; }
 trap cleanup EXIT
+printf 'cluster=%s\nkubeconfig=%s\napi=%s\netcd=%s\n' "$cluster" "$kc" "$api" "$etcd" > "$out/observe-state.tmp"
+mv "$out/observe-state.tmp" "$out/observe-state"
+sha256sum "$out/observe-state" > "$out/observe-state.sha256"
 kwokctl create cluster --name "$cluster" --kubeconfig "$kc" --kube-apiserver-port "$api" --etcd-port "$etcd"
 for i in {1..30}; do [[ -s "$kc" ]] && kubectl --kubeconfig "$kc" get --raw=/readyz >/dev/null 2>&1 && break; sleep 1; done
 [[ -s "$kc" ]] || { echo "InfraError: kwok kubeconfig not created" >&2; exit 3; }
