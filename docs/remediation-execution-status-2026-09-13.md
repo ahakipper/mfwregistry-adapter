@@ -8,7 +8,7 @@ remain unchanged and are not promoted to current PASS evidence.
 
 - Branch: `refactor/all`
 - Implementation baseline: `33606fa` (Consul payload-free monitor dispatch)
-- Latest documentation baseline: `ece8898` (current-status provenance synchronization)
+- Latest documentation baseline: `e62e1cd` (Observe current-status provenance synchronization)
 - SDK: `github.com/nacos-group/nacos-sdk-go/v2`
   `v2.3.6-0.20260902123754-002486583df5` (upstream commit `0024865`)
 - Worktree and remote: clean and synchronized at the time of this update.
