@@ -440,7 +440,7 @@ func CheckReadinessWithConfig(cfg ClientConfig, logger ports.Logger) error {
 // construction), so a naming service-list RPC and a persistent register /
 // deregister canary are required as authoritative read/write evidence.  No
 // direct net/http request is constructed on this path.
-func checkReadinessSDK(c *Client) error {
+func checkReadinessSDK(c *Client) (retErr error) {
 	if c == nil || c.sdk == nil {
 		return fmt.Errorf("%w: readiness requires sdk transport", ErrUnsupportedOperation)
 	}
@@ -469,11 +469,22 @@ func checkReadinessSDK(c *Client) error {
 		Ephemeral:   false,
 		Metadata:    map[string]string{"spotterOwner": "spotter", "probe": "readiness"},
 	}
+	writeAttempted := true
+	defer func() {
+		if !writeAttempted {
+			return
+		}
+		if err := c.DeregisterInstance(canary); err != nil {
+			cleanupErr := fmt.Errorf("nacos sdk readiness write probe cleanup: %w", err)
+			if retErr != nil {
+				retErr = errors.Join(retErr, cleanupErr)
+			} else {
+				retErr = cleanupErr
+			}
+		}
+	}()
 	if err := c.RegisterInstance(canary); err != nil {
 		return fmt.Errorf("nacos sdk readiness write probe register: %w", err)
-	}
-	if err := c.DeregisterInstance(canary); err != nil {
-		return fmt.Errorf("nacos sdk readiness write probe cleanup: %w", err)
 	}
 	return nil
 }
