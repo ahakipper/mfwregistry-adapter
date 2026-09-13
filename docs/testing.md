@@ -31,6 +31,15 @@ without starting a real stack. These tests establish harness safety only;
 `EnvError`/`InfraError` and residual resources must remain explicit in any
 OBS-full result and cannot be promoted to a product PASS.
 
+The real Nacos gates require `NACOS_REAL_SCRATCH=1` and
+`NACOS_REAL_ALLOW_WRITE=1`; malformed credentials, unsupported static tokens,
+mixed URL schemes, and insecure auth without the full scratch/write guard fail
+closed. CA/server-name/insecure TLS settings are passed to the official SDK,
+and real tests register cleanup before the first write attempt. Cleanup and
+client-close outcomes are logged with a redacted endpoint, latency, and
+`residual_unknown`; a cleanup failure fails the test rather than producing a
+false protocol PASS.
+
 Companion documents: [architecture.md](architecture.md) (design),
 [data-model.md](data-model.md) (the `Instance` model),
 [operations.md](operations.md) (runbook). See [README.md](README.md) for the

@@ -5,6 +5,7 @@ package e2e
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,34 +18,41 @@ import (
 // default CI suite intentionally skips this test when no target is supplied;
 // a skip is NOT production evidence.
 func TestNacosSDKPersistentLifecycle(t *testing.T) {
-	address := os.Getenv("NACOS_SERVER")
-	if address == "" {
-		t.Skip("NACOS_SERVER is not configured; scratch Nacos SDK evidence is required separately")
+	if strings.TrimSpace(os.Getenv("NACOS_SERVER")) == "" {
+		t.Skip("NOT VERIFIED: NACOS_SERVER is not configured")
 	}
-	var servers []string
-	for _, item := range splitComma(address) {
-		if item != "" {
-			servers = append(servers, item)
-		}
+	cfg, err := parseNacosRealConfig()
+	if err != nil {
+		t.Skipf("NOT VERIFIED: %v", err)
 	}
-	if len(servers) == 0 {
-		t.Skip("NACOS_SERVER contains no addresses")
+	if !cfg.canWrite {
+		t.Skip("NOT VERIFIED: set NACOS_REAL_SCRATCH=1 and NACOS_REAL_ALLOW_WRITE=1 for an explicit scratch target")
 	}
-	client, err := nacos.NewClientWithConfig(nacos.ClientConfig{
-		TransportMode: nacos.TransportSDK,
-		ServerURLs:    servers,
-		NamespaceID:   os.Getenv("NACOS_NAMESPACE"),
-		GroupName:     os.Getenv("NACOS_GROUP"),
-		Username:      os.Getenv("NACOS_USERNAME"),
-		Password:      os.Getenv("NACOS_PASSWORD"),
-		Timeout:       10 * time.Second,
-	}, nil)
+	started := time.Now()
+	client, err := nacos.NewClientWithConfig(cfg.client, nil)
 	if err != nil {
 		t.Fatalf("create SDK client: %v", err)
 	}
-	defer func() { _ = client.Close() }()
 	service := "__spotter_sdk_eval_" + time.Now().UTC().Format("20060102T150405.000000000")
-	params := nacos.InstanceParams{ServiceName: service, IP: "127.0.0.1", Port: 1, ClusterName: "spotter-sdk-eval", Enabled: true, Ephemeral: false}
+	params := nacos.InstanceParams{ServiceName: service, IP: "127.0.0.1", Port: 1, ClusterName: "spotter-sdk-eval", GroupName: cfg.client.GroupName, NamespaceID: cfg.client.NamespaceID, Enabled: true, Ephemeral: false}
+	registered := true
+	defer func() {
+		status := "not_needed"
+		var cleanupErr error
+		cleanupStart := time.Now()
+		if registered {
+			status = "passed"
+			cleanupErr = client.DeregisterInstance(params)
+			if cleanupErr != nil {
+				status = "failed"
+				t.Errorf("Nacos SDK canary cleanup failed: %v", cleanupErr)
+			}
+		}
+		t.Logf("NACOS_SDK_EVAL cleanup_attempted=%t status=%s latency_ms=%d error=%v residual_unknown=%t endpoint=%s", registered, status, time.Since(cleanupStart).Milliseconds(), cleanupErr, cleanupErr != nil, cfg.endpoint)
+		if closeErr := client.Close(); closeErr != nil {
+			t.Errorf("Nacos SDK client close failed: %v", closeErr)
+		}
+	}()
 	if err := client.RegisterInstance(params); err != nil {
 		t.Fatalf("SDK persistent register: %v", err)
 	}
@@ -54,33 +62,16 @@ func TestNacosSDKPersistentLifecycle(t *testing.T) {
 	if _, err := client.ListServices(100); err != nil {
 		t.Fatalf("SDK service list: %v", err)
 	}
-	if err := client.Subscribe(service, os.Getenv("NACOS_GROUP"), nil, func([]nacos.Host, error) {}); err != nil {
+	callback := func([]nacos.Host, error) {}
+	if err := client.Subscribe(service, cfg.client.GroupName, nil, callback); err != nil {
 		t.Fatalf("SDK subscribe: %v", err)
 	}
-	if err := client.Unsubscribe(service, os.Getenv("NACOS_GROUP"), nil, func([]nacos.Host, error) {}); err != nil {
+	if err := client.Unsubscribe(service, cfg.client.GroupName, nil, callback); err != nil {
 		t.Fatalf("SDK unsubscribe: %v", err)
 	}
 	if err := client.DeregisterInstance(params); err != nil {
 		t.Fatalf("SDK persistent deregister: %v", err)
 	}
-}
-
-func splitComma(value string) []string {
-	result := make([]string, 0)
-	start := 0
-	for i := 0; i <= len(value); i++ {
-		if i != len(value) && value[i] != ',' {
-			continue
-		}
-		item := value[start:i]
-		for len(item) > 0 && (item[0] == ' ' || item[0] == '\t') {
-			item = item[1:]
-		}
-		for len(item) > 0 && (item[len(item)-1] == ' ' || item[len(item)-1] == '\t') {
-			item = item[:len(item)-1]
-		}
-		result = append(result, item)
-		start = i + 1
-	}
-	return result
+	registered = false
+	t.Logf("NACOS_SDK_EVAL PASS: endpoint=%s transport=sdk lifecycle=register,list,services,subscribe,unsubscribe,deregister latency_ms=%d service=%s", cfg.endpoint, time.Since(started).Milliseconds(), service)
 }
