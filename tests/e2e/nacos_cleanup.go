@@ -9,12 +9,20 @@ import (
 )
 
 // verifyNacosCanary polls a fresh SDK client until the canary disappears.
-func verifyNacosCanary(client *nacos.Client, service string) error {
+func verifyNacosCanary(cfg nacos.ClientConfig, service string) error {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		hosts, err := client.ListInstances(service)
+		client, err := nacos.NewClientWithConfig(cfg, nil)
 		if err != nil {
 			return err
+		}
+		hosts, err := client.ListInstances(service)
+		closeErr := client.Close()
+		if err != nil {
+			return err
+		}
+		if closeErr != nil {
+			return closeErr
 		}
 		if len(hosts) == 0 {
 			return nil
