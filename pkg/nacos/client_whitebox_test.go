@@ -6,6 +6,7 @@
 package nacos
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,19 @@ import (
 
 	"spotter/internal/testkit/fakes"
 )
+
+func TestDefaultConstructorsUseSDKAndNeverAllocateCompatHTTP(t *testing.T) {
+	client, err := NewClient("127.0.0.1:8848", nil)
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	if client.sdk == nil || client.http != nil {
+		t.Fatalf("NewClient() transport = sdk:%t http:%t, want sdk=true/http=false", client.sdk != nil, client.http != nil)
+	}
+	if _, err := NewSink("127.0.0.1:8848", nil); !errors.Is(err, ErrUnsupportedOperation) {
+		t.Fatalf("NewSink() error = %v, want SDK startup capability gate", err)
+	}
+}
 
 // TestClientTransportConstructionPinned pins the explicit Transport's
 // construction values (dsca-2 DS-2-4): a zero-Transport client inherits
@@ -26,9 +40,9 @@ import (
 // breaker that bounds a wedged nacos to 8 held workers, not the ants
 // pool's 100). The outer 10s RequestTimeout is preserved.
 func TestClientTransportConstructionPinned(t *testing.T) {
-	client, err := NewClient("http://127.0.0.1:1", &fakes.FakeLogger{})
+	client, err := NewHTTPCompatClient("http://127.0.0.1:1", &fakes.FakeLogger{})
 	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
+		t.Fatalf("NewHTTPCompatClient() error = %v", err)
 	}
 	transport, ok := client.http.Transport.(*http.Transport)
 	if !ok {
@@ -87,9 +101,9 @@ func TestClientConcurrentRequestsReuseConnections(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClient(server.URL, &fakes.FakeLogger{})
+	client, err := NewHTTPCompatClient(server.URL, &fakes.FakeLogger{})
 	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
+		t.Fatalf("NewHTTPCompatClient() error = %v", err)
 	}
 
 	runWave := func() {
@@ -149,9 +163,9 @@ func TestClientConcurrentRequestsReuseConnections(t *testing.T) {
 func TestClientTransportDialTimeoutBoundsConnectionSetup(t *testing.T) {
 	// 203.0.113.0/24 is TEST-NET-3: unroutable by construction, so the
 	// dialer's timeout (not a refusal) is what fires.
-	client, err := NewClient("http://203.0.113.1:1", &fakes.FakeLogger{})
+	client, err := NewHTTPCompatClient("http://203.0.113.1:1", &fakes.FakeLogger{})
 	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
+		t.Fatalf("NewHTTPCompatClient() error = %v", err)
 	}
 	start := time.Now()
 	err = client.RegisterInstance(InstanceParams{ServiceName: "svc", IP: "10.0.0.1", Port: 8080, ClusterName: "k8s", Ephemeral: false})

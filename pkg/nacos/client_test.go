@@ -1,6 +1,8 @@
 // Package nacos_test holds the black-box suite of the Nacos adapter: the
-// hand-rolled v1 OpenAPI client (client_test.go) and the InstanceSink
-// (sink_test.go), both driven against the in-process nacosmock server.
+// explicit HTTP compatibility client (client_test.go) and the InstanceSink
+// (sink_test.go), both driven against the in-process nacosmock server. The
+// production constructors are SDK-only; every test using the raw HTTP seam
+// calls NewHTTPCompatClient/NewHTTPCompatSink explicitly.
 package nacos_test
 
 import (
@@ -25,7 +27,7 @@ func newClientAt(t *testing.T) (*nacos.Client, *nacosmock.Server) {
 	t.Helper()
 	server := nacosmock.Start()
 	t.Cleanup(server.Close)
-	client, err := nacos.NewClient(server.URL(), &fakes.FakeLogger{})
+	client, err := nacos.NewHTTPCompatClient(server.URL(), &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewClient(%s) error = %v", server.URL(), err)
 	}
@@ -583,7 +585,7 @@ func TestBlackboxClientListCatalogInstancesStopsAtCount(t *testing.T) {
 		writeJSONStub(w, map[string]interface{}{"count": len(hosts), "list": hosts[pageNo-1 : pageNo]})
 	}))
 	defer stub.Close()
-	client, err := nacos.NewClient(stub.URL, &fakes.FakeLogger{})
+	client, err := nacos.NewHTTPCompatClient(stub.URL, &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewClient(stub) error = %v", err)
 	}
@@ -687,7 +689,7 @@ func TestBlackboxClientTimeoutReturnsError(t *testing.T) {
 	// The delay exceeds the client's per-request timeout.
 	server.SetDelay(nacos.RequestTimeout + 500*time.Millisecond)
 
-	client, err := nacos.NewClient(server.URL(), &fakes.FakeLogger{})
+	client, err := nacos.NewHTTPCompatClient(server.URL(), &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
@@ -705,14 +707,14 @@ func TestBlackboxClientTimeoutReturnsError(t *testing.T) {
 }
 
 func TestBlackboxClientNewClientValidation(t *testing.T) {
-	if _, err := nacos.NewClient("", &fakes.FakeLogger{}); err == nil {
+	if _, err := nacos.NewHTTPCompatClient("", &fakes.FakeLogger{}); err == nil {
 		t.Fatal("NewClient(\"\") error = nil, want an error for the empty address")
 	}
-	if _, err := nacos.NewClient("://bad url", &fakes.FakeLogger{}); err == nil {
+	if _, err := nacos.NewHTTPCompatClient("://bad url", &fakes.FakeLogger{}); err == nil {
 		t.Fatal("NewClient(bad url) error = nil, want an error for the unparseable address")
 	}
 	// A nil logger is accepted and defaulted.
-	client, err := nacos.NewClient("http://127.0.0.1:1", nil)
+	client, err := nacos.NewHTTPCompatClient("http://127.0.0.1:1", nil)
 	if err != nil {
 		t.Fatalf("NewClient(nil logger) error = %v, want nil (defaulted)", err)
 	}
@@ -720,7 +722,7 @@ func TestBlackboxClientNewClientValidation(t *testing.T) {
 		t.Fatal("NewClient(nil logger) = nil client")
 	}
 	for _, address := range []string{"http://user:pass@127.0.0.1:8848", "http://127.0.0.1:8848?username=u", "http://127.0.0.1:8848?password=p"} {
-		if _, err := nacos.NewClient(address, &fakes.FakeLogger{}); err == nil {
+		if _, err := nacos.NewHTTPCompatClient(address, &fakes.FakeLogger{}); err == nil {
 			t.Fatalf("NewClient(%q) error = nil, want URL credentials rejected", address)
 		}
 	}
@@ -758,7 +760,7 @@ func TestBlackboxClientNewClientDefaultsScheme(t *testing.T) {
 	defer server.Close()
 
 	schemeless := strings.TrimPrefix(server.URL(), "http://")
-	client, err := nacos.NewClient(schemeless, &fakes.FakeLogger{})
+	client, err := nacos.NewHTTPCompatClient(schemeless, &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewClient(schemeless %q) error = %v, want nil (http defaulted)", schemeless, err)
 	}
@@ -772,10 +774,10 @@ func TestBlackboxClientNewClientDefaultsScheme(t *testing.T) {
 	}
 
 	// An explicit scheme is honored, not rewritten.
-	if _, err := nacos.NewClient(server.URL(), &fakes.FakeLogger{}); err != nil {
+	if _, err := nacos.NewHTTPCompatClient(server.URL(), &fakes.FakeLogger{}); err != nil {
 		t.Fatalf("NewClient(%q) error = %v, want nil (explicit scheme honored)", server.URL(), err)
 	}
-	if _, err := nacos.NewClient("https  ://127.0.0.1:1", &fakes.FakeLogger{}); err == nil {
+	if _, err := nacos.NewHTTPCompatClient("https  ://127.0.0.1:1", &fakes.FakeLogger{}); err == nil {
 		t.Fatal("NewClient(garbage) error = nil, want an error")
 	}
 

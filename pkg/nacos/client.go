@@ -200,9 +200,15 @@ const (
 // RequestTimeout fallback is used only when ClientConfig.Timeout is unset
 // (the configured timeout also covers response-body reads).
 func NewClient(addr string, logger ports.Logger) (*Client, error) {
-	// Deprecated: this legacy constructor is retained for tests and the
-	// explicit HTTP rollback path. Production wiring must use
-	// NewClientWithConfig with TransportSDK (the server defaults to SDK).
+	// The default constructor is SDK-only. Callers that intentionally need the
+	// temporary raw HTTP adapter must use NewHTTPCompatClient explicitly.
+	return NewClientWithConfig(ClientConfig{ServerURL: addr, TransportMode: TransportSDK}, logger)
+}
+
+// NewHTTPCompatClient is the explicitly named compatibility/rollback
+// constructor. It is not a production default and must never be selected by
+// product composition.
+func NewHTTPCompatClient(addr string, logger ports.Logger) (*Client, error) {
 	return NewClientWithConfig(ClientConfig{ServerURL: addr, TransportMode: TransportHTTPCompat}, logger)
 }
 

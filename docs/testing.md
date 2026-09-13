@@ -52,6 +52,11 @@ client-close outcomes are logged with a redacted endpoint, latency, and
 `residual_unknown`; a cleanup failure fails the test rather than producing a
 false protocol PASS.
 
+The exported Nacos constructors are SDK-default. HTTP fixture tests are
+required to call the explicit `NewHTTPCompatClient`/`NewHTTPCompatSink` names;
+the white-box constructor gate asserts that the default path has no raw HTTP
+client and that SDK sink capability failure occurs before remote writes.
+
 Companion documents: [architecture.md](architecture.md) (design),
 [data-model.md](data-model.md) (the `Instance` model),
 [operations.md](operations.md) (runbook). See [README.md](README.md) for the
