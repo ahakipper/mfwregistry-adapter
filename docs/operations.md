@@ -41,12 +41,14 @@ cluster-health capability is the current Nacos integration blocker. Deployment
 TLS/auth, HA/restart and non-public namespace evidence are outside this
 Spotter release scope.
 The scratch artifact includes guarded username/password and token runs plus
-the `tenant-a`/`blue` scope; those results do not replace production TLS/auth
-or HA evidence.
+the `tenant-a`/`blue` scope; these record only SDK/client scratch behavior.
+Deployment HA/TLS/auth/namespace/leaderless checks are out of scope in this
+phase and must not be interpreted as passed.
 The historical v2.3.5 `nacos_restart` race run exposed a vendor SDK reconnect
 race and is `FAIL / RACE_BLOCKED`. The current pseudo-pin `0024865` has a
-separate guarded ARM64 single-client `-race` scratch PASS; untagged SDK,
-HA/TLS/Admin behavior and production SDK lifecycle remain `NOT VERIFIED`.
+separate guarded ARM64 single-client `-race` scratch PASS; untagged SDK/Admin
+capability and production SDK lifecycle remain `NOT VERIFIED`; deployment
+HA/TLS/auth/namespace/leaderless checks are out of scope.
 
 ## Build
 
