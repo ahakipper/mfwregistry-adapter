@@ -110,6 +110,15 @@ The guarded `TestNacosRealAutoReconnect` now provides a real single-client
 verification path when an approved scratch target is supplied; it is not run
 in clean CI and remains `NOT VERIFIED` until such a run completes.
 
+The current guarded run was executed on the ARM64 image with host mappings
+`60848 → 8848`, `61848 → 9848`, and `61849 → 9849` using SDK pseudo-pin
+`0024865`. It kept one client across an observed outage, performed a
+post-restart write, and verified the disabled state through a fresh client
+under `-race`; cleanup reported `cleanup_attempted=true`,
+`status=passed`, and `residual_unknown=false`. This scratch result does not
+prove untagged SDK behavior, HA, TLS/production auth, Admin capability, or
+production readiness; all remain **NOT VERIFIED**.
+
 Commands and outcomes:
 
 ```bash

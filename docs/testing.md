@@ -86,9 +86,10 @@ server restart, the gate closes the pre-restart client and uses a fresh
 post-restart client; automatic reconnect remains `NOT VERIFIED/RACE_BLOCKED`.
 The pre-restart client is first warmed by a bounded service-list call so a
 startup-session Close race is not mistaken for the vendor restart result.
-The non-race scratch restart/new-client run passed with cleanup evidence; the
-race-enabled run is intentionally recorded as `FAIL / RACE_BLOCKED` until the
-vendor SDK issue is resolved.
+The non-race scratch restart/new-client run passed with cleanup evidence. A
+later guarded single-client auto-reconnect run with pseudo-pin `0024865`
+passed under `-race` on the ARM64 scratch image. This does not establish
+untagged SDK, HA, TLS, Admin, or production evidence.
 
 Companion documents: [architecture.md](architecture.md) (design),
 [data-model.md](data-model.md) (the `Instance` model),
