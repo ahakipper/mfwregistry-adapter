@@ -67,6 +67,10 @@ The approved-admin test seam covers pre-register ordering, same-pair claim/wait,
 typed retryable/permanent failures, timeout/cancellation, and bounded
 idempotent close; without a real Admin/Maintainer implementation these remain
 mock evidence and production stays `BLOCKED / NOT VERIFIED`.
+An ARM64 scratch result for both real SDK lifecycle tags is recorded in
+[`docs/evidence/nacos-arm64-scratch-2026-09-13.md`](evidence/nacos-arm64-scratch-2026-09-13.md);
+it is real scratch evidence only and leaves production Admin/TLS/auth/HA
+verification `NOT VERIFIED`.
 
 Companion documents: [architecture.md](architecture.md) (design),
 [data-model.md](data-model.md) (the `Instance` model),

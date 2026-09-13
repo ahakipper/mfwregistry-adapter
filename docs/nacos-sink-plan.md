@@ -28,6 +28,9 @@
 > Server composition accepts a per-start `ClusterAdminFactory`; each Nacos sink
 > lifecycle receives a fresh admin and closes it with the sink. A nil factory
 > intentionally preserves the SDK fail-closed block.
+> The ARM64 local scratch lifecycle evidence is recorded in
+> [evidence/nacos-arm64-scratch-2026-09-13.md](evidence/nacos-arm64-scratch-2026-09-13.md);
+> it is a real scratch check only and does not unlock production.
 >
 > The remaining F5/soak descriptions in this document describe the historical
 > local implementation stage; they do not constitute a production PASS.

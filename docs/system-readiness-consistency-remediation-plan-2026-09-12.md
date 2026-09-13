@@ -13,6 +13,9 @@
 > cluster-admin capability gap; raw HTTP is reachable only through explicitly
 > named `NewHTTPCompatClient`/`NewHTTPCompatSink` compatibility constructors and
 > their fixture tests.
+> ARM64 scratch SDK lifecycle evidence is recorded in
+> [docs/evidence/nacos-arm64-scratch-2026-09-13.md](evidence/nacos-arm64-scratch-2026-09-13.md);
+> it does not promote production readiness or close the Admin/TLS/auth/HA gates.
 
 **当前基线：** `refactor/all` / `5df45d5`（实现基线 `b38505c`，其后为文档同步提交）。A0→A3、B1、B2 HTTP 过渡层、B3 SDK seam、B4 Atlas gate、C1 Observe 修复、D1 provider overflow/lifecycle、C2 logger/notifier/metrics 注入和两条 `go vet` 诊断清零已按阶段提交并通过 focused/full/race/cover 测试；`go vet ./...` 当前为 0。Nacos naming、service-list、SelectAll/query、subscribe/unsubscribe、catalog/prune 和 readiness read/write 已统一经官方 SDK；cluster Admin health-check update 在 SDK v2.3.5 中没有等价接口，SDK mode typed fail-closed，HTTP 仅显式 compatibility/test 且 product wiring 拒绝。真实 Nacos/Atlas 证据、appcenter endpoint contract、完整 2h Observe 和最终真实环境发布证据仍未闭环。
 
