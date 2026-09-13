@@ -2,10 +2,10 @@
 
 **审计日期：** 2026-09-12（当前状态增量更新至 2026-09-13）
 **仓库：** `/Users/d-robotics/go/src/github.com/ahakipper/mfwregistry-adapter`  
-**分支/提交：** `refactor/all` / `5df45d5`
+**分支/提交：** `refactor/all` / `356aa75`
 **文档状态：** FINAL（已完成第二轮独立 reviewer 复核）
 
-> **当前状态增补（2026-09-13，权威提交 `5df45d5`）：** 生产 Nacos 默认仍为 SDK-only，但因官方 Nacos Go SDK v2.3.5 没有 cluster-admin health-check update，启动在 readiness/canary 前 **BLOCKED / NOT VERIFIED**；`http-compat` 仅测试/回滚。Nacos real/sdk-eval harness 已加入 TLS/CA/server-name/auth guards、redacted evidence 和 write-attempt cleanup，但没有真实目标，不能宣称协议 PASS。Atlas 仍是普通 Go struct + JSON codec 的 discoverymock stand-in，真实 protobuf/TLS/auth/method compatibility **NOT VERIFIED**。Observe harness 的命令、健康检查和 teardown 已 context-bounded，clean host 缺外部依赖会显式 `NOT VERIFIED: EnvError/InfraError` skip；完整 2h OBS 未运行。Nacos GetAll 只返回 `spotterOwner` 自有条目；Cache Delete/GetAll 已修复 nil、深拷贝、空 provider 和 legacy 唯一匹配。Notifier 有 owned context/Close/retry/fail-closed 生命周期，但真实 AppCenter endpoint/payload/auth/SLA 未提供。DDD active graph 使用显式 ports，legacy bridge 集中于 `internal/infra/legacycompat`；Consul 同规模观察按当前无机器部署列为 accepted non-goal。`go vet ./...`、相关 race/unit/tagged gates 已通过；真实 Nacos/Atlas/OBS-full 证据仍保持 NOT VERIFIED。
+> **当前状态增补（2026-09-13，代码基线 `356aa75`）：** 生产 Nacos 默认仍为 SDK-only，但因官方 Nacos Go SDK v2.3.5 没有 cluster-admin health-check update，启动在 readiness/canary 前 **BLOCKED / NOT VERIFIED**；`http-compat` 仅测试/回滚。Nacos real/sdk-eval harness 已加入 TLS/CA/server-name/auth guards、redacted evidence 和 write-attempt cleanup，本地 scratch 目标已补充但不能宣称生产协议 PASS。Atlas 仍是普通 Go struct + JSON codec 的 discoverymock stand-in，真实 protobuf/TLS/auth/method compatibility **NOT VERIFIED**。Observe harness 的命令、健康检查和 teardown 已 context-bounded，clean host 缺外部依赖会显式 `NOT VERIFIED: EnvError/InfraError` skip；完整 2h OBS 未运行。Nacos GetAll 只返回 `spotterOwner` 自有条目；Cache Delete/GetAll 已修复 nil、深拷贝、空 provider 和 legacy 唯一匹配。Notifier 有 owned context/Close/retry/fail-closed 生命周期，但真实 AppCenter endpoint/payload/auth/SLA 未提供。DDD active graph 使用显式 ports，legacy bridge 集中于 `internal/infra/legacycompat`；Consul 同规模观察按当前无机器部署列为 accepted non-goal。`go vet ./...`、相关 race/unit/tagged gates 已通过；真实 Nacos/Atlas/OBS-full 证据仍保持 NOT VERIFIED。
 
 > Nacos exported `NewClient`/`NewSink` now default to SDK; raw HTTP is
 > available only through explicitly named compatibility constructors, and SDK
@@ -15,6 +15,9 @@
 > [nacos-arm64-scratch-2026-09-13.md](evidence/nacos-arm64-scratch-2026-09-13.md):
 > both SDK lifecycle tags passed with cleanup evidence, but this is not
 > production evidence and does not close TLS/auth/HA/Admin/Atlas/Observe gates.
+> The artifact also records the guarded auth-enabled `38848/39848/39849` run
+> and the `tenant-a`/`blue` namespace/group run, plus the intentional rejection
+> of plaintext auth without scratch/write guards.
 > An externally injected `NacosClusterAdmin` now runs before business register;
 > same-pair concurrent claims wait on one result, admin failures retain typed
 > retryability, and client/readiness close is bounded, idempotent, and surfaced.
@@ -63,7 +66,7 @@ amd64，QEMU 下 Java 持续高 CPU 超过 5 分钟仍无 readiness 响应。容
 执行过的本地核验：
 
 > 以下命令清单保留审计当日的原始 provenance；其中关于 `tools/cache` vet
-> 诊断的失败描述属于历史快照，不代表 HEAD `5df45d5`。当前状态以本文顶部
+> 诊断的失败描述属于历史快照，不代表 HEAD `356aa75`。当前状态以本文顶部
 > 增补和 remediation plan 的最新阶段证据为准。
 
 - `make test-all`：通过。包括 race 单测、blackbox、5 个 smoke 用例和 `-tags=e2e` 测试。

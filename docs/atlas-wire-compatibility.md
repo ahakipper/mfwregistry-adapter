@@ -2,7 +2,7 @@
 
 Status: **NOT VERIFIED (P1)**.
 
-> **Current-status addendum (2026-09-13, authoritative HEAD `5df45d5`):** The
+> **Current-status addendum (2026-09-13, code baseline `356aa75`):** The
 > guarded `atlas_real` gate now supports explicit TLS/CA/server-name and
 > scratch-only insecure-auth controls, marks canary cleanup before the first
 > write, validates cleanup responses, and reports redacted endpoint/latency/

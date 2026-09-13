@@ -1,6 +1,6 @@
 # Multi-Sink Plan: Nacos as the Second InstanceSink
 
-> **Current-state addendum (2026-09-13, authoritative HEAD `5df45d5`):** This document contains the original F5
+> **Current-state addendum (2026-09-13, code baseline `356aa75`):** This document contains the original F5
 > implementation plan. Its D4 “hand-rolled HTTP client” decision is superseded:
 > all production Nacos operations must now go through the official Nacos SDK or
 > an explicitly versioned SDK facade. The existing HTTP client may remain only
@@ -11,7 +11,7 @@
 > Production SDK startup is intentionally **BLOCKED / NOT VERIFIED** before
 > readiness because SDK v2.3.5 lacks the required cluster-admin health-check
 > operation; no HTTP fallback is permitted in product wiring. Real Nacos tests
-> are guarded and cleanup-safe but have no real target, so mock/race evidence
+> are guarded and cleanup-safe with local ARM64 scratch evidence, so mock/race evidence
 > does not promote the production status.
 > Exported `NewClient` and `NewSink` are SDK-default and therefore inherit
 > that fail-closed capability gate. Raw HTTP tests/rollback callers must use
@@ -31,6 +31,8 @@
 > The ARM64 local scratch lifecycle evidence is recorded in
 > [evidence/nacos-arm64-scratch-2026-09-13.md](evidence/nacos-arm64-scratch-2026-09-13.md);
 > it is a real scratch check only and does not unlock production.
+> Auth-enabled lifecycle and the non-public `tenant-a`/`blue` namespace/group
+> replay are also recorded there; credentials are intentionally omitted.
 >
 > The remaining F5/soak descriptions in this document describe the historical
 > local implementation stage; they do not constitute a production PASS.
@@ -62,7 +64,7 @@ the production gap explicit; there is no hidden fallback to `net/http`.
 
 Status: authoritative implementation plan for the multi-sink initiative on
 `refactor/all`; the historical implementation baseline `728f1d2` is superseded
-by the current-status addendum above and HEAD `5df45d5`. The lead implements it
+by the current-status addendum above and HEAD `356aa75`. The lead implements it
 phase-by-phase (F2..F6) under agent review; each phase's exit criteria are
 the review contract. Companions: [ddd-architecture.md](ddd-architecture.md)
 (target layering, §4 decisions), [architecture.md](architecture.md),

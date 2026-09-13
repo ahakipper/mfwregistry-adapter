@@ -8,7 +8,7 @@ per tier, and specifies the exact Makefile targets that will implement the
 matrix. It is the implementation brief for the test work that follows; it does
 not change any code by itself.
 
-**Current status (2026-09-13, authoritative HEAD `5df45d5`; implementation baseline `b38505c`):** the default unit, full and
+**Current status (2026-09-13, code baseline `356aa75`; implementation baseline `b38505c`):** the default unit, full and
 race suites are green and `go vet ./...` is clean. The Nacos naming path is
 SDK-backed by default; `http-compat` is an explicit test/rollback mode. The
 SDK mode allocates no compatibility HTTP client; service-list, SelectAll-based
@@ -71,6 +71,9 @@ An ARM64 scratch result for both real SDK lifecycle tags is recorded in
 [`docs/evidence/nacos-arm64-scratch-2026-09-13.md`](evidence/nacos-arm64-scratch-2026-09-13.md);
 it is real scratch evidence only and leaves production Admin/TLS/auth/HA
 verification `NOT VERIFIED`.
+The evidence includes the auth-enabled dual-port run and one non-public
+namespace/group run; the plaintext-auth rejection is retained as a negative
+security result, not a successful deployment claim.
 
 Companion documents: [architecture.md](architecture.md) (design),
 [data-model.md](data-model.md) (the `Instance` model),

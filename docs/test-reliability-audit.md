@@ -1,6 +1,6 @@
 # Test Reliability Audit — Findings
 
-> **Current-status addendum (2026-09-13, code HEAD `5df45d5`):** This document's
+> **Current-status addendum (2026-09-13, code HEAD `356aa75`):** This document's
 > 41 findings and batch-1…5 references are historical provenance, not a claim
 > that the old baseline still describes the implementation. A0–A3, B1–B4,
 > C1/C2 and D1 remediation work has since landed: source-aware identity and
@@ -15,7 +15,7 @@
 > VERIFIED**. Consul scale remains an accepted non-goal. Historical findings
 > below are preserved for provenance and should be read with the current audit
 > and remediation-plan addenda first.
-> The current code baseline is `5df45d5`; related later stage commits include
+> The current code baseline is `356aa75`; related later stage commits include `5df45d5` (panic recovery),
 > `102e812`/`e118882`/`a2b9b83` (Nacos admin seam and per-start factory),
 > `dc7e14c` (metrics handler lifecycle), and `8e9ceab` (historical-audit
 > documentation sync).

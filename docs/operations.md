@@ -4,12 +4,12 @@ Operational reference for building, running, monitoring and troubleshooting
 spotter. See [architecture.md](architecture.md) for design background and
 [data-model.md](data-model.md) for the pushed data model.
 
-## Current release status (2026-09-13, HEAD `5df45d5`)
+## Current release status (2026-09-13, HEAD `356aa75`)
 
 - Nacos production startup defaults to the official SDK but is **BLOCKED / NOT
   VERIFIED** before readiness until an official Admin/Maintainer cluster-health
   operation is available. `http-compat` is restricted to tests/rollback.
-- Real Nacos and Atlas gates are scratch-only and currently have no target;
+- Real Nacos has bounded ARM64 scratch evidence, while Atlas has no real target;
   their skips are not production evidence. Atlas JSON discoverymock is not
   protobuf compatibility proof.
 - Observe unit/race harness safety is implemented, including bounded external
@@ -35,6 +35,9 @@ The ARM64 local Nacos SDK lifecycle result is recorded in
 [`docs/evidence/nacos-arm64-scratch-2026-09-13.md`](evidence/nacos-arm64-scratch-2026-09-13.md).
 It is not a production readiness approval; Admin/Maintainer capability,
 TLS/auth, HA/restart, and non-public namespace evidence remain outstanding.
+The scratch artifact includes guarded username/password and token runs plus
+the `tenant-a`/`blue` scope; those results do not replace production TLS/auth
+or HA evidence.
 
 ## Build
 
