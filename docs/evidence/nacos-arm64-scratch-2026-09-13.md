@@ -125,6 +125,17 @@ for ephemeral batch registration; its cleanup completed with
 `NOT VERIFIED` for this target and requires independent validation on newer
 Nacos versions.
 
+### Latest ARM64 run
+
+Against the Nacos 2.1.0 slim image (`sha256:e689...`) on host ports
+`60848/61848/61849`, `TestNacosReal -race` passed its persistent lifecycle
+and cleanup (`residual_unknown=false`). `TestNacosSDKPersistentLifecycle`
+remained `NOT VERIFIED` because the target returned `RequestHandler Not Found`
+for batch; batch cleanup was recorded as unsupported with no residual while
+persistent cleanup passed. Docker inspection verified the container was absent.
+Batch support is target-dependent and does not affect the persistent sink;
+HA, TLS, Admin, untagged SDK, and production readiness remain **NOT VERIFIED**.
+
 Commands and outcomes:
 
 ```bash

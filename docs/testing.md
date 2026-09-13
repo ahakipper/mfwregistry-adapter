@@ -556,6 +556,10 @@ verification, while
 Spotter's persistent sink does not depend on batch registration. Other batch
 errors remain hard failures and cleanup still runs.
 
+Latest ARM64 evidence records `TestNacosReal -race` persistent lifecycle PASS;
+the SDK eval batch operation is target-dependent and remains NOT VERIFIED on
+Nacos 2.1.0, while persistent cleanup passes and residual state is false.
+
 The SDK-only code path is covered by unit and race tests. A production SDK sink must fail before readiness or canary side effects while the pinned SDK lacks the required cluster-admin health-check operation; real Nacos/Admin verification is therefore `BLOCKED / NOT VERIFIED`.
 
 ### Observe lifecycle status
