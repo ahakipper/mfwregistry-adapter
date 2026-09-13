@@ -1,6 +1,6 @@
 # Atlas wire compatibility gate
 
-Status: **DEFERRED (future entry gate)**.
+Status: **DEFERRED (future entry gate; not a current release blocker)**.
 
 > **Current-status addendum (2026-09-13, code baseline `33606fa`):** Atlas is
 > retained as an existing Sink/mock integration point and deferred from the

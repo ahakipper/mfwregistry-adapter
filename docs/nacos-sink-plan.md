@@ -1,5 +1,8 @@
 # Multi-Sink Plan: Nacos as the Second InstanceSink
 
+> Current scope: Atlas remains an optional existing Sink/mock deferred from the
+> current release; this plan's release gate covers the Nacos single-Sink SDK.
+
 > **Current-state addendum (2026-09-13, code baseline `356aa75`):** This document contains the original F5
 > implementation plan. Its D4 “hand-rolled HTTP client” decision is superseded:
 > all production Nacos operations must now go through the official Nacos SDK or

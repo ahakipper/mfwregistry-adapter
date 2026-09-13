@@ -1,5 +1,9 @@
 # spotter 全面修复与验证计划
 
+> Current scope: Atlas is an optional existing Sink/mock deferred from the
+> current release; real wire compatibility is a future entry gate. Deployment
+> Nacos HA/TLS/auth/namespace/leaderless checks are outside scope.
+
 > **执行说明：** 本计划以 [system-readiness-consistency-audit-2026-09-12.md](system-readiness-consistency-audit-2026-09-12.md) 为输入，按工作包和提交批次执行。每个批次必须先补测试、再改实现、再跑门禁；任何 P0/P1/P2 未关闭时不得宣布批次完成。
 
 **目标：** 修复 Spotter 的实例身份、事件顺序、全量对账、Nacos Sink 通信闭环和生产配置边界，并形成可重复的测试与 E2E 证据链。

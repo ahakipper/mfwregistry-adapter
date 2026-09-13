@@ -1,5 +1,8 @@
 # DSCA Track 3 — Reconcile Correctness vs Nacos
 
+> Current scope addendum: Atlas remains optional and deferred; historical Atlas
+> findings below are preserved. The current release evaluates the Nacos Sink.
+
 **Auditor:** DS-3 (reconcile correctness vs nacos)
 **Repo:** `spotter`, branch `refactor/all`, implementation baseline `c986632`
 **Historical HEAD note:** the original audit was executed at `69b0105`; its live probes and code citations are retained as historical evidence below.
