@@ -6,7 +6,6 @@ import (
 	uuid "github.com/satori/go.uuid"
 	"go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
-	legacycompat "spotter/internal/infra/legacycompat"
 	"spotter/internal/ports"
 	"sync"
 	"time"
@@ -120,23 +119,9 @@ func isNilCandidateDeps(value interface{}) bool {
 // legacy value came from the config.LockCampaignKey global). Pass an empty
 // campaignKey to fall back to that global, which keeps older callers
 // working unchanged.
-func NewCandidate(ctx context.Context, etcdclient *clientv3.Client, campaignKey string) (can Candidate, err error) {
-	if campaignKey == "" {
-		campaignKey = legacycompat.CampaignKey()
-	}
-	return NewCandidateWithClock(ctx, etcdclient, campaignKey, nil)
-}
-
 // NewCandidateWithClock builds a candidate with an injected clock that
 // drives the Wait poll cadence (default realClock when nil — the legacy
 // 2s behavior). Logger and notifier default to nops.
-func NewCandidateWithClock(ctx context.Context, etcdclient *clientv3.Client, campaignKey string, clock ports.Clock) (can Candidate, err error) {
-	if campaignKey == "" {
-		campaignKey = legacycompat.CampaignKey()
-	}
-	return NewCandidateWithDeps(ctx, etcdclient, campaignKey, clock, nil, nil)
-}
-
 // NewCandidateWithDeps is the full-dependency constructor: clock drives the
 // Wait poll cadence, logger receives operational logs, notifier receives
 // campaign failure notices. Nil arguments select the defaults (realClock,

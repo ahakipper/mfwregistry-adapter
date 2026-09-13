@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"go.etcd.io/etcd/client/v3"
-	legacycompat "spotter/internal/infra/legacycompat"
 	"spotter/internal/ports"
 	"spotter/pkg/distribute/election"
 	"spotter/pkg/etcd"
@@ -164,11 +163,6 @@ func newElectWorker(ctx context.Context, candidate election.Candidate, leaderChC
 	}
 	ew.setLeaderChangeNotifyCall(leaderChCh)
 	return ew
-}
-
-func NewElector(ctx context.Context, leaderChCh chan bool) (Elector, error) {
-	endpoints, cert, key, ca, campaign := legacycompat.EtcdConfig()
-	return NewElectorWithDeps(ctx, leaderChCh, endpoints, cert, key, ca, campaign, legacycompat.Logger(), legacycompat.Notifier())
 }
 
 // ElectWait will perform the behavior of electing the leader. It will

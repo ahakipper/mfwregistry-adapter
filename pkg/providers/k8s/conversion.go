@@ -4,7 +4,6 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"regexp"
-	legacycompat "spotter/internal/infra/legacycompat"
 	internalports "spotter/internal/ports"
 	sv "spotter/pkg/beehive/service/v2"
 	k8srobot "spotter/pkg/k8srobot"
@@ -14,10 +13,6 @@ import (
 )
 
 // TODO obj param optimize
-func formatInstance(obj *k8srobot.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
-	return formatInstanceWithDeps(obj, pod, legacycompat.PushAppCodes(), legacycompat.Logger())
-}
-
 // formatInstanceWithDeps is the production conversion entry point. It keeps
 // source filtering and diagnostics on explicit collaborators; formatInstance
 // above remains a compatibility wrapper for legacy white-box tests only.

@@ -74,10 +74,9 @@ func (k *k8s) ensureDeps() {
 			k.done = make(chan struct{})
 		}
 		if !k.depsConfigured {
-			// Direct white-box construction is unsupported for production wiring;
-			// keep zero-value dependencies safe without consulting compatibility
-			// globals. Deprecated exported wrappers resolve legacy values before
-			// entering the explicit constructor.
+			// Preserve zero-value white-box compatibility; explicit constructors
+			// set depsConfigured and never enter this fallback.
+			k.pushAppCodes = legacycompat.PushAppCodes()
 		}
 		if k.logger == nil {
 			k.logger = ports.NopLogger{}
@@ -94,10 +93,6 @@ func (k *k8s) ensureDeps() {
 const queueDepthReportInterval = 5 * time.Second
 
 // NewK8SProvider Init k8s provider
-func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int, configPath []string) (provider providers.Provider, err error) {
-	return NewK8SProviderWithDeps(ctx, worker, pushInterval, configPath, legacycompat.Logger(), legacycompat.Notifier(), legacycompat.PushAppCodes())
-}
-
 // NewK8SProviderWithDeps constructs the provider from explicit runtime
 // collaborators. The legacy constructor above remains only as a compatibility
 // wrapper for callers that still initialize pkg/log and pkg/notice globals.
