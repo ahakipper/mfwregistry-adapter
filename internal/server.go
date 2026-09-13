@@ -344,16 +344,17 @@ func (s *Server) startProviders() error {
 		if s.cfg.NacosTimeout > 0 {
 			nacosCfg.Timeout = time.Duration(s.cfg.NacosTimeout) * time.Second
 		}
-		if err := nacos.CheckReadinessWithConfig(nacosCfg, s.logger); err != nil {
-			cleanup()
-			s.clearStartup(generation, nil)
-			return errors.WithMessage(err, "nacos readiness check")
-		}
 		nacosSink, err = nacos.NewSinkWithConfig(nacosCfg, s.logger)
 		if err != nil {
 			cleanup()
 			s.clearStartup(generation, nil)
 			return errors.WithMessage(err, "new nacos sink")
+		}
+		if err := nacos.CheckReadinessWithConfig(nacosCfg, s.logger); err != nil {
+			_ = nacosSink.Close()
+			cleanup()
+			s.clearStartup(generation, nil)
+			return errors.WithMessage(err, "nacos readiness check")
 		}
 		// The Nacos sink owns the official SDK naming client and closes its
 		// gRPC/redo resources with the fanout; the Atlas gRPC connection is
