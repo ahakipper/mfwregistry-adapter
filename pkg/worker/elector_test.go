@@ -9,10 +9,22 @@ import (
 	"time"
 
 	"go.etcd.io/etcd/client/v3"
+	legacycompat "spotter/internal/infra/legacycompat"
 	"spotter/internal/ports"
 	"spotter/internal/testkit/etcdmock"
 	"spotter/pkg/distribute/election"
 )
+
+func TestElectorWithDepsDoesNotReadLegacyGlobals(t *testing.T) {
+	legacycompat.ResetAccessCounts()
+	_, err := NewElectorWithCandidate(context.Background(), &fakeCandidate{}, make(chan bool, 1), ports.NopLogger{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := legacycompat.AccessCountsSnapshot().Reads; got != 0 {
+		t.Fatalf("legacy reads=%d", got)
+	}
+}
 
 // fakeCandidate implements election.Candidate without touching the network,
 // so the elector seams (setLeaderChangeNotifyCall, ElectWait's campaign

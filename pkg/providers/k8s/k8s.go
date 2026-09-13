@@ -74,10 +74,10 @@ func (k *k8s) ensureDeps() {
 			k.done = make(chan struct{})
 		}
 		if !k.depsConfigured {
-			// White-box/legacy callers may construct the unexported provider
-			// directly. Preserve their config-global filtering semantics while
-			// keeping the production constructor fully injected.
-			k.pushAppCodes = legacycompat.PushAppCodes()
+			// Direct white-box construction is unsupported for production wiring;
+			// keep zero-value dependencies safe without consulting compatibility
+			// globals. Deprecated exported wrappers resolve legacy values before
+			// entering the explicit constructor.
 		}
 		if k.logger == nil {
 			k.logger = ports.NopLogger{}
