@@ -1,4 +1,4 @@
-# Atlas wire compatibility gate
+# Atlas wire compatibility gate (deferred follow-up)
 
 Status: **DEFERRED (future entry gate; not a current release blocker)**.
 
