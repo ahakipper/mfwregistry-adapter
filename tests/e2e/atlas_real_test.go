@@ -35,7 +35,7 @@ type atlasRealConfig struct {
 func parseAtlasRealConfig() (atlasRealConfig, error) {
 	c := atlasRealConfig{addr: strings.TrimSpace(os.Getenv("ATLAS_REAL_ADDR")), auth: strings.TrimSpace(os.Getenv("ATLAS_REAL_AUTH_TOKEN")), ca: strings.TrimSpace(os.Getenv("ATLAS_REAL_CA_FILE")), serverName: strings.TrimSpace(os.Getenv("ATLAS_REAL_SERVER_NAME"))}
 	c.insecure = os.Getenv("ATLAS_REAL_INSECURE_SKIP_VERIFY") == "1"
-	c.tls = strings.HasPrefix(strings.ToLower(c.addr), "https://") || c.ca != "" || c.serverName != "" || os.Getenv("ATLAS_REAL_TLS") == "1"
+	c.tls = strings.HasPrefix(strings.ToLower(c.addr), "https://") || c.ca != "" || c.serverName != "" || c.insecure || os.Getenv("ATLAS_REAL_TLS") == "1"
 	if c.addr == "" {
 		return c, errors.New("ATLAS_REAL_ADDR is required")
 	}
@@ -89,15 +89,16 @@ func (jsonCodec) Name() string                               { return "json" }
 
 func TestParseAtlasRealConfigAuthAndTLSGuards(t *testing.T) {
 	cases := []struct {
-		name                       string
-		addr                       string
-		tls, allow, scratch, write bool
-		wantErr                    bool
+		name                                 string
+		addr                                 string
+		tls, insecure, allow, scratch, write bool
+		wantErr                              bool
 	}{
-		{"plaintext missing guards", "127.0.0.1:1", false, false, true, true, true},
-		{"plaintext insecure opt in", "127.0.0.1:1", false, true, true, true, false},
-		{"host with explicit TLS is TLS", "127.0.0.1:1", true, false, false, false, false},
-		{"https is TLS", "https://127.0.0.1:1", false, false, false, false, false},
+		{"plaintext missing guards", "127.0.0.1:1", false, false, false, true, true, true},
+		{"plaintext insecure opt in", "127.0.0.1:1", false, false, true, true, true, false},
+		{"host with explicit TLS is TLS", "127.0.0.1:1", true, false, false, false, false, false},
+		{"https is TLS", "https://127.0.0.1:1", false, false, false, false, false, false},
+		{"insecure TLS with auth", "127.0.0.1:1", false, true, false, false, false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -107,6 +108,11 @@ func TestParseAtlasRealConfigAuthAndTLSGuards(t *testing.T) {
 				t.Setenv("ATLAS_REAL_TLS", "1")
 			} else {
 				t.Setenv("ATLAS_REAL_TLS", "")
+			}
+			if tc.insecure {
+				t.Setenv("ATLAS_REAL_INSECURE_SKIP_VERIFY", "1")
+			} else {
+				t.Setenv("ATLAS_REAL_INSECURE_SKIP_VERIFY", "")
 			}
 			if tc.allow {
 				t.Setenv("ATLAS_REAL_ALLOW_INSECURE_AUTH", "1")
