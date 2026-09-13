@@ -25,7 +25,7 @@
 |---|---|---|
 | A0–A3 身份、顺序、全量重试 | **IMPLEMENTED / TESTED** | source-aware identity、keyed per-identity gate、typed full retry、revalidation、tombstone scope 已提交；仍需真实 2h/生产观测验证。 |
 | K8s cache/worker | **IMPLEMENTED / RACE-TESTED** | cache pointer swap、stop-state、HasSynced cancel 竞态已修复；`--appcodes` 多值 membership、full SyncAll metadata、cross-provider tombstone 已修复；ants pool overload 现在 nonblocking 并计数 drop。 |
-| Nacos naming | **SDK DEFAULT / REAL EVIDENCE PENDING** | 官方 SDK v2.3.5 facade 已接入，生产默认 `sdk`；catalog/prune、cluster Admin、readiness 仍是有 owner/expiry 的 HTTP compatibility exceptions。 |
+| Nacos naming | **SDK DEFAULT / NO PRODUCTION RAW HTTP / REAL EVIDENCE PENDING** | 官方 SDK v2.3.5 facade 已接入；register/deregister/list/query/subscribe/service-list/catalog/prune/readiness 均经 SDK；SDK mode 不分配 compatibility HTTP client。cluster Admin 的 NONE health-check update 在 SDK v2.3.5 不存在，现返回 typed `ErrUnsupportedOperation` 并显式记录 release gap；HTTP 仅显式 compatibility/test，且 product wiring 拒绝。 |
 | Atlas wire | **NOT VERIFIED (P1)** | JSON mirror + guarded `atlas_real` harness；真实 protobuf/JSON、TLS/auth/method path 仍待 scratch。 |
 | Observe | **HARNESS FIXED / 2H NOT RUN** | zap `ts` 解析和 ledger-before-apply/delete 已修复；完整自包含 2h OBS 仍待执行。 |
 | DDD / notice | **CODE IMPLEMENTED / REAL DELIVERY PENDING** | active provider/elector/conversion/metrics graph uses injected ports; legacy constructors/bridge remain for compatibility; aggregate is build-gated; appcenter HTTP adapter is fail-closed until deployment contract is supplied. |
@@ -64,40 +64,44 @@ amd64，QEMU 下 Java 持续高 CPU 超过 5 分钟仍无 readiness 响应。容
 | Burst delete race | **IMPLEMENTED / TESTED; REAL OBS PENDING** | keyed per-identity gate、trusted full revalidation、scoped tombstone 和 typed full retry 已提交；真实长时 burst/生产延迟仍需重跑观察 | 部分过时：原始 burst 结果保留为历史证据，当前实现状态见增量章节 |
 | Observe `logSlice` + ledger/apply 竞态 | **HARNESS FIXED; 2H PENDING** | zap JSON `ts`/行首时间解析和 apply/delete 前 ledger clock 已修复并有 deterministic tests；完整自包含 2h 观察尚未执行 | 是：旧缺口已修复，长时证据仍缺 |
 | Consul 同等规模观察 | **ACCEPTED NON-GOAL** | 2h/1000 观察只启动 `--providers k8s`；当前没有机器部署场景，按本次范围暂不展开 | 否；范围边界已明确 |
-| Nacos HTTP/SDK Sink | **SDK DEFAULT / HTTP EXCEPTIONS / REAL PARTIAL** | naming lifecycle/query/subscribe 走官方 SDK；catalog/prune、cluster Admin、readiness 由有 owner/expiry 的集中 compatibility adapter 承担；真实 Nacos 2.x/auth/TLS/HA 证据仍缺 | 是：当前默认已从裸 HTTP 迁移到 SDK seam |
+| Nacos HTTP/SDK Sink | **SDK DEFAULT / PRODUCTION SDK-ONLY / REAL PARTIAL** | naming lifecycle/query/subscribe/service-list、catalog/prune 和 readiness read/write 走官方 SDK；cluster Admin 无 SDK 等价接口，SDK mode fail-closed/显式报错；HTTP 仅集中 compatibility adapter，product 环境拒绝；真实 Nacos 2.x/auth/TLS/HA 证据仍缺 | 是：此前“catalog/readiness HTTP exception”描述已被当前实现取代 |
 | Nacos 官方 SDK gRPC 能力 | **SUPPORTED BY SDK AND WIRED** | v2.3.5 naming facade 已接入；persistent register/deregister 按 SDK 设计走 HTTP，ephemeral/batch 走 gRPC；真实 server round-trip 仍待执行 | 是 |
-| Nacos SDK 统一接入约束 | **CODE PASS / RELEASE NOT VERIFIED (P1)** | `TransportSDK` 默认、`http-compat` 显式回滚、静态 raw-HTTP allowlist 和 exception registry 已存在；真实 query/list/subscribe/batch/reconnect/auth/TLS 证据仍缺 | 是：代码门禁已落地，发布证据未闭环 |
+| Nacos SDK 统一接入约束 | **CODE PASS / RELEASE NOT VERIFIED (P1)** | `TransportSDK` 默认、SDK mode 不分配 raw HTTP、catalog/prune/readiness 通过 SDK facade、cluster Admin typed unsupported、product 拒绝 `http-compat`；静态 raw-HTTP allowlist/negative tests 已补齐；真实 query/list/subscribe/batch/reconnect/auth/TLS 证据仍缺 | 是：代码门禁已落地，发布证据未闭环 |
 | Atlas 真实 protobuf wire | **NOT VERIFIED / P1** | 本仓库模型是普通 Go struct；生产 `Dial` 强制 JSON codec，只有本地 discoverymock/e2e 证明 JSON 链路；未证明真实 Atlas 接受该 codec | 否；限制说明准确 |
 | Notice / appcenter 告警 | **CODE PARTIAL / REAL DELIVERY PENDING** | active graph 已使用注入式 `Notifier`，新增 HTTP adapter、重试、失败计数、redaction 和 fail-closed；真实 appcenter endpoint/payload/auth/SLA 尚未验证 | 是 |
 | DDD 目标架构 | **CODE PARTIAL / SHIM RETIREMENT PENDING** | active provider/elector/conversion/metrics graph 已使用显式依赖；legacy constructors/bridge 保留兼容，aggregate 已由 `legacyaggregate` build tag 隔离 | 是 |
 | `go vet ./...` | **PASS** | `eb6bf0c` 修复 cache printf 和 K8s unkeyed literal；当前命令退出 0 | 是 |
 
-**总体判定：** 业务主路径已经达到“可构建、可测试、可在本地 Nacos 2.1 形状运行”的阶段；身份、顺序、全量重试、空源 ownership、Nacos naming SDK、K8s cache swap 和 vet 缺陷已有代码修复与离线/竞态证据，但还不是“生产一致性闭环已证明”。仍未闭环的是真实 Nacos/Atlas 协议与 HA/TLS/auth 证据、完整 2h Observe、DDD globals、真实 appcenter 告警，以及集中 HTTP Admin/Catalog/readiness 例外的最终替换。Consul 大规模观察按当前没有机器部署场景处理为 accepted non-goal，不影响本次 K8s 主路径结论；一旦重新启用 ECS/机器部署，必须单独打开该验证项。
+**总体判定：** 业务主路径已经达到“可构建、可测试、可在本地 Nacos 2.1 形状运行”的阶段；身份、顺序、全量重试、空源 ownership、Nacos SDK naming/catalog/readiness、K8s cache swap 和 vet 缺陷已有代码修复与离线/竞态证据，但还不是“生产一致性闭环已证明”。仍未闭环的是真实 Nacos/Atlas 协议与 HA/TLS/auth 证据、完整 2h Observe、DDD globals、真实 appcenter 告警，以及 cluster-admin health-check 的官方 SDK 替代方案。Consul 大规模观察按当前没有机器部署场景处理为 accepted non-goal，不影响本次 K8s 主路径结论；一旦重新启用 ECS/机器部署，必须单独打开该验证项。
 
 ## 3. Nacos Sink 审计
 
 ### 3.1 已经具备的能力
 
-当前 `pkg/nacos` 是自研的 Nacos v1 HTTP OpenAPI 客户端，而不是 SDK。这一点不再只是实现选择，而是本次审计确认的强制整改缺陷：
+当前 `pkg/nacos` 的生产路径通过官方 `nacos-sdk-go/v2@v2.3.5` naming facade；兼容
+HTTP 客户端仍保留，但只能由显式 `TransportHTTPCompat` 选择。SDK mode 不分配
+compatibility `net/http` client，也不会在任何不支持的 SDK 操作上偷偷回退裸 HTTP。
 
-- 生产 Nacos 操作必须统一经官方 Nacos SDK（或官方 SDK 暴露的等价 facade）；不得在业务路径继续新增或保留散落的裸 `net/http` 调用。
-- 当前 HTTP 实现可以在迁移期间作为隔离的回滚/对照 adapter 保留，但不能据此宣称 Nacos 生产接入已完成。
-- naming 的 register/deregister/list/query/subscribe 必须先完成 SDK adapter；catalog、prune 等 Admin 能力如果官方 Go naming SDK 没有等价接口，必须使用受支持的官方 Admin/Maintainer SDK 或单独版本化、可审计的 SDK facade。临时裸 HTTP 只能作为明确标记的迁移过渡，不能成为最终生产路径。
+- 生产 Nacos 操作统一经官方 SDK（或官方 SDK 暴露的等价 facade）；不得在业务路径新增散落裸 `net/http` 调用。
+- persistent register/deregister 通过官方 SDK（SDK v2.3.5 按设计对 persistent 实例使用其内部 HTTP transport）；service-list、SelectAll/query、subscribe/unsubscribe 和 readiness read/write canary 均通过 SDK API。
+- catalog/prune 在 SDK mode 通过 `SelectAllInstances` 完整视图实现（包含 `enabled=false`、unhealthy 和 zero-weight host），避免依赖 Admin catalog HTTP endpoint；HTTP catalog 仅保留在明确标注的兼容 fixture。
+- cluster health-check `UpdateCluster` 在官方 naming SDK v2.3.5 没有等价 Admin API；SDK mode 返回 typed `ErrUnsupportedOperation` 并输出 release blocker，绝不回退裸 HTTP。只有显式兼容模式允许该 PUT。
+- product 环境启动拒绝 `TransportHTTPCompat`；兼容 transport 只用于测试或有审批的迁移回滚。
 
 现有实现证据：
 
-- `NewClient` 构造显式 `http.Transport`，`MaxIdleConnsPerHost=8`、`MaxConnsPerHost=8`，外层超时 10s；证据：`pkg/nacos/client.go:123-197`。
+- `NewClientWithConfig` 在 SDK mode 只构造官方 SDK facade；显式兼容模式才构造 tuned `http.Transport`（`MaxIdleConnsPerHost=8`、`MaxConnsPerHost=8`，外层超时 10s）；证据：`pkg/nacos/client.go`、`pkg/nacos/sdk.go`。
 - `Sink.Push` 支持：online 注册、unhealthy 注册为 `enabled=false`、offline 删除、unknown 跳过；证据：`pkg/nacos/nacos.go:227-245,480-516`。
-- `PushAll = Push + prune`；prune 读取 `catalog/instances`，能看见 `enabled=false` 实例，并按 `(service, cluster)` 作用域清理；证据：`pkg/nacos/nacos.go:248-420`。
-- `GetAll` 读取 service list，再按 provider 对应的 Nacos cluster 读取 catalog，重建可参与 compare 的实例；证据：`pkg/nacos/nacos.go:422-472`。
+- `PushAll = Push + prune`；SDK mode 的 prune 通过 `SelectAllInstances` 读取完整视图，能看见 `enabled=false` 实例，并按 `(service, cluster)` 作用域清理；证据：`pkg/nacos/nacos.go`、`pkg/nacos/client.go`。
+- `GetAll` 读取 SDK service list，再按 provider 对应的 Nacos cluster 读取 SDK complete view，重建可参与 compare 的实例；证据：`pkg/nacos/nacos.go`、`pkg/nacos/sdk.go`。
 - `APIError.Permanent()` 将 4xx 判为永久错误、5xx 判为可重试；证据：`pkg/nacos/client.go:397-420`。
 - retry queue 会删除永久错误，避免 F7 类 4xx 无限重试；证据：`pkg/worker/unsynced_service.go:244-280`。
 - 本地 sink、mock、blackbox、e2e 均有覆盖；`make test-all` 和 `go test -race ./pkg/nacos ./pkg/worker` 已通过。
 
 因此，“HTTP 是否完全就绪”要拆成两个答案：
 
-- **功能就绪：是。** 基本注册、删除、分页、catalog 清理、状态映射、错误分类和本地验证已具备。
-- **生产就绪：否，当前只能判 PARTIAL。** 仍有第 3.2 节中的闭环、身份和运维边界，且生产真实 Nacos/Atlas/TLS/HA 尚未作为本仓库证据。
+- **兼容功能：是。** 显式 HTTP compatibility adapter 的注册、删除、分页、catalog 清理、状态映射、错误分类和本地验证已具备。
+- **生产 SDK 路径：代码已统一，生产证据仍 PARTIAL。** SDK naming/catalog/readiness 路径和 product transport gate 已落地；cluster-admin health-check 仍是 SDK v2.3.5 的 typed unsupported release blocker，且真实 Nacos/Atlas/TLS/HA 尚未作为本仓库证据。
 
 ### 3.2 当前 Sink 的一致性风险
 
@@ -153,23 +157,37 @@ amd64，QEMU 下 Java 持续高 CPU 超过 5 分钟仍无 readiness 响应。容
 
 #### R6：ready 200 不等价于“可写”
 
-`CheckReadiness` 只访问 `/nacos/v1/console/health/readiness` 并检查 HTTP 200：`pkg/nacos/client.go:207-230`。已有 soak 结果证明 Nacos 可能读可用但 Raft leaderless、所有写请求 500；soak 只能靠额外 write probe 识别：`tests/soak/assert.go:293-396`。生产启动 gate 仍可能误判“已就绪”。
+历史实现的 `CheckReadiness` 只访问 `/nacos/v1/console/health/readiness` 并检查 HTTP 200，
+导致读可用但不可写时误判。当前生产 `CheckReadinessWithConfig` 已改为 SDK service-list
+read + persistent register/deregister canary；SDK mode 不构造裸 HTTP 请求。兼容 helper
+`CheckReadiness` 仍保留给显式 HTTP fixture，不能作为生产 readiness 证据。已有 soak 结果
+证明 Nacos 可能读可用但 Raft leaderless、所有写请求 500；真实 SDK readiness 仍需在目标
+Nacos scratch/pre-prod 上验证。
 
-#### R7：Nacos 生产路径绕过官方 SDK（P1，Nacos 启用时为 release blocker）
+#### R7：Nacos 生产路径绕过官方 SDK（P1，已修复代码面；真实发布仍阻塞）
 
-当前 `pkg/nacos/client.go` 和 `pkg/nacos/nacos.go` 直接拼接 Nacos v1 HTTP 请求。这样会绕过官方 SDK 的认证、token 刷新、gRPC/HTTP 路由、重连、redo/cache 和版本兼容处理；同时，后续很容易出现一部分操作走 SDK、另一部分操作继续裸 HTTP 的隐式分叉。该问题与“HTTP 基本 CRUD 是否能跑通”是两件事：当前 HTTP 功能可以判为 functional pass，但架构合规和生产发布必须判为 **NOT DONE**。
+原始问题是 `pkg/nacos` 直接拼接 Nacos v1 HTTP 请求，绕过官方 SDK 的认证、token
+刷新、gRPC/HTTP 路由、重连、redo/cache 和版本兼容处理。当前代码已将生产路径统一到
+`nacos-sdk-go/v2@v2.3.5` facade：catalog/prune 改用 `SelectAllInstances`，readiness
+改用 SDK service-list + persistent canary，SDK mode 不分配 raw HTTP client；cluster
+health-check update 因 SDK 无 Admin API 而返回 typed `ErrUnsupportedOperation`，不再
+隐式回退。`TransportHTTPCompat` 仅保留隔离测试/审批回滚，product wiring 直接拒绝。
+
+该问题与“HTTP 基本 CRUD 是否能跑通”是两件事：兼容功能可以判 functional pass，SDK
+代码门禁已通过，但真实 Nacos 目标版本、gRPC/TLS/auth/reconnect 仍需外部证据，故生产
+发布仍判 **NOT VERIFIED**。
 
 整改硬门禁：
 
-1. `pkg/nacos` 只依赖 `NacosTransport`/SDK facade，不直接依赖 `net/http` 实现业务操作。
-2. 静态检查禁止生产包新增 Nacos URL、HTTP method 和 query 拼接；HTTP 只能集中在受审计的 adapter 内。
-3. register、deregister、list、query、subscribe、batch、catalog/prune、readiness probe 均必须在测试矩阵中声明“SDK 支持、官方 Admin SDK 支持、或临时例外”，不得出现未分类调用。
-4. SDK 迁移完成前，Nacos Sink 不能从 PARTIAL 晋级为 production PASS；仅有 mock 或 SDK 编译成功也不能关闭该缺陷。
+1. `pkg/nacos` 生产路径只依赖 SDK facade，不直接依赖 `net/http` 实现业务操作；SDK mode 不分配 compatibility HTTP client。
+2. 静态检查禁止生产包新增 Nacos URL、HTTP method 和 query 拼接；HTTP 只能集中在显式、受审计的 compatibility adapter 内。
+3. register、deregister、list、query、subscribe、batch、catalog/prune、readiness probe 均在测试矩阵中声明 SDK 支持；cluster-admin 仅声明 typed unsupported，不得出现未分类调用。
+4. SDK 代码门禁通过后，Nacos Sink 仍不能从 PARTIAL 晋级为 production PASS，直到真实目标版本的 gRPC/TLS/auth/reconnect 和 cluster-admin 决策证据齐全；mock 或 SDK 编译成功不能关闭发布缺陷。
 
 ### 3.3 官方 Go SDK 与 gRPC 结论
 
-**结论：官方 Go SDK 支持 Nacos 2.x gRPC，当前仓库已通过 facade 接入；真实
-目标版本证据仍未提供。**
+**结论：官方 Go SDK 支持 Nacos 2.x gRPC，当前仓库已通过 facade 接入；生产路径
+不再裸 HTTP，但真实目标版本证据仍未提供。**
 
 本地核验 `github.com/nacos-group/nacos-sdk-go/v2@v2.3.5`：
 
@@ -177,6 +195,7 @@ amd64，QEMU 下 Java 持续高 CPU 超过 5 分钟仍无 readiness 响应。容
 - `clients/naming_client/naming_proxy_delegate.go` 的 `getExecuteClientProxy` 按 `instance.Ephemeral` 选择：persistent (`false`) 走 `naming_http`，ephemeral (`true`) 走 `naming_grpc`。
 - `BatchRegisterInstance` 直接委托 gRPC proxy，因此 SDK 有批量注册能力；这和当前仓库“手工 HTTP 单实例请求”的能力边界不同。
 - SDK `constant.ServerConfig` 有 `GrpcPort`，默认由主端口加 RPC offset 推导。
+- `INamingClient.SelectAllInstances` 明确返回 healthy=false、enable=false、weight<=0 的实例，当前 catalog/prune 直接使用该 complete view；`GetAllServicesInfo` 用于 service-list 和 SDK readiness read。
 
 官方资料：
 
@@ -185,11 +204,11 @@ amd64，QEMU 下 Java 持续高 CPU 超过 5 分钟仍无 readiness 响应。容
 - [nacos-sdk-go v2.3.5 release](https://github.com/nacos-group/nacos-sdk-go/releases)：当前核验到的 v2 线版本。
 - [nacos-sdk-proto](https://github.com/nacos-group/nacos-sdk-proto)：统一 gRPC protobuf 定义。
 
-SDK 并不意味着可以直接替换当前 Sink：
+SDK 并不意味着可以直接替换当前 Sink，且 persistent register 的协议细节必须如实说明：
 
-1. spotter 目前使用 persistent instance（`ephemeral=false`），而 SDK v2 对 persistent 单实例调用会走 HTTP；切换 SDK 不自动获得 gRPC。
-2. SDK 的 batch register 是 gRPC，但需要验证 Nacos 2.1.0 服务端对该 request type 的兼容性、enabled/status metadata、cluster 语义和错误码。
-3. 当前 prune 依赖 catalog/admin 视图（包括 disabled host），而 SDK naming client 的常规 `GetService`/订阅视图不等价于 catalog admin view；prune 可能仍需 HTTP Admin API。
+1. spotter 目前使用 persistent instance（`ephemeral=false`），而 SDK v2 对 persistent 单实例调用由 SDK 内部走 HTTP；这是官方 SDK 行为，不是仓库的裸 HTTP。切换 SDK 不自动让 persistent write 变成 gRPC。
+2. SDK 的 batch register 是 gRPC，但当前 sink 保留 persistent 单实例语义；如未来改为 batch，必须验证目标服务端 request type、enabled/status metadata、cluster 语义和错误码。
+3. `SelectAllInstances` 的 complete view 已覆盖当前 prune 所需的 disabled host；不再调用 catalog HTTP。cluster health-check admin update 仍无 naming SDK 等价接口，SDK mode typed fail-closed。
 4. SDK 自带 cache/reconnect/redo 机制，可能与 spotter 自己的 retry、persistent lifecycle、leader election 叠加，必须先做语义和故障注入验证。
 
 建议支持计划（SDK 接入从可选 POC 提升为强制整改）：
@@ -199,10 +218,12 @@ SDK 并不意味着可以直接替换当前 Sink：
 | G0 | 固定目标服务端版本，确认 2.1/2.2/3.x 的 naming gRPC、TLS、auth、batch API 和 catalog API 矩阵 | 版本兼容表和 protobuf/request 证据齐全 |
 | G1 | 抽象 `NacosTransport`；接入官方 SDK facade；现有 HTTP 仅作为隔离回滚/对照 adapter | 生产路径不再散落裸 HTTP；状态/metadata/错误分类测试全绿 |
 | G2 | 影子读/对照写：HTTP 与 SDK 在动态 scratch Nacos 上比较 register/deregister/list、enabled、metadata、reversion | 连续观察成功率、延迟、错误和最终 catalog 集合一致；所有差异可解释 |
-| G3 | 验证 SDK batch、persistent 生命周期、catalog/prune/Admin SDK 覆盖；不能覆盖的接口必须形成带期限的例外决策 | 目标版本兼容、部分失败可定位、重试不丢 operation type；无未分类裸 HTTP |
+| G3 | 验证 SDK batch、persistent 生命周期、SelectAll-based catalog/prune 覆盖；cluster Admin 无 SDK 时形成带期限的 typed unsupported 决策 | 目标版本兼容、部分失败可定位、重试不丢 operation type；无未分类裸 HTTP |
 | G4 | SDK 默认路径灰度；HTTP 只保留受控回滚开关；按 Sink 指标观察 | 连续运行和故障注入达标后，才允许删除 HTTP fallback |
 
-当前 `TransportSDK` 已是 server wiring 默认路径，`http-compat` 仅显式回滚/测试；但真实 scratch/pre-production 回放（包括上述 G0/G2/G3/G4 证据）仍是发布约束，不能把离线 facade 测试视为生产 PASS。
+当前 `TransportSDK` 已是 server wiring 默认路径，`http-compat` 仅显式回滚/测试且
+product wiring 拒绝；真实 scratch/pre-production 回放（包括上述 G0/G2/G3/G4 证据）
+以及 cluster-admin 替代方案仍是发布约束，不能把离线 facade 测试视为生产 PASS。
 
 ## 4. K8s Watch → Cache → Diff → Sink 审计
 

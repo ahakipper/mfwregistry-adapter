@@ -324,6 +324,11 @@ func (s *Server) startProviders() error {
 			s.clearStartup(generation, nil)
 			return fmt.Errorf("unsupported Nacos transport %q (want %q or %q)", transportMode, nacos.TransportSDK, nacos.TransportHTTPCompat)
 		}
+		if transportMode == string(nacos.TransportHTTPCompat) && strings.EqualFold(s.cfg.Env, "product") {
+			cleanup()
+			s.clearStartup(generation, nil)
+			return fmt.Errorf("Nacos http-compat transport is forbidden in product; use the official SDK transport")
+		}
 		if transportMode == string(nacos.TransportHTTPCompat) {
 			address := s.cfg.NacosAddr
 			if address == "" && len(s.cfg.NacosServerList) > 0 {
@@ -350,9 +355,9 @@ func (s *Server) startProviders() error {
 			s.clearStartup(generation, nil)
 			return errors.WithMessage(err, "new nacos sink")
 		}
-		// The Nacos HTTP client is stateless, so the sink owns no resources
-		// and its Close is a no-op; the fanout's cleanup below still calls
-		// registry.Close for the Atlas gRPC connection.
+		// The Nacos sink owns the official SDK naming client and closes its
+		// gRPC/redo resources with the fanout; the Atlas gRPC connection is
+		// closed by the same cleanup path.
 		sinks = append(sinks, worker.NamedSink{Name: nacos.SinkName, Sink: nacosSink})
 		address := s.cfg.NacosAddr
 		if address == "" && len(s.cfg.NacosServerList) > 0 {

@@ -11,6 +11,12 @@ not change any code by itself.
 **Current status (2026-09-13, implementation baseline `b38505c`):** the default unit, full and
 race suites are green and `go vet ./...` is clean. The Nacos naming path is
 SDK-backed by default; `http-compat` is an explicit test/rollback mode. The
+SDK mode allocates no compatibility HTTP client; service-list, SelectAll-based
+catalog/prune, and readiness read/write canary are covered by the SDK facade,
+while cluster-admin health-check update is covered by a typed
+`ErrUnsupportedOperation` negative test. Product server wiring rejects
+`http-compat`. The compatibility HTTP suite remains necessary only to guard
+the approved migration rollback and must not be read as production evidence.
 `atlas_real`, `nacos_real` and `nacos_sdk_eval` tags compile and skip without a
 declared scratch endpoint, so they are not production evidence. Observe's
 timestamp/ledger harness defects are fixed, but a complete self-contained 2h

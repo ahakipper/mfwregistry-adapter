@@ -781,6 +781,43 @@ func TestStartProvidersNacosReadinessGate(t *testing.T) {
 	}
 }
 
+func TestStartProvidersRejectsNacosHTTPCompatInProduct(t *testing.T) {
+	logger := zap.NewNop().Sugar()
+	initializeCalls := 0
+	s := &Server{
+		isLeader: true,
+		stop:     make(chan struct{}),
+		logger:   logger,
+		notifier: recordingNotifier{},
+		localIP:  func() (string, error) { return "127.0.0.1", nil },
+		cfg: infraconfig.Config{
+			Env:                  "product",
+			EnableLeaderElection: true,
+			MetricsAddr:          "127.0.0.1:0",
+			NacosAddr:            "http://127.0.0.1:18848",
+			NacosTransport:       string(nacos.TransportHTTPCompat),
+		},
+		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
+			return discoverycenter.NewClient(noopDiscoveryService{}, nil, nil)
+		},
+		initializeProviders: func(context.Context, worker.Worker) ([]providers.Provider, error) {
+			initializeCalls++
+			return nil, nil
+		},
+	}
+
+	err := s.startProviders()
+	if err == nil {
+		t.Fatal("startProviders() error = nil, want product HTTP compatibility rejection")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "forbidden") || !strings.Contains(strings.ToLower(err.Error()), "sdk") {
+		t.Fatalf("startProviders() error = %q, want explicit SDK-only product gate", err)
+	}
+	if initializeCalls != 0 {
+		t.Fatalf("InitializeProviders calls = %d, want 0 (startup failed at transport gate)", initializeCalls)
+	}
+}
+
 // TestStartProvidersWiresEmptyIPShellSafely (AUDIT-D E2E-2, the F7 enabling
 // hole's wiring proof): through the REAL server wiring — the
 // startProvidersWithNacosAddr harness builds the fanout (atlas + the real

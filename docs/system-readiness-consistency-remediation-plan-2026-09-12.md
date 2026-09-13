@@ -8,11 +8,22 @@
 
 **版本变更：** v6 将“禁止 Nacos 生产路径裸 HTTP、统一经官方 Nacos SDK/facade”从可选 POC 提升为 P1 强制整改和 Nacos 启用时的发布门禁，并补充 SDK 迁移、例外管理和完整测试矩阵。
 
-**当前基线：** `refactor/all` / `3c72430`（实现基线 `b38505c`，其后为文档同步提交）。A0→A3、B1、B2 HTTP 过渡层、B3 SDK seam、B4 Atlas gate、C1 Observe 修复、D1 provider overflow/lifecycle、C2 logger/notifier/metrics 注入和两条 `go vet` 诊断清零已按阶段提交并通过 focused/full/race/cover 测试；`go vet ./...` 当前为 0。Nacos naming 已默认经官方 SDK，catalog/prune、cluster Admin、readiness 仍是有期限的 audited HTTP 例外；真实 Nacos/Atlas 证据、appcenter endpoint contract、完整 2h Observe 和最终真实环境发布证据仍未闭环。
+**当前基线：** `refactor/all` / `3c72430`（实现基线 `b38505c`，其后为文档同步提交）。A0→A3、B1、B2 HTTP 过渡层、B3 SDK seam、B4 Atlas gate、C1 Observe 修复、D1 provider overflow/lifecycle、C2 logger/notifier/metrics 注入和两条 `go vet` 诊断清零已按阶段提交并通过 focused/full/race/cover 测试；`go vet ./...` 当前为 0。Nacos naming、service-list、SelectAll/query、subscribe/unsubscribe、catalog/prune 和 readiness read/write 已统一经官方 SDK；cluster Admin health-check update 在 SDK v2.3.5 中没有等价接口，SDK mode typed fail-closed，HTTP 仅显式 compatibility/test 且 product wiring 拒绝。真实 Nacos/Atlas 证据、appcenter endpoint contract、完整 2h Observe 和最终真实环境发布证据仍未闭环。
 
 **范围边界：** K8s 是本阶段规模主路径；Consul 1000+ 规模观察是 accepted non-goal，只有重新启用 ECS/机器部署时才开启独立里程碑。Nacos SDK 统一接入是生产必做项；兼容验证完成前可保留 HTTP 回滚/对照通道，但不能把裸 HTTP 作为最终生产路径。
 
 **执行状态（2026-09-13）：** `b1d9e2f` 已完成 B2 的 HTTP compatibility foundation：多地址 failover（5xx/transport 可切换、4xx 停止）、显式 namespace/group/auth/TLS/timeout、CLI→Config wiring、read+write readiness canary（成功地址固定 register/deregister，清理失败告警）、custom scope PushAll/prune/GetAll 回归测试。`fd1f539` 完成 B3 SDK seam：生产默认 `sdk`，naming lifecycle/query/subscribe 走官方 SDK，HTTP 仅集中在已登记的 catalog/prune、cluster Admin、readiness 例外。`c8e5613` 完成 B4 fail-closed Atlas gate，`cce983e` 完成 Observe 时间/ledger 修复，`eb6bf0c` 清零 `go vet`，`75a151b/403e0c5` 修复 K8s cache 指针和 stop-state 竞态，`728f1d2` 修复 normal SyncAll metadata、cross-provider tombstone、multi-appcode filter、provider backpressure 和 HasSynced cancellation，`ff10610` 完成 provider overflow/lifecycle 汇合，`42ecb89` 完成 C2 显式依赖注入、aggregate 隔离和通知生命周期/敏感信息收口，`b38505c` 完成 provider lifecycle stop-channel 初始化。真实 Nacos/Atlas 版本验证、完整 2h Observe、appcenter endpoint contract 和最终发布证据仍未提供，因此发布状态仍为 NOT VERIFIED。
+
+**B3 SDK-only amendment (2026-09-13):** 后续实现已将 `TransportSDK` 设为真正的生产
+only path：SDK mode 不分配 compatibility `net/http` client；`ListCatalogInstances`
+通过官方 `SelectAllInstances`（包括 disabled/unhealthy/zero-weight host）实现；
+`CheckReadinessWithConfig` 通过 SDK service-list RPC + persistent register/deregister
+canary 完成读写 gate。官方 naming SDK v2.3.5 没有 cluster Admin health-check update，
+因此 `UpdateCluster` 在 SDK mode 返回 typed `ErrUnsupportedOperation`，sink 记录
+明确 release gap，禁止 fallback。`TransportHTTPCompat` 只用于 mock/迁移回滚，
+`Env=product` 启动直接拒绝。新增 facade、raw-HTTP nil guard、SDK catalog/readiness
+negative tests 以及 product transport gate；真实 Nacos 目标版本证据仍必须在 scratch/pre-prod
+补齐，且 cluster-admin 例外在官方 Admin/Maintainer SDK 可用前不能宣称 production PASS。
 
 ## 1. 不可变的验收原则
 
@@ -361,11 +372,15 @@ type EventQueue interface {
 
 ### 9.2 Client 行为
 
+> **当前实现覆盖（2026-09-13）：** SDK mode 已成为唯一生产路径。以下原始 B2
+> HTTP 设计只适用于显式 compatibility adapter；不得据此在 product 环境启用裸
+> HTTP。
+
 - 把 endpoint、namespace、group、TLS、credential、timeout 放进不可变 `NacosClientConfig`。
 - 实现 token provider：登录、过期前刷新、401 重试一次；401/403/404/409/429/5xx 分别分类。
-- 所有 register/deregister/list/catalog/cluster 请求统一注入 namespace/group/auth；禁止保留散落的 `DefaultNamespaceID` 常量作为唯一路径。
+- 所有 register/deregister/list/catalog/cluster 请求统一注入 namespace/group/auth；禁止保留散落的 `DefaultNamespaceID` 常量作为唯一路径。SDK mode 的 register/deregister/list/query/catalog/service-list/subscribe/unsubscribe 走官方 facade；cluster Admin 不支持时必须返回 typed unsupported。
 - readiness 由 read probe + dedicated write probe 构成。write probe 使用 owner-scoped canary instance，成功后立即 deregister；清理失败必须告警，不得污染业务 scope。
-- 迁移完成前仅保留当前 HTTP bounded transport 作为隔离的回滚/对照 adapter；禁止在业务包新增裸 `net/http` 调用。并发/连接/超时仍需配置化并暴露 metrics，但 B2 不能据此宣称 SDK 接入完成。
+- 迁移完成后仅保留当前 HTTP bounded transport 作为隔离的回滚/对照 adapter；SDK mode 不分配该 client，禁止在业务包新增裸 `net/http` 调用。并发/连接/超时仍需配置化并暴露 metrics，但 HTTP compatibility 不能据此宣称生产 SDK 接入完成。
 - `UpdateCluster` 失败需要可重试、可观测；不能只写 warning 后无限等下一次偶然 register。
 
 错误分类决策树：
@@ -401,6 +416,13 @@ Nacos 运行状态机与队列动作：
 - [ ] 新增 `tests/e2e/nacos_real_test.go`（`//go:build nacos_real`）；真实环境命令固定为 `go test -tags=nacos_real ./tests/e2e/... -run TestNacosReal -count=1`，在该文件落地前不得声称真实 Nacos 已验证。
 - [ ] 记录 Nacos 版本、镜像 digest、配置 hash、请求成功率、p50/p99、retry depth、最终 catalog hash。
 
+当前 SDK-only 代码门禁补充：
+
+- [x] SDK mode 的 catalog/prune、service-list、readiness read/write 均由官方 naming SDK facade 覆盖；兼容 HTTP 仅显式选择。
+- [x] `UpdateCluster` 在 SDK mode typed fail-closed；不得把不支持的 cluster-admin 调用降级为裸 HTTP。
+- [x] product wiring 拒绝 `TransportHTTPCompat`；raw-HTTP helper 在 SDK mode nil-guard；fake/static negative tests 覆盖这些边界。
+- [ ] 真实目标版本验证 SDK SelectAll disabled visibility、persistent lifecycle、gRPC reconnect、TLS/auth 和 Admin/Maintainer cluster-admin 替代方案。
+
 **完成标准：** HTTP 过渡 adapter 的目标版本和目标配置具备生产证据，但 Nacos 生产路径仍保持 PARTIAL，直到 B3 的官方 SDK 迁移、完整回放和静态门禁全部通过。提交 `B2`。
 
 ## 10. B3：官方 Nacos Go SDK 迁移与协议兼容性验证（P1；Nacos 启用时为 release blocker）
@@ -409,23 +431,23 @@ Nacos 运行状态机与队列动作：
 
 官方 Go SDK v2 支持 naming gRPC proxy；`BatchRegisterInstance` 走 gRPC；SDK 根据 `Ephemeral` 选择 persistent HTTP 或 ephemeral gRPC。当前仓库使用 persistent instance，因此直接引入 SDK 不会自动把现有单实例 register 变成 gRPC。SDK 能力存在不等于本仓库已经合规：当前 `pkg/nacos` 仍直接调用裸 HTTP，必须完成统一 SDK facade 和迁移门禁。
 
-**执行状态（2026-09-13，B3 SDK seam）：** 工作树已接入 `github.com/nacos-group/nacos-sdk-go/v2 v2.3.5`，新增 `TransportMode` 和 `sdkNamingFacade`。生产 server wiring 默认选择 `sdk`；`http-compat` 只允许显式测试/回滚。persistent register/deregister、SelectAll（含 disabled）、service list、subscribe/unsubscribe 通过官方 naming SDK；SDK 自动配置 gRPC 端口（server port + 1000）、namespace/group、username/password、TLS 和多 server list。由于该 SDK 未提供 catalog/prune、cluster Admin 和 console readiness 等价接口，这些能力暂时集中在显式、可审计的 HTTP compatibility adapter，不再散落在业务层；该例外仍需真实目标版本 Admin/Maintainer SDK 评估和 B3-G 到期决策。静态 access token 在 SDK 模式下 fail-closed（SDK v2.3.5 没有等价静态 token 配置），避免“配置看似生效但实际未认证”。
+**执行状态（2026-09-13，B3 SDK-only amendment）：** 工作树已接入 `github.com/nacos-group/nacos-sdk-go/v2 v2.3.5`，新增 `TransportMode` 和 `sdkNamingFacade`。生产 server wiring 默认选择 `sdk`；`http-compat` 只允许显式测试/回滚，并在 `Env=product` 直接拒绝。persistent register/deregister、SelectAll（含 disabled）、service list、subscribe/unsubscribe、catalog/prune（由 SelectAll complete view 实现）和 readiness read/write canary 通过官方 naming SDK；SDK 自动配置 gRPC 端口（server port + 1000）、namespace/group、username/password、TLS 和多 server list。该 SDK 没有 cluster Admin health-check update 等价接口，SDK mode 的 `UpdateCluster` 返回 typed `ErrUnsupportedOperation` 并输出 release blocker，永不回退 raw HTTP。静态 access token 在 SDK 模式下 fail-closed（SDK v2.3.5 没有等价静态 token 配置），避免“配置看似生效但实际未认证”。
 
 **B3 发布判定：** SDK seam 与离线测试已通过，但生产门禁仍为 **NOT VERIFIED / REMAINING**。`go test -tags=nacos_sdk_eval ...` 与 `go test -tags=nacos_real ...` 在未提供 `NACOS_SERVER` 时只会 SKIP；必须在 scratch/pre-production Nacos 2.x 上补齐 query/list、subscribe、batch（persistent 明确不支持时保留 per-instance 证据）、catalog/prune、namespace/group、TLS/auth、重连/重启、错误恢复和最终集合 hash，才能关闭 `ID-NACOS-SDK-MANDATE`。
 
 本工作包的不可变约束：
 
 1. 生产 Nacos naming 操作（register、deregister、list、query、subscribe、batch）必须通过官方 `nacos-sdk-go/v2` 或其薄 facade。
-2. Admin/Catalog/prune/readiness 等非 naming 操作必须优先使用官方 Admin/Maintainer SDK；若目标版本没有等价 SDK 接口，必须建立单独、版本化、可审计的 adapter，并登记 `ID-NACOS-SDK-MANDATE` 例外、负责人、到期时间和删除条件。散落在业务代码中的裸 HTTP 永久禁止。
+2. Admin/Catalog/prune/readiness 等非 naming 操作必须优先使用官方 SDK；当前 catalog/prune/readiness 已由 naming SDK facade 覆盖，cluster health-check update 在目标 SDK 无等价接口时必须 typed fail-closed，并登记 `ID-NACOS-SDK-MANDATE` 例外、负责人、到期时间和删除条件。散落在业务代码中的裸 HTTP 永久禁止。
 3. HTTP adapter 仅允许作为迁移期回滚/对照通道；在没有 SDK 兼容证据和完整测试前，不得把 Nacos Sink 标记为 production PASS。
 
 ### 10.2 实施顺序
 
-1. 新增 `NacosTransport` 内部接口和 `NacosSDKTransport` facade；接口按 operation type 区分 naming、Admin/Catalog、readiness，禁止业务层自行拼接 URL。
+1. 新增 `NacosTransport` 内部接口和 `NacosSDKTransport` facade；接口按 operation type 区分 naming、catalog/prune、readiness 和 cluster-admin unsupported，禁止业务层自行拼接 URL。
 2. 新增 `tests/e2e/nacos_sdk_eval_test.go`（`//go:build nacos_sdk_eval`），引入 `nacos-sdk-go/v2`，实现 SDK adapter 及可注入 fake，先不改变默认 wiring。
 3. 对同一个 scratch Nacos 做 HTTP vs SDK 对照：register/deregister、service list、query instances、subscribe、batch register、metadata、enabled、namespace/group、TLS/auth、错误/重连和最终 catalog 集合。
 4. 单独验证 SDK batch gRPC 与目标 Nacos 版本的 request type、persistent/ephemeral 生命周期、心跳、leaderless、重启恢复和错误码兼容；不能以 SDK 编译成功作为协议通过。
-5. 验证 catalog/prune/readiness 是否有官方 Admin/Maintainer SDK 等价能力；没有覆盖的接口必须形成带期限的例外，不得偷偷保留散落 HTTP。
+5. 验证 catalog/prune/readiness 是否有官方 SDK 等价能力；当前由 `SelectAllInstances` 和 service-list + canary 覆盖。cluster-admin 没有等价接口时必须形成带期限的 typed unsupported 例外，不得偷偷保留散落 HTTP。
 6. 新增 `--nacos-transport=sdk|http-compat`，默认 `sdk`；`http-compat` 只允许显式开启并输出 `NON_PRODUCTION_COMPAT`，支持即时回退但不能成为发布默认。
 7. 增加静态门禁：生产 `pkg/nacos` 不得新增 `net/http`、Nacos URL、HTTP method/query 拼接；所有调用必须通过已登记 adapter。
 
@@ -433,7 +455,7 @@ Nacos 运行状态机与队列动作：
 
 - `make test-all` 和 HTTP compatibility 回归保持通过；SDK adapter 有独立单测和真实 scratch 证据。
 - persistent 生命周期、redo/cache、leaderless、auth、TLS、namespace/group、catalog ownership、错误重试和重连全部通过；
-- 每一个 Nacos operation type 都有 SDK/facade 覆盖证明；任何未分类裸 HTTP 调用都阻断发布。
+- 每一个 Nacos operation type 都有 SDK/facade 覆盖证明；cluster-admin unsupported 必须有 typed fail-closed 证明；任何未分类裸 HTTP 调用都阻断发布。
 - 目标 Nacos 版本的 SDK gRPC 与 Admin/Catalog 兼容性矩阵完整；例外项有 owner、expiry 和 rollback。
 - SDK 默认路径灰度指标达标后，才允许删除 `http-compat`；未达标则保留回滚但状态仍为 NOT DONE。
 

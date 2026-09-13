@@ -551,11 +551,16 @@ binary into `/usr/bin` and uses `/usr/bin/spotter` as the entrypoint.
 8. **Go 1.25 module and mixed historical formatting.** `go.mod` declares
    `go 1.25`; older files retain their original style, but changed files are
    gofmt-checked.
-9. **Nacos transport boundary.** Naming lifecycle/query/subscribe operations
-   default to the official `nacos-sdk-go/v2` facade. Catalog/prune, cluster
-   health-check update and console readiness remain explicit, owned HTTP
-   compatibility exceptions with an expiry and removal criterion; real Nacos
-   SDK and Admin/Catalog evidence is still required before a production PASS.
+9. **Nacos transport boundary.** All production Nacos operations route through
+   the official `nacos-sdk-go/v2` facade: naming lifecycle/query/subscribe,
+   service-list, complete SelectAll-based catalog/prune, and SDK readiness
+   read/write canary. SDK mode does not allocate the compatibility HTTP client.
+   The pinned SDK has no cluster health-check Admin API, so that operation
+   returns typed `ErrUnsupportedOperation` and is recorded as an owned,
+   expiring release blocker; it never falls back to raw HTTP. The HTTP adapter
+   remains only for explicit test/rollback mode, which product wiring rejects.
+   Real Nacos SDK/TLS/auth/reconnect evidence is still required before a
+   production PASS.
 
 ## References
 

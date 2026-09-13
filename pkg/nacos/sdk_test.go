@@ -2,6 +2,7 @@ package nacos
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,9 @@ type fakeSDKNaming struct {
 	services     vo.GetAllServiceInfoParam
 	instances    []model.Instance
 	err          error
+	serviceErr   error
+	healthyState *bool
+	servicePages map[uint32]model.ServiceList
 }
 
 func (f *fakeSDKNaming) RegisterInstance(p vo.RegisterInstanceParam) (bool, error) {
@@ -38,11 +42,25 @@ func (f *fakeSDKNaming) SelectAllInstances(p vo.SelectAllInstancesParam) ([]mode
 }
 func (f *fakeSDKNaming) GetAllServicesInfo(p vo.GetAllServiceInfoParam) (model.ServiceList, error) {
 	f.services = p
+	if f.serviceErr != nil {
+		return model.ServiceList{}, f.serviceErr
+	}
+	if f.servicePages != nil {
+		if page, ok := f.servicePages[p.PageNo]; ok {
+			return page, nil
+		}
+	}
 	return model.ServiceList{Count: 1, Doms: []string{"svc"}}, nil
 }
 func (f *fakeSDKNaming) Subscribe(*vo.SubscribeParam) error   { return nil }
 func (f *fakeSDKNaming) Unsubscribe(*vo.SubscribeParam) error { return nil }
-func (f *fakeSDKNaming) CloseClient()                         {}
+func (f *fakeSDKNaming) ServerHealthy() bool {
+	if f.healthyState != nil {
+		return *f.healthyState
+	}
+	return true
+}
+func (f *fakeSDKNaming) CloseClient() {}
 
 func TestSDKFacadeRoutesPersistentLifecycleAndPreservesFields(t *testing.T) {
 	fake := &fakeSDKNaming{}
@@ -109,15 +127,42 @@ func TestSDKFacadeSelectAllIncludesDisabledAndMapsHosts(t *testing.T) {
 func TestSDKFacadeServiceListCarriesNamespaceAndGroup(t *testing.T) {
 	fake := &fakeSDKNaming{}
 	facade := &sdkNamingFacade{client: fake, group: "blue"}
-	names, err := facade.services(2, 50, "tenant-a")
-	if err != nil || len(names) != 1 || fake.services.NameSpace != "tenant-a" || fake.services.GroupName != "blue" || fake.services.PageNo != 2 || fake.services.PageSize != 50 {
+	names, count, err := facade.services(2, 50, "tenant-a")
+	if err != nil || count != 1 || len(names) != 1 || fake.services.NameSpace != "tenant-a" || fake.services.GroupName != "blue" || fake.services.PageNo != 2 || fake.services.PageSize != 50 {
 		t.Fatalf("names=%v param=%+v err=%v", names, fake.services, err)
+	}
+}
+
+func TestSDKServiceListHonorsDeclaredCountWhenPageIsClamped(t *testing.T) {
+	fake := &fakeSDKNaming{servicePages: map[uint32]model.ServiceList{
+		1: {Count: 3, Doms: []string{"svc-a"}},
+		2: {Count: 3, Doms: []string{"svc-b"}},
+		3: {Count: 3, Doms: []string{"svc-c"}},
+	}}
+	c := &Client{config: ClientConfig{}, sdk: &sdkNamingFacade{client: fake, group: DefaultGroup}}
+	services, err := c.ListServices(2)
+	if err != nil {
+		t.Fatalf("ListServices() error = %v", err)
+	}
+	if len(services) != 3 || services[0] != "svc-a" || services[2] != "svc-c" {
+		t.Fatalf("ListServices() = %v, want all three services", services)
+	}
+	if fake.services.PageNo != 3 {
+		t.Fatalf("last service-list page = %d, want 3 after clamped short pages", fake.services.PageNo)
 	}
 }
 
 func TestNormalizeNacosURLRejectsQueryCredentials(t *testing.T) {
 	if _, err := normalizeNacosURL("http://127.0.0.1:8848?accessToken=x"); err == nil {
 		t.Fatal("expected query credentials to be rejected")
+	}
+}
+
+func TestSDKFacadeRejectsMixedServerSchemes(t *testing.T) {
+	if _, err := newSDKNamingFacade(ClientConfig{ServerURLs: []string{
+		"http://127.0.0.1:8848", "https://127.0.0.1:8848",
+	}}); err == nil || !strings.Contains(err.Error(), "mixed server URL schemes") {
+		t.Fatalf("newSDKNamingFacade(mixed schemes) error = %v, want explicit rejection", err)
 	}
 }
 
@@ -146,5 +191,87 @@ func TestClientSDKModeDoesNotUseHTTPForNamingOperations(t *testing.T) {
 	}
 	if len(fake.registered) != 1 {
 		t.Fatalf("SDK register calls = %d, want 1", len(fake.registered))
+	}
+}
+
+func TestSDKClientDoesNotAllocateCompatibilityHTTPTransport(t *testing.T) {
+	c, err := NewClientWithConfig(ClientConfig{
+		TransportMode: TransportSDK,
+		ServerURL:     "127.0.0.1:18848",
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewClientWithConfig(sdk) error = %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	if c.http != nil {
+		t.Fatal("SDK client allocated raw HTTP transport; production SDK path must not own a compatibility client")
+	}
+}
+
+func TestSDKUnsupportedClusterAdminFailsClosed(t *testing.T) {
+	c := &Client{sdk: &sdkNamingFacade{client: &fakeSDKNaming{}, group: DefaultGroup}}
+	err := c.UpdateCluster("svc", "k8s")
+	if !errors.Is(err, ErrUnsupportedOperation) {
+		t.Fatalf("UpdateCluster(sdk) error = %v, want ErrUnsupportedOperation", err)
+	}
+}
+
+func TestSDKRawHTTPHelpersFailClosed(t *testing.T) {
+	c := &Client{}
+	if err := c.doForm("POST", "/nacos/v1/ns/instance", nil); !errors.Is(err, ErrUnsupportedOperation) {
+		t.Fatalf("doForm() error = %v, want ErrUnsupportedOperation", err)
+	}
+	if err := c.doJSON("GET", "/nacos/v1/ns/instance/list", nil, &Hosts{}); !errors.Is(err, ErrUnsupportedOperation) {
+		t.Fatalf("doJSON() error = %v, want ErrUnsupportedOperation", err)
+	}
+}
+
+func TestSDKReadinessUsesNamingReadAndPersistentCanary(t *testing.T) {
+	fake := &fakeSDKNaming{}
+	c := &Client{
+		config: ClientConfig{GroupName: "blue"},
+		sdk:    &sdkNamingFacade{client: fake, group: "blue"},
+	}
+	if err := checkReadinessSDK(c); err != nil {
+		t.Fatalf("checkReadinessSDK() error = %v", err)
+	}
+	if fake.services.PageNo != 1 || fake.services.PageSize != 1 || fake.services.GroupName != "blue" {
+		t.Fatalf("readiness service-list params = %+v", fake.services)
+	}
+	if len(fake.registered) != 1 || len(fake.deregistered) != 1 {
+		t.Fatalf("readiness canary calls = register:%d deregister:%d, want 1/1", len(fake.registered), len(fake.deregistered))
+	}
+	if fake.registered[0].Ephemeral || fake.deregistered[0].Ephemeral {
+		t.Fatal("readiness canary must use persistent SDK lifecycle")
+	}
+}
+
+func TestSDKReadinessFailsClosedWhenReadFails(t *testing.T) {
+	fake := &fakeSDKNaming{serviceErr: errors.New("grpc unavailable")}
+	c := &Client{sdk: &sdkNamingFacade{client: fake, group: DefaultGroup}}
+	err := checkReadinessSDK(c)
+	if err == nil || !strings.Contains(err.Error(), "read") {
+		t.Fatalf("checkReadinessSDK() error = %v, want read failure", err)
+	}
+	if len(fake.registered) != 0 || len(fake.deregistered) != 0 {
+		t.Fatalf("readiness canary calls after failed read = register:%d deregister:%d, want 0/0", len(fake.registered), len(fake.deregistered))
+	}
+}
+
+func TestSDKFacadeCatalogUsesSelectAllAndIncludesRequestedCluster(t *testing.T) {
+	fake := &fakeSDKNaming{instances: []model.Instance{{
+		InstanceId: "id", Ip: "10.0.0.2", Port: 81, Enable: false,
+		Healthy: false, ClusterName: "ecs", ServiceName: "svc",
+	}}}
+	facade := &sdkNamingFacade{client: fake, group: "blue"}
+	hosts, err := facade.catalog("svc", "ecs")
+	if err != nil {
+		t.Fatalf("catalog() error = %v", err)
+	}
+	if len(hosts) != 1 || hosts[0].ClusterName != "ecs" || hosts[0].Enabled {
+		t.Fatalf("catalog hosts = %+v, want disabled ecs host", hosts)
+	}
+	if fake.selected.GroupName != "blue" || len(fake.selected.Clusters) != 1 || fake.selected.Clusters[0] != "ecs" {
+		t.Fatalf("SelectAllInstances params = %+v, want group blue and ecs cluster", fake.selected)
 	}
 }

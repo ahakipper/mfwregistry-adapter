@@ -114,8 +114,9 @@ type ServicePage struct {
 }
 
 // Client is the transport-neutral client boundary. When ClientConfig selects
-// TransportSDK, naming calls route through sdkNamingFacade; otherwise they use
-// the audited v1 HTTP compatibility implementation below.
+// TransportSDK, every operation implemented by the official naming SDK routes
+// through sdkNamingFacade; otherwise the explicitly opt-in HTTP compatibility
+// adapter below is used for migration/test-only callers.
 type Client struct {
 	baseURL  *url.URL
 	baseURLs []*url.URL
@@ -126,9 +127,9 @@ type Client struct {
 }
 
 // ClientConfig controls the official SDK transport and the isolated HTTP
-// compatibility adapter used for Admin/Catalog operations. It is intentionally
-// explicit so authentication and TLS settings are never hidden in process
-// globals or logged.
+// compatibility adapter retained for migration/test-only callers. It is
+// intentionally explicit so authentication and TLS settings are never hidden
+// in process globals or logged.
 type ClientConfig struct {
 	// TransportMode selects the production SDK path ("sdk") or the temporary
 	// HTTP compatibility adapter ("http-compat"). Empty resolves to SDK;
@@ -187,7 +188,8 @@ const (
 // without a scheme defaults to http://, matching the flag help and the
 // plan §8.4 soak invocation). A nil logger is defaulted.
 //
-// The http.Client uses an EXPLICIT tuned Transport (dsca-2 DS-2-4): the
+// The HTTP compatibility client uses an EXPLICIT tuned Transport (dsca-2
+// DS-2-4): the
 // zero-Transport client inherited http.DefaultTransport, whose effective
 // MaxIdleConnsPerHost is 2 — serial pushes reused one connection fine, but
 // the moment DS-2-1's bounded worker group runs, every worker past the
@@ -253,28 +255,32 @@ func NewClientWithConfig(cfg ClientConfig, logger ports.Logger) (*Client, error)
 	if maxConns < 1 {
 		maxConns = transportMaxConnsPerHost
 	}
-	rootCAs, err := loadRootCAs(cfg.CAFile)
-	if err != nil {
-		return nil, err
-	}
-	transport := &http.Transport{
-		MaxIdleConns:          transportMaxIdleConns,
-		MaxIdleConnsPerHost:   transportMaxIdleConnsPerHost,
-		MaxConnsPerHost:       maxConns,
-		IdleConnTimeout:       transportIdleConnTimeout,
-		DialContext:           (&net.Dialer{Timeout: transportDialTimeout}).DialContext,
-		TLSHandshakeTimeout:   transportTLSHandshakeTimeout,
-		ExpectContinueTimeout: 1 * time.Second,
-		TLSClientConfig:       &tls.Config{RootCAs: rootCAs, ServerName: cfg.ServerName, InsecureSkipVerify: cfg.InsecureSkipVerify}, // #nosec G402: explicit operator-controlled compatibility option
-	}
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = RequestTimeout
 	}
+	var httpClient *http.Client
+	if cfg.TransportMode == TransportHTTPCompat {
+		rootCAs, err := loadRootCAs(cfg.CAFile)
+		if err != nil {
+			return nil, err
+		}
+		transport := &http.Transport{
+			MaxIdleConns:          transportMaxIdleConns,
+			MaxIdleConnsPerHost:   transportMaxIdleConnsPerHost,
+			MaxConnsPerHost:       maxConns,
+			IdleConnTimeout:       transportIdleConnTimeout,
+			DialContext:           (&net.Dialer{Timeout: transportDialTimeout}).DialContext,
+			TLSHandshakeTimeout:   transportTLSHandshakeTimeout,
+			ExpectContinueTimeout: 1 * time.Second,
+			TLSClientConfig:       &tls.Config{RootCAs: rootCAs, ServerName: cfg.ServerName, InsecureSkipVerify: cfg.InsecureSkipVerify}, // #nosec G402: explicit operator-controlled compatibility option
+		}
+		httpClient = &http.Client{Timeout: timeout, Transport: transport}
+	}
 	client := &Client{
 		baseURL:  parsedURLs[0],
 		baseURLs: parsedURLs,
-		http:     &http.Client{Timeout: timeout, Transport: transport},
+		http:     httpClient,
 		logger:   logger,
 		config:   cfg,
 	}
@@ -306,12 +312,11 @@ func loadRootCAs(path string) (*x509.CertPool, error) {
 	return pool, nil
 }
 
-// CheckReadiness polls the console readiness endpoint once; it is the
-// startup health gate wired by the server construction. A non-200 status
-// or a transport error is an error. Like NewClient, an address without a
-// scheme defaults to http://. Deprecated: production startup must use
-// CheckReadinessWithConfig so credentials, TLS, server-list failover and the
-// persistent write canary share the configured transport.
+// CheckReadiness polls the console readiness endpoint once through the
+// explicitly named HTTP compatibility helper. It remains only for legacy
+// tests/tools; production startup must use CheckReadinessWithConfig, whose
+// default SDK path performs naming service-list and persistent canary calls
+// through the official SDK.
 func CheckReadiness(addr string, timeout time.Duration) error {
 	if addr != "" && !strings.Contains(addr, "://") {
 		addr = "http://" + addr
@@ -328,14 +333,25 @@ func CheckReadiness(addr string, timeout time.Duration) error {
 	return nil
 }
 
-// CheckReadinessWithConfig performs the read side of the readiness gate with
-// the same configured transport and credentials as sink requests.
+// CheckReadinessWithConfig performs the read/write readiness gate with the
+// same configured transport and credentials as sink requests. SDK mode (the
+// default) never constructs a raw HTTP request; the compatibility branch is
+// reachable only when TransportHTTPCompat is explicitly selected.
 func CheckReadinessWithConfig(cfg ClientConfig, logger ports.Logger) error {
+	if cfg.TransportMode == "" {
+		cfg.TransportMode = TransportSDK
+	}
 	c, err := NewClientWithConfig(cfg, logger)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = c.Close() }()
+	if cfg.TransportMode == TransportSDK {
+		return checkReadinessSDK(c)
+	}
+	// The branch below is deliberately restricted to the explicitly named
+	// compatibility transport.  Production wiring defaults to SDK and never
+	// reaches this raw HTTP probe.
 	var lastErr error
 	for _, base := range c.baseURLsOrPrimary() {
 		request, err := http.NewRequest(http.MethodGet, joinURL(base.String(), pathReadiness), nil)
@@ -418,6 +434,50 @@ func CheckReadinessWithConfig(cfg ClientConfig, logger ports.Logger) error {
 	return errors.New("nacos: no configured server addresses")
 }
 
+// checkReadinessSDK performs both sides of the startup gate using the
+// official naming client.  ServerHealthy is only a connectivity hint (the
+// SDK may still be establishing its gRPC session immediately after
+// construction), so a naming service-list RPC and a persistent register /
+// deregister canary are required as authoritative read/write evidence.  No
+// direct net/http request is constructed on this path.
+func checkReadinessSDK(c *Client) error {
+	if c == nil || c.sdk == nil {
+		return fmt.Errorf("%w: readiness requires sdk transport", ErrUnsupportedOperation)
+	}
+	namespace := c.config.NamespaceID
+	if namespace == DefaultNamespaceID {
+		namespace = ""
+	}
+	if _, _, err := c.sdk.services(1, 1, namespace); err != nil {
+		return fmt.Errorf("nacos sdk readiness read: %w", err)
+	}
+	if !c.sdk.healthy() {
+		// The list RPC above is authoritative. Keep the health hint in the
+		// error only when the RPC itself succeeded but the SDK reports no
+		// active session; this catches a gRPC-only outage without inventing a
+		// second HTTP probe.
+		return errors.New("nacos sdk readiness: naming client is not healthy")
+	}
+	canary := InstanceParams{
+		ServiceName: fmt.Sprintf("__spotter_readiness_%d", time.Now().UnixNano()),
+		IP:          "127.0.0.1",
+		Port:        1,
+		ClusterName: "spotter-readiness",
+		GroupName:   c.config.GroupName,
+		NamespaceID: c.config.NamespaceID,
+		Enabled:     false,
+		Ephemeral:   false,
+		Metadata:    map[string]string{"spotterOwner": "spotter", "probe": "readiness"},
+	}
+	if err := c.RegisterInstance(canary); err != nil {
+		return fmt.Errorf("nacos sdk readiness write probe register: %w", err)
+	}
+	if err := c.DeregisterInstance(canary); err != nil {
+		return fmt.Errorf("nacos sdk readiness write probe cleanup: %w", err)
+	}
+	return nil
+}
+
 // RegisterInstance registers (upserts) one persistent instance.
 func (c *Client) RegisterInstance(params InstanceParams) error {
 	if c.sdk != nil {
@@ -462,7 +522,7 @@ func (c *Client) Close() error {
 }
 
 // UpdateCluster disables Nacos's server-side health check for one (service,
-// cluster) pair: it PUTs the cluster configuration with healthChecker
+// cluster) pair in the HTTP compatibility adapter: it PUTs the cluster configuration with healthChecker
 // {"type":"NONE"} (PUT /nacos/v1/ns/cluster), the checker under which Nacos
 // stops TCP-probing the cluster's persistent instances and takes registration
 // as the health authority instead. See Sink.register for why spotter wants
@@ -486,6 +546,9 @@ func (c *Client) Close() error {
 // and spotter never sets cluster metadata, so for this sink the replacement
 // is a no-op.
 func (c *Client) UpdateCluster(serviceName, clusterName string) error {
+	if c.sdk != nil {
+		return fmt.Errorf("%w: cluster-health-check-update (official naming SDK v2.3.5 has no admin cluster API)", ErrUnsupportedOperation)
+	}
 	values := url.Values{}
 	values.Set("serviceName", serviceName)
 	values.Set("clusterName", clusterName)
@@ -525,19 +588,15 @@ func (c *Client) ListInstances(serviceName string) ([]Host, error) {
 }
 
 // ListCatalogInstances returns every instance of one service and cluster in
-// the configured group/namespace through the ADMIN catalog view (GET /nacos/v1/ns/catalog/
-// instances). Unlike ListInstances, the catalog lists instances with
-// enabled=false too, so the PushAll prune can see — and delete — the
-// disabled remote drift the instance list hides (the F8 fix). Pagination
-// follows the ListServices discipline — iterate while a page comes back full,
-// capped at maxServiceListPages — hardened with a count-based stop: a server
-// that clamps the effective page size below the requested pageSize=100
-// serves pages that always look SHORT, so the short-page rule alone would
-// silently truncate the walk at one clamped page (a partial prune view). The
-// response's Count is the server's declared total, so the walk keeps going
-// while the accumulated total is below it; the count rule cannot run past
-// the end because a count-terminated walk returns exactly Count hosts.
+// the configured group/namespace. SDK mode delegates to the official
+// SelectAllInstances contract, which includes unhealthy, disabled and
+// zero-weight hosts; this is the production prune/compare view. The explicit
+// HTTP compatibility mode retains the catalog endpoint and its pagination
+// handling for migration/test fixtures.
 func (c *Client) ListCatalogInstances(serviceName, clusterName string) ([]Host, error) {
+	if c.sdk != nil {
+		return c.sdk.catalog(serviceName, clusterName)
+	}
 	hosts := make([]Host, 0)
 	for page := 1; page <= maxServiceListPages; page++ {
 		values := url.Values{}
@@ -589,12 +648,22 @@ func (c *Client) ListServices(pageSize int) ([]string, error) {
 			if namespace == DefaultNamespaceID {
 				namespace = ""
 			}
-			names, err := c.sdk.services(page, pageSize, namespace)
+			names, count, err := c.sdk.services(page, pageSize, namespace)
 			if err != nil {
 				return nil, err
 			}
 			all = append(all, names...)
 			if len(names) < pageSize {
+				// The SDK exposes the server-declared total. A server-side
+				// page-size clamp can make a non-terminal page look short;
+				// continue until Count is collected instead of truncating the
+				// authoritative service view.
+				if count > 0 && len(all) < count {
+					continue
+				}
+				return all, nil
+			}
+			if count > 0 && len(all) >= count {
 				return all, nil
 			}
 		}
@@ -685,6 +754,9 @@ func (e *APIError) Permanent() bool {
 // query string — including on PUT, whose form body the v1 servlet does not
 // parse (see UpdateCluster).
 func (c *Client) doForm(method, path string, values url.Values) error {
+	if c == nil || c.http == nil {
+		return fmt.Errorf("%w: raw HTTP form %s %s is unavailable in sdk transport", ErrUnsupportedOperation, method, path)
+	}
 	c.addAuth(values)
 	var lastErr error
 	for _, base := range c.baseURLsOrPrimary() {
@@ -729,6 +801,9 @@ func (c *Client) doForm(method, path string, values url.Values) error {
 // doJSON issues one read request and decodes the JSON response body into
 // out.
 func (c *Client) doJSON(method, path string, values url.Values, out interface{}) error {
+	if c == nil || c.http == nil {
+		return fmt.Errorf("%w: raw HTTP JSON %s %s is unavailable in sdk transport", ErrUnsupportedOperation, method, path)
+	}
 	c.addAuth(values)
 	var lastErr error
 	for _, base := range c.baseURLsOrPrimary() {

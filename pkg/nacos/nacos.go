@@ -24,9 +24,9 @@ const SinkName = "nacos"
 // semaphore of 16-32 ... start 8-16, tune by the §3 metric"; 8 is the
 // contract's stated starting point — well below the real server's measured
 // parallel-load knee, which the demo's own 50-way probes showed degrading
-// hard and unstably). Nacos v1/v2 have NO batch register endpoint (verified
-// against the 2.1.0 OpenAPI: the only "batch" endpoints are metadata-only
-// Beta), so the parallelism is a worker-group over single-instance calls.
+// hard and unstably). The pinned official SDK's batch operation is restricted
+// to its gRPC/ephemeral contract, so the sink uses a worker-group over
+// single-instance persistent calls.
 //
 // The knob is a package-level default, NOT a CLI flag (the contract adds no
 // flag): production tunes it by editing this constant against the
@@ -117,12 +117,12 @@ func (s *Sink) pushInstances(instances []*instance.Instance) error {
 	return firstErr
 }
 
-// Sink is the Nacos ports.InstanceSink: it maps domain instances onto the
-// Nacos v1 OpenAPI (plan §7.3) and owns the PushAll prune reconcile
-// (plan §7.4). It also configures every (service, cluster) pair it
-// registers with the NONE health checker (UpdateCluster), so Nacos's own
-// server-side health check never runs on spotter-managed data — spotter is
-// the health authority.
+// Sink is the Nacos ports.InstanceSink: it maps domain instances through the
+// official Nacos SDK naming facade (plan §7.3) and owns the PushAll prune
+// reconcile (plan §7.4). In the explicit HTTP compatibility adapter it also
+// configures every (service, cluster) pair with the NONE health checker
+// (UpdateCluster). The pinned SDK has no cluster-admin method; SDK mode
+// reports that gap explicitly and never issues a hidden raw HTTP request.
 //
 // Instances are registered PERSISTENT (ephemeral=false): spotter is a
 // replicator asserting the desired state of other people's instances, not a
@@ -320,12 +320,11 @@ func (s *Sink) PushAll(triggerTime int64, instances []*instance.Instance) error 
 // ecs pairs the consul provider owns. An empty push carries no cluster, so
 // it sweeps nothing remembered.
 //
-// The listing is the CATALOG view (ListCatalogInstances), not the instance
-// list: the instance list hides enabled=false entries — the exact state
-// spotter's own unhealthy pushes write (register forces enabled=false, plan
-// §7.3) — so a list-based prune would never remove an instance that once
-// went unhealthy (the F8 drift). The catalog sees enabled=false instances
-// too, so the prune reconciles them.
+// The listing is the complete SelectAllInstances view in SDK mode (or the
+// catalog view in explicit HTTP compatibility mode), not the filtered
+// instance/list endpoint: the SDK contract includes enabled=false entries —
+// the exact state spotter's own unhealthy pushes write — so the prune sees
+// and reconciles disabled drift.
 func (s *Sink) prune(instances []*instance.Instance) error {
 	type clusterKey struct {
 		service string
@@ -608,15 +607,14 @@ func (s *Sink) register(ins *instance.Instance) error {
 // configured as they are first pushed, and clusters that existed before this
 // change get configured on the first register after the restart.
 //
-// Failure discipline: a failed PUT logs a warning and does NOT fail the
-// register push — the instance registration itself succeeded, and the
-// cluster configuration is configuration-of-record, not per-instance data —
-// and the pair's marker is RELEASED so the next push retries the update
-// (bounded: at most one attempt per pushed instance until it succeeds,
-// self-healing, no retry-queue poisoning). The PUT is idempotent, so a
-// mid-push retry or a restart's fresh-process re-apply is always safe. The
-// mutex is not held across the HTTP call (a 10s-timeout request must not
-// block the prune's remember sweep).
+// Failure discipline: a failed cluster-admin operation logs a warning and
+// does NOT fail the register push — the instance registration itself is the
+// data-plane operation, while this configuration is a separate control-plane
+// concern. In SDK mode the pinned naming SDK returns ErrUnsupportedOperation;
+// this path records the explicit release gap and never falls back to raw HTTP.
+// The pair's marker is RELEASED so the next push retries the update when an
+// approved Admin/Maintainer SDK becomes available. The mutex is not held
+// across the control-plane call (a timeout must not block the prune sweep).
 //
 // Concurrency discipline (dsca-2 DS-2-1 interplay): the marker is
 // CLAIMED check-and-set under the mutex BEFORE the HTTP call, so under the
@@ -633,7 +631,7 @@ func (s *Sink) ensureClusterHealthCheckDisabled(service, cluster string) {
 		s.rememberedMu.Unlock()
 		return
 	}
-	// Claim before the HTTP call: exactly one in-flight attempt per pair.
+	// Claim before the control-plane call: exactly one in-flight attempt per pair.
 	claimed := s.healthCheckClaims[key]
 	s.healthCheckClaims[key] = true
 	s.rememberedMu.Unlock()
@@ -641,8 +639,13 @@ func (s *Sink) ensureClusterHealthCheckDisabled(service, cluster string) {
 		return // another worker's PUT for this pair is in flight
 	}
 	if err := s.client.UpdateCluster(service, cluster); err != nil {
-		s.logger.Warnf("nacos: disabling server-side health check for %s/%s failed, will retry on the next push: %v",
-			service, cluster, err)
+		if errors.Is(err, ErrUnsupportedOperation) {
+			s.logger.Errorf("nacos: SDK-only mode cannot configure server-side health check for %s/%s; no raw HTTP fallback is permitted: %v",
+				service, cluster, err)
+		} else {
+			s.logger.Warnf("nacos: disabling server-side health check for %s/%s failed, will retry on the next push: %v",
+				service, cluster, err)
+		}
 		// Release the claim so the next push retries (failure discipline).
 		s.rememberedMu.Lock()
 		delete(s.healthCheckClaims, key)
