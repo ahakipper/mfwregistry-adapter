@@ -29,7 +29,10 @@ waits inherit their caller bound, and TERM/KILL cleanup is idempotent and
 bounded. `tests/observe/lifecycle_test.go` exercises cancellation and teardown
 without starting a real stack. These tests establish harness safety only;
 `EnvError`/`InfraError` and residual resources must remain explicit in any
-OBS-full result and cannot be promoted to a product PASS.
+OBS-full result and cannot be promoted to a product PASS. Docker teardown now
+preserves command stderr, distinguishes an explicit not-found result from a
+daemon/timeout error, and performs a post-removal residual inspect; unknown
+residual state is a teardown failure rather than a clean result.
 
 The real Nacos gates require `NACOS_REAL_SCRATCH=1` and
 `NACOS_REAL_ALLOW_WRITE=1`; malformed credentials, unsupported static tokens,

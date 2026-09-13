@@ -5,10 +5,20 @@ package observe
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestDockerErrorClassificationDistinguishesNotFound(t *testing.T) {
+	if !isContainerNotFound(errors.New("docker inspect failed"), "Error: No such object: dsca-observe-nacos") {
+		t.Fatal("No such object was not classified as container-not-found")
+	}
+	if isContainerNotFound(errors.New("context deadline exceeded"), "daemon unavailable") {
+		t.Fatal("daemon error was misclassified as container-not-found")
+	}
+}
 
 func TestObserveCommandHelpersHonorCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
