@@ -4,7 +4,7 @@ Operational reference for building, running, monitoring and troubleshooting
 spotter. See [architecture.md](architecture.md) for design background and
 [data-model.md](data-model.md) for the pushed data model.
 
-## Current release status (2026-09-13, HEAD `cb16f73`)
+## Current release status (2026-09-13, HEAD `1a82138`)
 
 - Nacos production startup defaults to the official SDK but is **BLOCKED / NOT
   VERIFIED** before readiness until an official Admin/Maintainer cluster-health
@@ -23,6 +23,9 @@ spotter. See [architecture.md](architecture.md) for design background and
 Current code gates: `go vet ./...`, package race tests, observe-tagged unit/race
 tests, and guarded `nacos_real`/`atlas_real` tag tests. A skipped external gate
 must remain `NOT VERIFIED`.
+The exported Nacos `NewClient`, `NewSink`, and `CheckReadiness` constructors
+are SDK-default; raw HTTP is available only through the explicitly named
+`NewHTTPCompat*` and `CheckReadinessHTTPCompat` rollback/test helpers.
 
 ## Build
 
