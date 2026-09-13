@@ -363,6 +363,10 @@ func TestNacosRealAutoReconnect(t *testing.T) {
 		t.Fatalf("automatic reconnect visibility failed: %v", err)
 	}
 	params.Enabled = false
+	if err := client.DeregisterInstance(params); err != nil {
+		t.Fatalf("post-restart deregister: %v", err)
+	}
+	params.Metadata = map[string]string{"reconnectRevision": fmt.Sprintf("%d", time.Now().UnixNano())}
 	if err := client.RegisterInstance(params); err != nil {
 		t.Fatalf("post-restart write: %v", err)
 	}
@@ -375,9 +379,21 @@ func TestNacosRealAutoReconnect(t *testing.T) {
 			t.Errorf("fresh verifier close: %v", err)
 		}
 	}()
-	hosts, err := verifier.ListInstances(service)
-	if err != nil || len(hosts) == 0 || hosts[0].Enabled {
-		t.Fatalf("reconnected canary missing: hosts=%d err=%v", len(hosts), err)
+	deadline := time.Now().Add(cfg.timeout)
+	var hosts []nacos.Host
+	for {
+		hosts, err = verifier.ListInstances(service)
+		if err == nil && len(hosts) == 1 && !hosts[0].Enabled && hosts[0].Metadata["reconnectRevision"] != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("reconnected canary state not observed: hosts=%v err=%v", hosts, err)
+		}
+		select {
+		case <-time.After(100 * time.Millisecond):
+		case <-ctx.Done():
+			t.Fatalf("verification canceled: %v", ctx.Err())
+		}
 	}
 	t.Logf("NACOS_RECONNECT PASS: endpoint=%s transport=sdk restart=single-client sdk_auto_reconnect=VERIFIED cleanup_deferred=true", cfg.endpoint)
 }
