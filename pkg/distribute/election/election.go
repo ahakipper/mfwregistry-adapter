@@ -121,6 +121,9 @@ func isNilCandidateDeps(value interface{}) bool {
 // campaignKey to fall back to that global, which keeps older callers
 // working unchanged.
 func NewCandidate(ctx context.Context, etcdclient *clientv3.Client, campaignKey string) (can Candidate, err error) {
+	if campaignKey == "" {
+		campaignKey = legacycompat.CampaignKey()
+	}
 	return NewCandidateWithClock(ctx, etcdclient, campaignKey, nil)
 }
 
@@ -128,6 +131,9 @@ func NewCandidate(ctx context.Context, etcdclient *clientv3.Client, campaignKey 
 // drives the Wait poll cadence (default realClock when nil — the legacy
 // 2s behavior). Logger and notifier default to nops.
 func NewCandidateWithClock(ctx context.Context, etcdclient *clientv3.Client, campaignKey string, clock ports.Clock) (can Candidate, err error) {
+	if campaignKey == "" {
+		campaignKey = legacycompat.CampaignKey()
+	}
 	return NewCandidateWithDeps(ctx, etcdclient, campaignKey, clock, nil, nil)
 }
 
@@ -139,13 +145,10 @@ func NewCandidateWithDeps(ctx context.Context, etcdclient *clientv3.Client, camp
 	if etcdclient == nil {
 		return nil, errors.New("invalid etcd client")
 	}
-	if campaignKey == "" {
-		// This global fallback REMAINS intentionally (E3 scope): production
-		// passes the campaign key explicitly through NewElectorWithDeps;
-		// removing the fallback would break the legacy NewElector wrapper
-		// which still reads config.LockCampaignKey.
-		campaignKey = legacycompat.CampaignKey()
-	}
+	// WithDeps is the active dependency-injection path. An empty campaign key
+	// is preserved as supplied so this constructor never reads compatibility
+	// globals; deprecated wrappers resolve their legacy default before calling
+	// into this function.
 	if isNilCandidateDeps(clock) {
 		clock = realClock{}
 	}

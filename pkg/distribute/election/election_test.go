@@ -9,6 +9,7 @@ import (
 
 	"go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
+	legacycompat "spotter/internal/infra/legacycompat"
 	"spotter/internal/ports"
 	"spotter/internal/testkit/fakes"
 )
@@ -142,6 +143,17 @@ func TestNewCandidateEmptyCampaignKeyFallsBackToGlobal(t *testing.T) {
 	// campaign-key resolution, proving the fallback branch ran.
 	if _, err := NewCandidate(ctx, newRefusedEndpointClient(t), ""); err == nil {
 		t.Fatal("NewCandidate() error = nil, want Grant failure after the campaign-key fallback")
+	}
+}
+
+func TestNewCandidateWithDepsDoesNotReadLegacyGlobals(t *testing.T) {
+	legacycompat.ResetAccessCounts()
+	defer legacycompat.ResetAccessCounts()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _ = NewCandidateWithDeps(ctx, newRefusedEndpointClient(t), "", nil, nil, nil)
+	if got := legacycompat.AccessCountsSnapshot().Reads; got != 0 {
+		t.Fatalf("NewCandidateWithDeps read legacy globals %d times", got)
 	}
 }
 
