@@ -5,13 +5,11 @@ import (
 	"fmt"
 	"github.com/panjf2000/ants/v2"
 	v1 "k8s.io/api/core/v1"
-	"spotter/config"
+	legacycompat "spotter/internal/infra/legacycompat"
 	"spotter/internal/ports"
 	sv "spotter/pkg/beehive/service/v2"
 	k8srobot "spotter/pkg/k8srobot"
-	"spotter/pkg/log"
 	"spotter/pkg/metrics"
-	"spotter/pkg/notice"
 	"spotter/pkg/providers"
 	"spotter/pkg/worker"
 	"spotter/tools/unit"
@@ -70,12 +68,6 @@ type nopNotifier struct{}
 
 func (nopNotifier) Notify(string, string) {}
 
-// legacyNotifier is used only by the compatibility constructor. Production
-// composition passes an internal/ports.Notifier directly.
-type legacyNotifier struct{}
-
-func (legacyNotifier) Notify(title, content string) { notice.Notice(title, content) }
-
 func (k *k8s) ensureDeps() {
 	k.depsOnce.Do(func() {
 		if k.done == nil {
@@ -85,7 +77,7 @@ func (k *k8s) ensureDeps() {
 			// White-box/legacy callers may construct the unexported provider
 			// directly. Preserve their config-global filtering semantics while
 			// keeping the production constructor fully injected.
-			k.pushAppCodes = append([]string(nil), config.PushAppCodes...)
+			k.pushAppCodes = legacycompat.PushAppCodes()
 		}
 		if k.logger == nil {
 			k.logger = ports.NopLogger{}
@@ -103,7 +95,7 @@ const queueDepthReportInterval = 5 * time.Second
 
 // NewK8SProvider Init k8s provider
 func NewK8SProvider(ctx context.Context, worker worker.Worker, pushInterval int, configPath []string) (provider providers.Provider, err error) {
-	return NewK8SProviderWithDeps(ctx, worker, pushInterval, configPath, log.Logger, legacyNotifier{}, config.PushAppCodes)
+	return NewK8SProviderWithDeps(ctx, worker, pushInterval, configPath, legacycompat.Logger(), legacycompat.Notifier(), legacycompat.PushAppCodes())
 }
 
 // NewK8SProviderWithDeps constructs the provider from explicit runtime

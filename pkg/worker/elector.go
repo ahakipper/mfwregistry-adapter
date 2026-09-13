@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"go.etcd.io/etcd/client/v3"
-	"spotter/config"
+	legacycompat "spotter/internal/infra/legacycompat"
 	"spotter/internal/ports"
 	"spotter/pkg/distribute/election"
 	"spotter/pkg/etcd"
-	"spotter/pkg/log"
-	"spotter/pkg/notice"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -168,18 +166,9 @@ func newElectWorker(ctx context.Context, candidate election.Candidate, leaderChC
 	return ew
 }
 
-// legacyNotifier forwards elector notifications to the legacy global
-// notifier. The legacy NewElector wrapper still reads the config/log
-// globals, so it keeps paging through notice.Notice as well — the pre-E3
-// behavior — instead of silently dropping campaign-failure pages.
-type legacyNotifier struct{}
-
-func (legacyNotifier) Notify(title, content string) {
-	notice.Notice(title, content)
-}
-
 func NewElector(ctx context.Context, leaderChCh chan bool) (Elector, error) {
-	return NewElectorWithDeps(ctx, leaderChCh, config.EtcdEndpoints, config.CertFile, config.KeyFile, config.CAFile, config.LockCampaignKey, log.Logger, legacyNotifier{})
+	endpoints, cert, key, ca, campaign := legacycompat.EtcdConfig()
+	return NewElectorWithDeps(ctx, leaderChCh, endpoints, cert, key, ca, campaign, legacycompat.Logger(), legacycompat.Notifier())
 }
 
 // ElectWait will perform the behavior of electing the leader. It will

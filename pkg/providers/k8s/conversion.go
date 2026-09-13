@@ -4,11 +4,10 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"regexp"
-	"spotter/config"
+	legacycompat "spotter/internal/infra/legacycompat"
 	internalports "spotter/internal/ports"
 	sv "spotter/pkg/beehive/service/v2"
 	k8srobot "spotter/pkg/k8srobot"
-	"spotter/pkg/log"
 	"spotter/pkg/providers"
 	"strconv"
 	"strings"
@@ -16,7 +15,7 @@ import (
 
 // TODO obj param optimize
 func formatInstance(obj *k8srobot.QueueObject, pod *v1.Pod) (ins *sv.Instance) {
-	return formatInstanceWithDeps(obj, pod, config.PushAppCodes, log.Logger)
+	return formatInstanceWithDeps(obj, pod, legacycompat.PushAppCodes(), legacycompat.Logger())
 }
 
 // formatInstanceWithDeps is the production conversion entry point. It keeps

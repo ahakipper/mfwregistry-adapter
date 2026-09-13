@@ -593,6 +593,13 @@ global bridge。`internal/infra/notice.HTTPNotifier` 已具备 endpoint/auth/req
 fail-closed，不能把本地单测提升为真实告警 PASS。故 C2 代码门禁通过，但真实
 appcenter delivery 与 legacy shim 最终删除仍是发布前 P1/P2 证据项。
 
+随后 `legacycompat` boundary patch 将兼容 global reads 集中到
+`internal/infra/legacycompat`；`internal/composition/boundary_test.go` 静态禁止
+active provider/conversion/elector/metrics files 直接导入 legacy `pkg/log`,
+`pkg/notice`, `spotter/config` 或 aggregate。旧 `New*`/`formatInstance` 入口只通过
+该 boundary 转发，生产 server 仍只调用 `WithDeps` constructors。该隔离不等同于
+删除 shim；真实调用方迁移和 appcenter endpoint contract 证据仍是发布前门禁。
+
 ### 13.1 通知
 
 - 把 providers/election/metrics 的 `notice.Notice` 全部改成 `ports.Notifier` 注入；保留 `pkg/notice` 兼容 shim 但生产路径不读取全局。

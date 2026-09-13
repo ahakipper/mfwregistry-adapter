@@ -6,10 +6,10 @@ import (
 	"github.com/hashicorp/consul/api"
 	"github.com/panjf2000/ants/v2"
 	"github.com/pkg/errors"
+	legacycompat "spotter/internal/infra/legacycompat"
 	"spotter/internal/ports"
 	"spotter/pkg/beehive/service/v2"
 	sv "spotter/pkg/beehive/service/v2"
-	"spotter/pkg/log"
 	"spotter/pkg/metrics"
 	"spotter/pkg/providers"
 	"spotter/pkg/worker"
@@ -128,7 +128,7 @@ func (c *consul) SetNacosReconcileSource(enabled bool) {
 
 // NewConsulProvider creates consul provider
 func NewConsulProvider(ctx context.Context, worker worker.Worker, pushInterval int, addrs []string) (provider providers.Provider, err error) {
-	return NewConsulProviderWithDeps(ctx, worker, pushInterval, addrs, log.Logger, legacyNotifier{})
+	return NewConsulProviderWithDeps(ctx, worker, pushInterval, addrs, legacycompat.Logger(), legacycompat.Notifier())
 }
 
 // NewConsulProviderWithDeps constructs a provider from explicit runtime

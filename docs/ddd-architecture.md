@@ -9,6 +9,14 @@
 > fail-closed behavior, but appcenter endpoint/auth/SLA evidence is still
 > required before removing the shims. See remediation plan §13.
 
+The remaining compatibility reads are centralized in
+`internal/infra/legacycompat`; provider, conversion, elector, and metrics
+packages no longer import `pkg/log`, `pkg/notice`, or the mutable `config`
+package directly. `internal/composition/boundary_test.go` is a static gate for
+this rule. The `New*Provider`/`NewElector` and `formatInstance` entry points
+remain deprecated source-compatibility wrappers only; the server's active
+graph calls the `WithDeps` constructors.
+
 Status: design document for the `refactor/all` branch. This is the target
 architecture that the later implementation phases will follow. It audits the
 current codebase against Domain-Driven Design principles and defines an

@@ -11,7 +11,6 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"spotter/internal/ports"
-	"spotter/pkg/notice"
 )
 
 // Monitor handles service and instance changes.
@@ -52,15 +51,6 @@ const (
 type nopNotifier struct{}
 
 func (nopNotifier) Notify(string, string) {}
-
-// legacyNotifier forwards monitor notifications to the legacy global notifier.
-// It is a temporary compatibility bridge until the provider composition phase
-// wires a ports.Notifier implementation through construction.
-type legacyNotifier struct{}
-
-func (legacyNotifier) Notify(title, content string) {
-	notice.Notice(title, content)
-}
 
 type realClock struct{}
 
