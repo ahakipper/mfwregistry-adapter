@@ -24,13 +24,15 @@ kwokctl create cluster --name "$cluster" --kubeconfig "$kc" --kube-apiserver-por
 for i in {1..30}; do [[ -s "$kc" ]] && kubectl --kubeconfig "$kc" get --raw=/readyz >/dev/null 2>&1 && break; sleep 1; done
 [[ -s "$kc" ]] || { echo "InfraError: kwok kubeconfig not created" >&2; exit 3; }
 kubectl --kubeconfig "$kc" get --raw=/readyz >/dev/null || { echo "InfraError: kwok apiserver not ready" >&2; exit 3; }
-node="${OBS_KWOK_NODE:-kwok-node}"
+node="${OBS_KWOK_NODE:-$(kubectl --kubeconfig "$kc" get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)}"
 kubectl --kubeconfig "$kc" label node "$node" kwok.x-k8s.io/node=fake --overwrite >/dev/null 2>&1 || { echo "InfraError: kwok node $node unavailable" >&2; exit 3; }
 # Pre-seed a generous allocatable capacity so large observe runs do not depend
 # on a user's pre-existing node patch. The status subresource is best-effort
 # across kwok versions; verify the node and fail closed when capacity is absent.
-kubectl --kubeconfig "$kc" patch node "$node" --subresource=status --type=merge -p '{"status":{"capacity":{"cpu":"1000","memory":"1Ti"},"allocatable":{"cpu":"1000","memory":"1Ti"}}}' >/dev/null 2>&1 || true
-kubectl --kubeconfig "$kc" get node "$node" -o jsonpath='{.status.capacity.cpu}' | grep -q . || { echo "InfraError: kwok node capacity unavailable" >&2; exit 3; }
+scale="${OBS_SCALE:-1000}"
+kubectl --kubeconfig "$kc" patch node "$node" --subresource=status --type=merge -p "{\"status\":{\"capacity\":{\"pods\":\"$scale\"},\"allocatable\":{\"pods\":\"$scale\"}}}" >/dev/null || { echo "InfraError: kwok node capacity patch failed" >&2; exit 3; }
+capacity=$(kubectl --kubeconfig "$kc" get node "$node" -o jsonpath='{.status.allocatable.pods}')
+[[ "$capacity" =~ ^[0-9]+$ && "$capacity" -ge "$scale" ]] || { echo "InfraError: node pod capacity $capacity below $scale" >&2; exit 3; }
 printf 'cluster=%s\nkubeconfig=%s\napi=%s\netcd=%s\n' "$cluster" "$kc" "$api" "$etcd" > "$out/observe-state"
 sha256sum "$out/observe-state" > "$out/observe-state.sha256"
 trap - ERR
