@@ -141,7 +141,13 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 		scopes.Add(1)
 		go func() {
 			defer scopes.Done()
-			for _, batch := range batchesForScope {
+			for batchNumber, batch := range batchesForScope {
+				// Keep the batch boundary observable through the existing logger
+				// seam. This is intentionally metadata-only: persistent instances
+				// still use one official SDK call per item, while startup/full-sync
+				// tests can prove application-scoped partitioning and ordering.
+				s.logger.Infof("nacos persistent batch scope=%s group=%s service=%s cluster=%s operation=%s index=%d size=%d",
+					batch.Key.Namespace, batch.Key.Group, batch.Key.Service, batch.Key.Cluster, batch.Key.Operation, batchNumber, len(batch.Items))
 				var items sync.WaitGroup
 				for position, ins := range batch.Items {
 					position, ins := position, ins

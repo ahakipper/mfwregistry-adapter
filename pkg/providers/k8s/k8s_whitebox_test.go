@@ -3,8 +3,10 @@ package k8s
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -16,9 +18,11 @@ import (
 
 	"spotter/config"
 	"spotter/internal/testkit/fakes"
+	"spotter/internal/testkit/nacosmock"
 	sv "spotter/pkg/beehive/service/v2"
 	"spotter/pkg/k8srobot"
 	"spotter/pkg/log"
+	"spotter/pkg/nacos"
 	"spotter/pkg/notice"
 	"spotter/pkg/providers"
 	"spotter/pkg/worker"
@@ -254,6 +258,31 @@ type fakeWorker struct {
 	getAllResponse *sv.InstanceList
 	getAllErr      error
 	getAllCalls    int
+}
+
+// observingWorker records the provider-to-worker boundary while delegating to
+// the real DefaultWorker. It keeps the startup test on the production path:
+// flushInstances emits one SyncAll event, the worker invokes the real Nacos
+// sink, and the sink's existing logger seam exposes its bounded batch units.
+type observingWorker struct {
+	worker.Worker
+	mu     sync.Mutex
+	events []*worker.Event
+}
+
+func (w *observingWorker) Handle(event *worker.Event) {
+	if event != nil {
+		w.mu.Lock()
+		w.events = append(w.events, event)
+		w.mu.Unlock()
+	}
+	w.Worker.Handle(event)
+}
+
+func (w *observingWorker) eventSnapshot() []*worker.Event {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]*worker.Event(nil), w.events...)
 }
 
 func (w *fakeWorker) AddEventHandler(opt worker.OperateType, handler worker.EventResourceHandler) {}
@@ -1411,6 +1440,99 @@ func TestFlushInstancesWithNoPodsDoesNothing(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if events := w.handleSnapshot(); len(events) != 0 {
 		t.Fatalf("pushed events = %d, want 0 (no pods)", len(events))
+	}
+}
+
+// TestK8sInitialFlushRoutesCompleteSnapshotToNacosBatchPath drives the real
+// startup flush through DefaultWorker and the Nacos sink. A 201-instance
+// single-application snapshot must remain one SyncAll event, partition into
+// ordered 100/100/1 application batches, and finish all registrations before
+// the sink starts its prune read.
+func TestK8sInitialFlushRoutesCompleteSnapshotToNacosBatchPath(t *testing.T) {
+	server := nacosmock.Start()
+	defer server.Close()
+	logger := &fakes.FakeLogger{}
+	sink, err := nacos.NewHTTPCompatSink(server.URL(), logger)
+	if err != nil {
+		t.Fatalf("nacos.NewHTTPCompatSink() error = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	defaultWorker, err := worker.NewResourceWorker(ctx, sink, logger, fakes.NewFakeMetricsRecorder())
+	if err != nil {
+		t.Fatalf("worker.NewResourceWorker() error = %v", err)
+	}
+	observed := &observingWorker{Worker: defaultWorker}
+
+	pods := make([]interface{}, 0, 201)
+	for i := 0; i < 201; i++ {
+		pod := newValidPod("msp", fmt.Sprintf("pod-%03d", i))
+		pod.Status.PodIP = fmt.Sprintf("172.17.1.%d", i+1)
+		pod.ResourceVersion = fmt.Sprintf("%d", i+1)
+		pods = append(pods, pod)
+	}
+	k := newTestProvider(newFakeRobot(nil, pods, true), observed)
+	k.flushInstances()
+
+	events := observed.eventSnapshot()
+	if len(events) != 1 {
+		t.Fatalf("startup worker events = %d, want exactly one SyncAll event", len(events))
+	}
+	if events[0].Operate != worker.OperateTypeSyncAll || len(events[0].Data) != 201 {
+		t.Fatalf("startup event = operate=%q data=%d, want SyncAll with complete 201-instance snapshot", events[0].Operate, len(events[0].Data))
+	}
+
+	// The mock stores every successful persistent registration. This also
+	// waits for the asynchronous worker handoff if the implementation changes
+	// the handler scheduling in the future.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && len(server.Instances("pay-user", "k8s")) != 201 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := len(server.Instances("pay-user", "k8s")); got != 201 {
+		t.Fatalf("Nacos instances after startup SyncAll = %d, want 201", got)
+	}
+
+	// The Nacos sink exposes batch boundaries through its existing logger
+	// port. Filter out health-check and per-instance messages, then assert the
+	// hard cap and deterministic ordering for this one application scope.
+	var batchSizes []int
+	var batchIndexes []int
+	for _, entry := range logger.Entries() {
+		if !strings.HasPrefix(entry.Message, "nacos persistent batch ") {
+			continue
+		}
+		var index, size int
+		if _, err := fmt.Sscanf(entry.Message, "nacos persistent batch scope=public group=DEFAULT_GROUP service=pay-user cluster=k8s operation=register index=%d size=%d", &index, &size); err != nil {
+			t.Fatalf("cannot parse batch log %q: %v", entry.Message, err)
+		}
+		batchIndexes = append(batchIndexes, index)
+		batchSizes = append(batchSizes, size)
+	}
+	if want := []int{100, 100, 1}; !reflect.DeepEqual(batchSizes, want) {
+		t.Fatalf("Nacos startup batch sizes = %v, want %v", batchSizes, want)
+	}
+	if want := []int{0, 1, 2}; !reflect.DeepEqual(batchIndexes, want) {
+		t.Fatalf("Nacos startup batch indexes = %v, want %v", batchIndexes, want)
+	}
+
+	// Prune begins with a read request. All 201 registration POSTs must have
+	// completed before that read, otherwise a partial snapshot could be
+	// pruned as if it were complete.
+	requests := server.Requests()
+	firstPruneRead := -1
+	postCountBeforeRead := 0
+	for i, request := range requests {
+		if request.Method == "GET" && (request.Path == "/nacos/v1/ns/instance/list" || request.Path == "/nacos/v1/ns/catalog/instances") {
+			firstPruneRead = i
+			break
+		}
+		if request.Method == "POST" && request.Path == "/nacos/v1/ns/instance" {
+			postCountBeforeRead++
+		}
+	}
+	if firstPruneRead < 0 || postCountBeforeRead != 201 {
+		t.Fatalf("startup request ordering = first_prune_read=%d posts_before_read=%d, want read after 201 registrations; requests=%v", firstPruneRead, postCountBeforeRead, requests)
 	}
 }
 

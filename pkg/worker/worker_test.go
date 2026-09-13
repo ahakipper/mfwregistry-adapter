@@ -28,6 +28,17 @@ func (s *fullOperationRecordingSink) PushAllOperation(operation ports.RetryOpera
 	return nil
 }
 
+type fullOperationFailingSink struct {
+	*fakes.FakeInstanceSink
+	operations []ports.RetryOperation
+	err        error
+}
+
+func (s *fullOperationFailingSink) PushAllOperation(operation ports.RetryOperation) error {
+	s.operations = append(s.operations, operation)
+	return s.err
+}
+
 func TestWorkerSyncAllPreservesScopeAndEmptyConfirmation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -43,6 +54,56 @@ func TestWorkerSyncAllPreservesScopeAndEmptyConfirmation(t *testing.T) {
 	op := sink.operations[0]
 	if op.Scope != "k8s" || op.BatchID != "empty-k8s" || op.Sequence != 3 || !op.EmptyConfirmed || op.Operate != ports.OperateTypeSyncAll {
 		t.Fatalf("full operation metadata = %+v, want k8s/empty-k8s/3/confirmed", op)
+	}
+}
+
+// TestFullSyncRetryPreservesBatchIdentityAndScope proves that a failed
+// application-scoped full operation remains one typed SyncAll retry. The
+// retry must retain the provider scope, stable batch identity, and source
+// sequence so a later attempt cannot be mistaken for an incremental push or
+// an unrelated provider snapshot.
+func TestFullSyncRetryPreservesBatchIdentityAndScope(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	failure := errors.New("nacos batch failed")
+	sink := &fullOperationFailingSink{
+		FakeInstanceSink: &fakes.FakeInstanceSink{},
+		err:              failure,
+	}
+	w, err := NewResourceWorker(ctx, sink, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+	if err != nil {
+		t.Fatalf("NewResourceWorker() error = %v", err)
+	}
+	items := []*instance.Instance{
+		{Provider: "k8s", AppCode: "pay-user", InstanceId: "pod-a", Reversion: 11},
+		{Provider: "k8s", AppCode: "pay-user", InstanceId: "pod-b", Reversion: 12},
+	}
+	const (
+		batchID  = "k8s-pay-user-seq-42"
+		sequence = uint64(42)
+	)
+	w.Handle(&Event{
+		Trigger:  1234,
+		Data:     items,
+		Operate:  OperateTypeSyncAll,
+		Scope:    "k8s",
+		BatchID:  batchID,
+		Sequence: sequence,
+	})
+
+	queued := w.unsyncedService.DrainOperations()
+	if len(queued) != 1 {
+		t.Fatalf("queued retry operations = %d, want one full operation", len(queued))
+	}
+	op := queued[0]
+	if op.Operate != ports.OperateTypeSyncAll {
+		t.Fatalf("retry operation type = %q, want %q", op.Operate, ports.OperateTypeSyncAll)
+	}
+	if op.Scope != "k8s" || op.BatchID != batchID || op.Sequence != sequence {
+		t.Fatalf("retry metadata = %+v, want scope=k8s batch_id=%s sequence=%d", op, batchID, sequence)
+	}
+	if len(op.Instances) != len(items) {
+		t.Fatalf("retry instances = %d, want complete source snapshot of %d", len(op.Instances), len(items))
 	}
 }
 
