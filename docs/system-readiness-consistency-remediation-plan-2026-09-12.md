@@ -599,6 +599,8 @@ active provider/conversion/elector/metrics files 直接导入 legacy `pkg/log`,
 `pkg/notice`, `spotter/config` 或 aggregate。旧 `New*`/`formatInstance` 入口只通过
 该 boundary 转发，生产 server 仍只调用 `WithDeps` constructors。该隔离不等同于
 删除 shim；真实调用方迁移和 appcenter endpoint contract 证据仍是发布前门禁。
+空 campaign key 的旧 election fallback 也经由该 boundary；显式
+`NewCandidateWithDeps` 始终要求调用方传入 campaign key，不读取全局配置。
 
 ### 13.1 通知
 

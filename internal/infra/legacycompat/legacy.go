@@ -38,3 +38,7 @@ func PushAppCodes() []string { return append([]string(nil), config.PushAppCodes.
 func EtcdConfig() (endpoints []string, cert, key, ca, campaign string) {
 	return append([]string(nil), config.EtcdEndpoints...), config.CertFile, config.KeyFile, config.CAFile, config.LockCampaignKey
 }
+
+// CampaignKey returns the legacy default campaign key for the deprecated
+// empty-key constructor path.
+func CampaignKey() string { return config.LockCampaignKey }

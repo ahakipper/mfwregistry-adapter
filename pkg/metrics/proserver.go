@@ -5,22 +5,22 @@ import (
 	"math/rand"
 	"net/http"
 	_ "net/http/pprof"
-	legacycompat "spotter/internal/infra/legacycompat"
 	"spotter/internal/ports"
+	"sync"
 	"time"
 )
 
 type PrometheusService struct {
 	Addr   string
 	Logger ports.Logger
+	mu     sync.Mutex
+	srv    *http.Server
 }
-
-var srv *http.Server
 
 func NewPrometheusServer(addr string) *PrometheusService {
 	return &PrometheusService{
 		Addr:   addr,
-		Logger: legacycompat.Logger(),
+		Logger: ports.NopLogger{},
 	}
 }
 
@@ -41,17 +41,23 @@ func (s *PrometheusService) Start() {
 		s.Logger = ports.NopLogger{}
 	}
 	//s.mock()
-	srv = &http.Server{Addr: s.Addr}
+	s.mu.Lock()
+	s.srv = &http.Server{Addr: s.Addr}
+	server := s.srv
+	s.mu.Unlock()
 	s.Logger.Info("prometheus server start ...")
 	http.Handle("/metrics", promhttp.Handler())
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		s.Logger.Errorf("prometheus server stopped: %s", err)
 	}
 }
 
 func (s *PrometheusService) Stop() {
-	if srv != nil {
-		_ = srv.Shutdown(nil)
+	s.mu.Lock()
+	server := s.srv
+	s.mu.Unlock()
+	if server != nil {
+		_ = server.Shutdown(nil)
 	}
 }
 

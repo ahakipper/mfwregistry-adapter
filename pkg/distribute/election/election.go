@@ -6,7 +6,7 @@ import (
 	uuid "github.com/satori/go.uuid"
 	"go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
-	"spotter/config"
+	legacycompat "spotter/internal/infra/legacycompat"
 	"spotter/internal/ports"
 	"sync"
 	"time"
@@ -144,7 +144,7 @@ func NewCandidateWithDeps(ctx context.Context, etcdclient *clientv3.Client, camp
 		// passes the campaign key explicitly through NewElectorWithDeps;
 		// removing the fallback would break the legacy NewElector wrapper
 		// which still reads config.LockCampaignKey.
-		campaignKey = config.LockCampaignKey
+		campaignKey = legacycompat.CampaignKey()
 	}
 	if isNilCandidateDeps(clock) {
 		clock = realClock{}
