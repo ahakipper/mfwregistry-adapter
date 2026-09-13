@@ -4,6 +4,10 @@
 > findings below are preserved. The current release evaluates the Nacos Sink.
 
 **Auditor:** DS-3 (reconcile correctness vs nacos)
+
+> Historical boundary: Atlas-as-diff-source findings below apply to the
+> historical/default Atlas reconcile mode. Atlas is deferred in the current
+> release; current reconcile scope is the Nacos single-Sink path.
 **Repo:** `spotter`, branch `refactor/all`, implementation baseline `c986632`
 **Historical HEAD note:** the original audit was executed at `69b0105`; its live probes and code citations are retained as historical evidence below.
 
