@@ -73,7 +73,11 @@ func runNacosOutageRestart(ctx context.Context, container, addr string) error {
 					break
 				}
 				conn.Close()
-				time.Sleep(100 * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(100 * time.Millisecond):
+				}
 			}
 			if !observedDown {
 				return fmt.Errorf("Nacos outage not observed: endpoint remained reachable")
@@ -83,13 +87,22 @@ func runNacosOutageRestart(ctx context.Context, container, addr string) error {
 			if !ok {
 				return fmt.Errorf("restart requires context deadline")
 			}
+			observedUp := false
 			for time.Now().Before(deadline) {
 				conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
 				if err == nil {
 					conn.Close()
+					observedUp = true
 					break
 				}
-				time.Sleep(100 * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(100 * time.Millisecond):
+				}
+			}
+			if !observedUp {
+				return fmt.Errorf("Nacos endpoint did not recover before deadline")
 			}
 		}
 	}
