@@ -581,4 +581,6 @@ func TestMonitorDispatchesLegacyAndPayloadFreeHandlers(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("payload-free handler not called")
 	}
+	awaitNotification(t, notifier, "Failed to handle the consul instance change")
+	awaitLog(t, logger, "warn", "modern")
 }

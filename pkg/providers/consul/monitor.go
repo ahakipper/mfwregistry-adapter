@@ -225,6 +225,7 @@ func (m *consulMonitor) updateInstanceRecord() {
 			go func(h InstanceChangeHandler) {
 				defer m.handlersWG.Done()
 				if err := h(); err != nil {
+					m.notifier.Notify("Failed to handle the consul instance change", err.Error())
 					m.logger.Warnf("Error executing instance change handler: %v", err)
 				}
 			}(handler)
