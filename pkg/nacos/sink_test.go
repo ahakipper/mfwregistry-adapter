@@ -1584,6 +1584,36 @@ func TestBlackboxSinkPruneSkipsForeignOwner(t *testing.T) {
 	}
 }
 
+func TestBlackboxSinkGetAllExcludesForeignAndUnowned(t *testing.T) {
+	sink, server := newSinkAt(t)
+	server.SetInstances([]nacosmock.Host{
+		{IP: "10.8.0.1", Port: 8080, Metadata: map[string]string{"instanceId": "owned", "spotterOwner": "spotter", "status": "1", "schemaVersion": "1"}},
+		{IP: "10.8.0.2", Port: 8080, Metadata: map[string]string{"instanceId": "foreign", "spotterOwner": "other-writer", "status": "1"}},
+		{IP: "10.8.0.3", Port: 8080, Metadata: map[string]string{"instanceId": "legacy", "status": "1"}},
+	}, "DEFAULT_GROUP", "pay-user", "k8s")
+	list, err := sink.GetAll(nil, "k8s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundOwned := false
+	for _, got := range list.Instance {
+		if got.InstanceId == "owned" {
+			foundOwned = true
+		}
+		if got.InstanceId == "foreign" || got.InstanceId == "legacy" {
+			t.Fatalf("GetAll returned unowned %q", got.InstanceId)
+		}
+	}
+	if !foundOwned {
+		t.Fatalf("GetAll=%v, want owned instance", list.Instance)
+	}
+	for _, req := range server.Requests() {
+		if req.Method == "DELETE" {
+			t.Fatalf("GetAll issued destructive DELETE: %+v", req)
+		}
+	}
+}
+
 func TestBlackboxSinkCustomGroupAndNamespaceRoundTripAndPrune(t *testing.T) {
 	server := nacosmock.Start()
 	defer server.Close()
