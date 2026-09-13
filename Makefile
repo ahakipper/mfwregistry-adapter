@@ -129,6 +129,7 @@ OBS_CHURN_EVERY ?= 20s
 OBS_CHURN_RATE ?= 5
 
 test-observe:
+	@if [ -n "$(OBS_KUBECONFIG)" ]; then echo 'OBS_KUBECONFIG external mode: running read-only unit gates'; go test -tags=observe -run '^TestObserveUnit' -v ./tests/observe/...; exit $$?; fi; \
 	@status=0; trap './scripts/observe-down.sh' 0 2 15; \
 	./scripts/observe-up.sh || status=$$?; \
 	if [ $$status -eq 0 ]; then mkdir -p build/observe && go build -o build/observe/spotter . || status=$$?; fi; \
