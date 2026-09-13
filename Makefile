@@ -129,6 +129,7 @@ OBS_CHURN_EVERY ?= 20s
 OBS_CHURN_RATE ?= 5
 
 test-observe:
+	./scripts/observe-up.sh
 	@mkdir -p build/observe
 	go build -o build/observe/spotter .
 	@status=0; \
@@ -136,6 +137,7 @@ test-observe:
 	OBS_TICK=$(OBS_TICK) OBS_CHURN_EVERY=$(OBS_CHURN_EVERY) OBS_CHURN_RATE=$(OBS_CHURN_RATE) \
 	SPOTTER_BIN=build/observe/spotter \
 		go test -tags=observe -run '^TestObserveConsistency$$|^TestObserveUnit' -timeout $(OBS_TIMEOUT) -v ./tests/observe/... || status=$$?; \
+	./scripts/observe-down.sh; \
 	exit $$status
 
 .PHONY: test-observe
