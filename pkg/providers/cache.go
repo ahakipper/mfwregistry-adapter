@@ -106,8 +106,12 @@ func (cache *CacheBtree) Delete(id string) *sv.Instance {
 		},
 	}
 	item := cache.btree.Delete(key)
-
-	return item.(*InstanceCacheItem).Instance
+	if item == nil {
+		return nil
+	}
+	stored := item.(*InstanceCacheItem).Instance
+	copy := cache.deepCopy(*stored)
+	return &copy
 }
 
 func (cache *CacheBtree) ReplaceOrInsert(ins *sv.Instance) *sv.Instance {
