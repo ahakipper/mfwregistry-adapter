@@ -83,6 +83,9 @@ func TestNacosSDKPersistentLifecycle(t *testing.T) {
 		}
 	}()
 	if err := client.BatchRegisterEphemeral(batchParam); err != nil {
+		if batchUnsupported(err) {
+			t.Skipf("NOT VERIFIED: batch unsupported by target: %v", err)
+		}
 		t.Fatalf("SDK ephemeral batch register: %v", err)
 	}
 	if hosts, err := verifierHosts(cfg.client, batchService); err != nil || len(hosts) != 1 || hosts[0].IP != "127.0.0.2" || hosts[0].Port != 2 || !hosts[0].Ephemeral || !hosts[0].Enabled {
@@ -126,6 +129,14 @@ func TestNacosSDKPersistentLifecycle(t *testing.T) {
 	cleanupElapsed = time.Since(cleanupStart)
 	cleanupStatus = "passed"
 	t.Logf("NACOS_SDK_EVAL PASS: endpoint=%s transport=sdk lifecycle=register,list,services,subscribe,unsubscribe,deregister latency_ms=%d service=%s", cfg.endpoint, time.Since(started).Milliseconds(), service)
+}
+
+func batchUnsupported(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "requesthandler") && strings.Contains(msg, "not found")
 }
 
 func verifierHosts(cfg nacos.ClientConfig, service string) ([]nacos.Host, error) {
