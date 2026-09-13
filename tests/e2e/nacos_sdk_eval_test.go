@@ -65,12 +65,6 @@ func TestNacosSDKPersistentLifecycle(t *testing.T) {
 	batchService := service + "_batch"
 	batchParam := vo.BatchRegisterInstanceParam{ServiceName: batchService, GroupName: cfg.client.GroupName, Instances: []vo.RegisterInstanceParam{{Ip: "127.0.0.2", Port: 2, Enable: true, Ephemeral: true}}}
 	batchAttempted := true
-	if err := client.BatchRegisterEphemeral(batchParam); err != nil {
-		t.Fatalf("SDK ephemeral batch register: %v", err)
-	}
-	if hosts, err := verifierHosts(cfg.client, batchService); err != nil || len(hosts) != 1 || hosts[0].IP != "127.0.0.2" || hosts[0].Port != 2 || !hosts[0].Ephemeral || !hosts[0].Enabled {
-		t.Fatalf("fresh batch state: hosts=%+v err=%v", hosts, err)
-	}
 	defer func() {
 		if batchAttempted {
 			if err := client.DeregisterInstance(nacos.InstanceParams{ServiceName: batchService, IP: "127.0.0.2", Port: 2, ClusterName: "DEFAULT", GroupName: cfg.client.GroupName, NamespaceID: cfg.client.NamespaceID, Ephemeral: true}); err != nil {
@@ -81,6 +75,12 @@ func TestNacosSDKPersistentLifecycle(t *testing.T) {
 			}
 		}
 	}()
+	if err := client.BatchRegisterEphemeral(batchParam); err != nil {
+		t.Fatalf("SDK ephemeral batch register: %v", err)
+	}
+	if hosts, err := verifierHosts(cfg.client, batchService); err != nil || len(hosts) != 1 || hosts[0].IP != "127.0.0.2" || hosts[0].Port != 2 || !hosts[0].Ephemeral || !hosts[0].Enabled {
+		t.Fatalf("fresh batch state: hosts=%+v err=%v", hosts, err)
+	}
 	if _, err := client.ListInstances(service); err != nil {
 		t.Fatalf("SDK SelectAll query: %v", err)
 	}
