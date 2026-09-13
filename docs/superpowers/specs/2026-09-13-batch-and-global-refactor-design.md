@@ -80,13 +80,16 @@ The DDD migration is staged so every step is independently testable:
 Every new commit uses a detailed English subject and body with the sections
 `Problem`, `Changes`, `Verification`, `Compatibility / Rollback`, and
 `Documentation`. Commits are atomic and record actual commands and results.
-The requested history cleanup targets the remediation series beginning at
-`e708630` (its parent is the preserved pre-remediation base) through the
-reviewed current branch tip. Original 2020 project history remains untouched.
-Before rewriting, create a backup ref, generate a per-commit message map, run a
-message/schema checker, compare commit trees and patch IDs, obtain independent
-review, and push only with `--force-with-lease`. A different range requires an
-explicit scope decision before any ref mutation.
+The requested history cleanup is now confirmed and frozen to the remediation
+range `e708630^..e9ea7d2` (175 commits). Its parent is the preserved
+pre-remediation base; original 2020 project history remains untouched. Commits
+created after `e9ea7d2` are not part of this rewrite.
+Before rewriting, create backup refs for both the frozen input tip and the
+current branch tip, generate a per-commit message map, run a message/schema
+checker, compare commit trees and patch IDs, replay post-range commits with
+merge preservation, obtain independent review, and push only with
+`--force-with-lease`. A different range requires an explicit scope decision
+before any ref mutation.
 
 ## Non-goals
 
