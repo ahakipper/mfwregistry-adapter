@@ -9,7 +9,7 @@
 > fail-closed behavior, but appcenter endpoint/auth/SLA evidence is still
 > required before removing the shims. See remediation plan §13.
 
-> **Current-status addendum (authoritative HEAD `5df45d5`):** The active graph
+> **Current-status addendum (code baseline `356aa75`):** The active graph
 > has explicit ports and no direct legacy imports; `legacycompat` is the sole
 > compatibility read boundary and aggregate is excluded by build tag. Nacos
 > real-gate and Observe harness lifecycles are bounded and fail-closed, while

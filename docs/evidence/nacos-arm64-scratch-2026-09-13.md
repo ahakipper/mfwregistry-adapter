@@ -46,13 +46,39 @@ The gates register cleanup before the first write attempt, so an ambiguous
 transport result still triggers deregistration before the SDK client closes.
 No raw HTTP compatibility transport is used by these tests.
 
+## Additional authenticated and scoped runs
+
+The same immutable ARM64 image was also exercised on the scratch host with
+the Nacos 2.1.0 authentication profile. The host mappings were
+`38848 → 8848`, `39848 → 9848`, and `39849 → 9849`. The run supplied a random
+local auth token through the guarded environment, username `nacos`, and
+password `nacos`, together with `NACOS_REAL_SCRATCH=1`,
+`NACOS_REAL_ALLOW_WRITE=1`, and `NACOS_ALLOW_INSECURE_AUTH=1`. Both
+`nacos_real` and `nacos_sdk_eval` completed **PASS**; each reported
+`cleanup_attempted=true`, `status=passed`, and `residual_unknown=false`.
+
+A second `nacos_real` run used namespace `tenant-a` and group `blue` against
+the same scratch container and completed **PASS** with the same cleanup
+status. Secret token values are intentionally not recorded.
+
+As a negative security check, a plaintext-auth attempt without the complete
+scratch/write/insecure-auth guard was rejected before any Nacos client write;
+this rejection is evidence of the guard, not a protocol success.
+
+After these runs Docker inspection confirmed the scratch container was
+stopped and removed; no residual container remained. Future evidence must
+retain the same post-removal verification.
+
 ## What this evidence does not prove
 
 The following remain unverified or blocked and must not be inferred from this
 scratch result:
 
-- TLS certificate/hostname validation and production authentication policy;
-- non-public namespace and custom group authorization;
+- TLS certificate/hostname validation and production authentication policy
+  (the scratch username/password and token checks are not production auth
+  evidence);
+- namespace/group authorization beyond the single `tenant-a`/`blue` scratch
+  pair;
 - Nacos HA, leaderless behavior, restart/redo/cache recovery, and multi-node
   failover;
 - an official Admin/Maintainer SDK capability for cluster health-check update;
