@@ -15,6 +15,9 @@ func TestDockerErrorClassificationDistinguishesNotFound(t *testing.T) {
 	if !isContainerNotFound(errors.New("docker inspect failed"), "Error: No such object: dsca-observe-nacos") {
 		t.Fatal("No such object was not classified as container-not-found")
 	}
+	if !isContainerNotFound(errors.New("docker image inspect failed"), "Error: No such image: nacos/nacos-server:v2.1.0") {
+		t.Fatal("No such image was not classified as image-not-found")
+	}
 	if isContainerNotFound(errors.New("context deadline exceeded"), "daemon unavailable") {
 		t.Fatal("daemon error was misclassified as container-not-found")
 	}
