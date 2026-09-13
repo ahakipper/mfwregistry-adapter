@@ -4,7 +4,7 @@ Operational reference for building, running, monitoring and troubleshooting
 spotter. See [architecture.md](architecture.md) for design background and
 [data-model.md](data-model.md) for the pushed data model.
 
-## Current release status (2026-09-13, HEAD `1a82138`)
+## Current release status (2026-09-13, HEAD `102e812`)
 
 - Nacos production startup defaults to the official SDK but is **BLOCKED / NOT
   VERIFIED** before readiness until an official Admin/Maintainer cluster-health
@@ -26,6 +26,9 @@ must remain `NOT VERIFIED`.
 The exported Nacos `NewClient`, `NewSink`, and `CheckReadiness` constructors
 are SDK-default; raw HTTP is available only through the explicitly named
 `NewHTTPCompat*` and `CheckReadinessHTTPCompat` rollback/test helpers.
+An approved `NacosClusterAdmin` must be injected to unlock SDK startup; its
+health-check update precedes business registration, concurrent first claims are
+coalesced, failures are typed for retry policy, and close is bounded/idempotent.
 
 ## Build
 
