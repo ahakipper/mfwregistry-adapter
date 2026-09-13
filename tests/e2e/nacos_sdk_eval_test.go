@@ -68,10 +68,16 @@ func TestNacosSDKPersistentLifecycle(t *testing.T) {
 	if err := client.BatchRegisterEphemeral(batchParam); err != nil {
 		t.Fatalf("SDK ephemeral batch register: %v", err)
 	}
+	if hosts, err := verifierHosts(cfg.client, batchService); err != nil || len(hosts) != 1 || hosts[0].IP != "127.0.0.2" || hosts[0].Port != 2 || !hosts[0].Ephemeral || !hosts[0].Enabled {
+		t.Fatalf("fresh batch state: hosts=%+v err=%v", hosts, err)
+	}
 	defer func() {
 		if batchAttempted {
 			if err := client.DeregisterInstance(nacos.InstanceParams{ServiceName: batchService, IP: "127.0.0.2", Port: 2, ClusterName: "DEFAULT", GroupName: cfg.client.GroupName, NamespaceID: cfg.client.NamespaceID, Ephemeral: true}); err != nil {
 				t.Errorf("Nacos SDK ephemeral cleanup failed: %v", err)
+			}
+			if err := verifyNacosCanary(cfg.client, batchService); err != nil {
+				t.Errorf("Nacos SDK ephemeral residual verification failed: %v", err)
 			}
 		}
 	}()
@@ -113,4 +119,13 @@ func TestNacosSDKPersistentLifecycle(t *testing.T) {
 	cleanupElapsed = time.Since(cleanupStart)
 	cleanupStatus = "passed"
 	t.Logf("NACOS_SDK_EVAL PASS: endpoint=%s transport=sdk lifecycle=register,list,services,subscribe,unsubscribe,deregister latency_ms=%d service=%s", cfg.endpoint, time.Since(started).Milliseconds(), service)
+}
+
+func verifierHosts(cfg nacos.ClientConfig, service string) ([]nacos.Host, error) {
+	c, err := nacos.NewClientWithConfig(cfg, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	return c.ListInstances(service)
 }

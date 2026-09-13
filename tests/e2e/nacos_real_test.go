@@ -55,6 +55,9 @@ func TestNacosReal(t *testing.T) {
 			}
 			if residualErr := verifyNacosCanary(cfg.client, service); residualErr != nil {
 				cleanupStatus = "failed"
+				if cleanupErr == nil {
+					cleanupErr = residualErr
+				}
 				t.Errorf("Nacos canary residual verification failed: %v", residualErr)
 			}
 		}
