@@ -36,7 +36,7 @@ func TestNacosSDKPersistentLifecycle(t *testing.T) {
 	}
 	service := "__spotter_sdk_eval_" + time.Now().UTC().Format("20060102T150405.000000000")
 	params := nacos.InstanceParams{ServiceName: service, IP: "127.0.0.1", Port: 1, ClusterName: "spotter-sdk-eval", GroupName: cfg.client.GroupName, NamespaceID: cfg.client.NamespaceID, Enabled: true, Ephemeral: false}
-	registered := true
+	registered := false
 	cleanupAttempted := false
 	cleanupStatus := "not_needed"
 	var cleanupElapsed time.Duration
@@ -61,16 +61,33 @@ func TestNacosSDKPersistentLifecycle(t *testing.T) {
 	if err := client.RegisterInstance(params); err != nil {
 		t.Fatalf("SDK persistent register: %v", err)
 	}
+	registered = true
 	batchService := service + "_batch"
 	batchParam := vo.BatchRegisterInstanceParam{ServiceName: batchService, GroupName: cfg.client.GroupName, Instances: []vo.RegisterInstanceParam{{Ip: "127.0.0.2", Port: 2, Enable: true, Ephemeral: true}}}
 	if err := client.BatchRegisterEphemeral(batchParam); err != nil {
 		t.Fatalf("SDK ephemeral batch register: %v", err)
 	}
 	defer func() {
-		_ = client.DeregisterInstance(nacos.InstanceParams{ServiceName: batchService, IP: "127.0.0.2", Port: 2, ClusterName: "DEFAULT", GroupName: cfg.client.GroupName, NamespaceID: cfg.client.NamespaceID, Ephemeral: true})
+		if err := client.DeregisterInstance(nacos.InstanceParams{ServiceName: batchService, IP: "127.0.0.2", Port: 2, ClusterName: "DEFAULT", GroupName: cfg.client.GroupName, NamespaceID: cfg.client.NamespaceID, Ephemeral: true}); err != nil {
+			t.Errorf("Nacos SDK ephemeral cleanup failed: %v", err)
+		}
 	}()
 	if _, err := client.ListInstances(service); err != nil {
 		t.Fatalf("SDK SelectAll query: %v", err)
+	}
+	// Verify through a separate SDK client so this gate cannot pass from an
+	// in-process naming cache populated by the writer client.
+	verifier, err := nacos.NewClientWithConfig(cfg.client, nil)
+	if err != nil {
+		t.Fatalf("create fresh SDK verifier: %v", err)
+	}
+	defer func() {
+		if err := verifier.Close(); err != nil {
+			t.Errorf("fresh verifier close failed: %v", err)
+		}
+	}()
+	if hosts, err := verifier.ListInstances(service); err != nil || len(hosts) == 0 {
+		t.Fatalf("fresh SDK verifier state: hosts=%d err=%v", len(hosts), err)
 	}
 	if _, err := client.ListServices(100); err != nil {
 		t.Fatalf("SDK service list: %v", err)
