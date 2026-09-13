@@ -308,7 +308,8 @@ func (s *Sink) Push(triggerTime int64, instances []*instance.Instance) error {
 	return s.pushInstances(instances)
 }
 
-// PushAll upserts every pushed instance and then prunes: for every
+// PushAll executes a bounded, application-scoped persistent batch for every
+// pushed instance and then prunes: for every
 // (serviceName, clusterName) pair present in the pushed set it lists
 // Nacos's current instances of that service and DELETEs every remote
 // instance of that cluster not in the pushed set. The prune is scoped to
@@ -326,7 +327,10 @@ func (s *Sink) Push(triggerTime int64, instances []*instance.Instance) error {
 // provider identity, so the prune sweeps nothing remembered (see the
 // remembered field for why the empty door must not wipe).
 func (s *Sink) PushAll(triggerTime int64, instances []*instance.Instance) error {
-	if err := s.Push(triggerTime, instances); err != nil {
+	// Full snapshots use the application batch executor; incremental watch
+	// events intentionally remain on Push/pushInstances so a burst cannot
+	// reorder individual event semantics.
+	if err := s.pushPersistentBatches(instances); err != nil {
 		return err
 	}
 	return s.prune(instances)
