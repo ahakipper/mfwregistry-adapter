@@ -6,6 +6,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -37,6 +38,28 @@ func runNacosRestartCommand(ctx context.Context, container string) error {
 			return fmt.Errorf("docker restart timed out: %w", ctx.Err())
 		}
 		return fmt.Errorf("docker restart %s: %w: %s", container, err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func runNacosOutageRestart(ctx context.Context, container, addr string) error {
+	for _, action := range []string{"stop", "start"} {
+		cmd := execCommandContext(ctx, "docker", action, container)
+		cmd.Env = os.Environ()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("docker %s: %w: %s", action, err, strings.TrimSpace(string(out)))
+		}
+		if action == "stop" {
+			deadline := time.Now().Add(10 * time.Second)
+			for time.Now().Before(deadline) {
+				conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+				if err != nil {
+					break
+				}
+				conn.Close()
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
 	}
 	return nil
 }
@@ -255,7 +278,7 @@ func TestNacosRealAutoReconnect(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.timeout)
 	defer cancel()
-	if err := runNacosRestartCommand(ctx, os.Getenv("NACOS_REAL_CONTAINER")); err != nil {
+	if err := runNacosOutageRestart(ctx, os.Getenv("NACOS_REAL_CONTAINER"), cfg.endpoint); err != nil {
 		t.Fatalf("restart: %v", err)
 	}
 	if err := warmNacosSDK(ctx, client); err != nil {
