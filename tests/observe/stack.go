@@ -125,10 +125,18 @@ func nacosHostPort(addr string) string {
 // port. It fails fast when the image is missing (the harness does not
 // silently substitute a mock for the real server).
 func dockerRunNacos(hostPort int) error {
-	if running, _ := dockerContainerRunning(observeNacosContainer); running {
+	running, inspectErr := dockerContainerRunning(observeNacosContainer)
+	if inspectErr != nil {
+		return fmt.Errorf("observe: docker inspect before run: %w", inspectErr)
+	}
+	if running {
 		return fmt.Errorf("observe: throwaway nacos container %s already exists (previous run not cleaned up; docker rm -f %s)", observeNacosContainer, observeNacosContainer)
 	}
-	if has, _ := dockerImagePresent(nacosImage); !has {
+	has, imageErr := dockerImagePresent(nacosImage)
+	if imageErr != nil {
+		return fmt.Errorf("observe: docker image inspect: %w", imageErr)
+	}
+	if !has {
 		return fmt.Errorf("observe: nacos image %s not present (docker pull %s)", nacosImage, nacosImage)
 	}
 	out, err := runCommand("docker", "run", "-d", "--name", observeNacosContainer,
@@ -142,13 +150,31 @@ func dockerRunNacos(hostPort int) error {
 
 // dockerStopNacos removes the throwaway nacos container (idempotent).
 func dockerStopNacos() error {
-	if running, _ := dockerContainerRunning(observeNacosContainer); !running {
-		// Not running: remove a stopped leftover if any.
-		_, _ = runCommand("docker", "rm", "-f", observeNacosContainer)
-		return nil
+	running, inspectErr := dockerContainerRunning(observeNacosContainer)
+	if inspectErr != nil {
+		return fmt.Errorf("observe: docker inspect during teardown (residual_unknown=true): %w", inspectErr)
 	}
-	_, err := runCommand("docker", "rm", "-f", observeNacosContainer)
-	return err
+	if !running {
+		// Not running: remove a stopped leftover if any.
+		out, err := runCommand("docker", "rm", "-f", observeNacosContainer)
+		if err != nil && !isContainerNotFound(err, out) {
+			return fmt.Errorf("observe: docker rm stopped Nacos container (residual_unknown=true): %w", err)
+		}
+	} else {
+		if out, err := runCommand("docker", "rm", "-f", observeNacosContainer); err != nil {
+			return fmt.Errorf("observe: docker rm Nacos container (residual_unknown=true): %w", err)
+		} else {
+			_ = out
+		}
+	}
+	exists, err := dockerContainerExists(observeNacosContainer)
+	if err != nil {
+		return fmt.Errorf("observe: docker residual inspect (residual_unknown=true): %w", err)
+	}
+	if exists {
+		return fmt.Errorf("observe: Nacos container still exists after rm (residual_unknown=true)")
+	}
+	return nil
 }
 
 // dockerContainerRunning reports whether the named container exists in a
@@ -156,15 +182,32 @@ func dockerStopNacos() error {
 func dockerContainerRunning(name string) (bool, error) {
 	out, err := runCommand("docker", "inspect", "--format", "{{.State.Running}}", name)
 	if err != nil {
+		if isContainerNotFound(err, out) {
+			return false, nil
+		}
 		return false, err
 	}
 	return strings.TrimSpace(out) == "true", nil
+}
+
+func dockerContainerExists(name string) (bool, error) {
+	out, err := runCommand("docker", "inspect", "--format", "{{.Id}}", name)
+	if err != nil {
+		if isContainerNotFound(err, out) {
+			return false, nil
+		}
+		return false, err
+	}
+	return strings.TrimSpace(out) != "", nil
 }
 
 // dockerImagePresent reports whether the image exists locally.
 func dockerImagePresent(image string) (bool, error) {
 	out, err := runCommand("docker", "image", "inspect", image)
 	if err != nil {
+		if isContainerNotFound(err, out) {
+			return false, nil
+		}
 		return false, err
 	}
 	return strings.TrimSpace(out) != "", nil
@@ -183,9 +226,24 @@ func runCommandContext(ctx context.Context, name string, args ...string) (string
 	}
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // the harness's own docker/kubectl machinery
 	cmd.Env = os.Environ()
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil && ctx.Err() != nil {
 		return string(out), fmt.Errorf("%s timed out: %w", name, ctx.Err())
 	}
+	if err != nil {
+		return string(out), fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(string(out)))
+	}
 	return string(out), err
+}
+
+func isContainerNotFound(err error, output string) bool {
+	text := strings.ToLower(errString(err) + " " + output)
+	return strings.Contains(text, "no such container") || strings.Contains(text, "no such object") || strings.Contains(text, "not found")
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
