@@ -25,16 +25,30 @@ go test ./pkg/nacos -run TestNacos3FacadeOwnsVendorOperations -count=1
 FAIL: *sdkNamingFacade does not implement nacos3Vendor (missing method Close)
 ```
 
-After the minimal seam and dependency changes, focused package tests pass:
+After the seam was added, the routing assertion reaches the current vendor
+delegate and fails for the intended reason (the RED gate):
 
 ```text
-go test ./pkg/nacos -count=1
+go test ./pkg/nacos -run TestBlackboxClientSDKModeUsesGRPCPersistentLifecycle -count=1
+FAIL: SDK persistent register used legacy HTTP endpoint POST /nacos/v1/ns/instance
+```
+
+Existing facade tests remain green:
+
+```text
+go test ./pkg/nacos -run 'TestSDKFacadeRoutesPersistentLifecycleAndPreservesFields|TestSDKFacadeSelectAllIncludesDisabledAndMapsHosts' -count=1
 ok   spotter/pkg/nacos
 ```
+
+The complete `pkg/nacos` package is intentionally RED until Task 1.2 wires
+the concrete Nacos 3 gRPC vendor adapter.
 
 `go test ./... -count=1` compiled the repository but an unrelated existing
 `spotter/pkg/distribute/election` timing test (`TestWaitTickFiresLeaderCheckAfterClockAdvance`)
 failed; no Nacos package failures were observed.
+
+Follow-up commit adding the explicit black-box RED assertion and this exact
+test evidence: `6bdff6d`.
 
 ## Compatibility / rollback
 
