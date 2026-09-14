@@ -185,3 +185,23 @@ typed retry queue behavior.
 Ruling: Stage 3 is accepted and ready to push. The P2 test-strengthening and
 metric-granularity items remain bounded follow-ups and must not weaken the
 no-prune-on-error rule.
+
+## Stage 4.1 review findings and rulings
+
+Task 4.1 review round 1: NEEDS_CHANGES. Independent review confirmed the
+Nacos 3.2.4 ARM64 image pin, gRPC-port readiness, SDK-backed live Observe view,
+and fixture-only HTTP fallback, but found a P1: the harness stopped after a
+TCP listener check and did not run an SDK naming read/write canary before
+starting the child. A listener accepting connections alone is not proof that
+Nacos naming is usable.
+
+Fix: `TestObserveConsistency` now calls the public
+`pkg/nacos.CheckReadinessWithConfig` SDK gate after the transport check and
+fails closed before the child/cold attach if service-list or persistent
+register/deregister cannot complete. A stale Nacos2 Makefile comment was also
+corrected. Follow-up tagged tests and `go vet -tags observe ./tests/observe`
+passed.
+
+Ruling: The P1 is resolved. Stage 4.1 is accepted with the explicit local
+scratch-auth deviation documented; Task 4.2 remains the unverified real
+kwok scale gate.

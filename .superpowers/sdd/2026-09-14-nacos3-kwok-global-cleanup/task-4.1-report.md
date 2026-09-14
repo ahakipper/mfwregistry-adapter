@@ -14,6 +14,10 @@ gate.
   auth policy.
 - Readiness no longer calls Nacos 2 `/nacos/v1` endpoints. It waits for the
   Nacos 3 naming gRPC listener on HTTP-port+1000 (8848→9848).
+- After the transport gate, `TestObserveConsistency` now runs the public
+  `pkg/nacos.CheckReadinessWithConfig` SDK read/list plus persistent
+  register/deregister canary before starting the child. A listener that accepts
+  TCP but cannot complete naming operations therefore fails closed.
 - The live Observe view constructs `pkg/nacos` with `TransportSDK` and reads
   catalog instances through the official SDK facade. Its write probe and
   cleanup probe also use `Client.RegisterInstance`/`DeregisterInstance`.
@@ -26,12 +30,23 @@ gate.
 ```text
 go test -tags observe ./tests/observe -count=1 (PASS)
 go test -tags observe ./tests/observe -run 'TestNacos|Test.*Lifecycle|TestObserveUnit' -count=1 (PASS)
+go vet -tags observe ./tests/observe (PASS)
 git diff --check (PASS)
 ```
 
 The `TestObserveConsistency` two-hour run was not started by this task. Task
 4.2 must run it with a real kwokctl cluster and record the complete JSONL
 source/cache/Nacos comparison before any scale PASS is claimed.
+
+## Independent review addendum
+
+The first independent review found that a TCP-only gate could allow the child
+to start before SDK naming operations were usable. That P1 was fixed by adding
+the explicit SDK read/write canary gate described above. The follow-up review
+also identified and corrected a stale Makefile comment that still called the
+target image the soak stack's tag. Authentication remains intentionally
+disabled for this local scratch container; production auth/TLS is outside the
+Spotter harness scope.
 
 ## Compatibility / Rollback
 

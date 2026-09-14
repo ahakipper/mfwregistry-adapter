@@ -117,7 +117,7 @@ test-soak:
 # false keeps the sustained-churn-only shape),
 # OBS_KUBECONFIG, OBS_NACOS_ADDR (127.0.0.1:28848),
 # OBS_ATLAS_PORT (19997), OBS_METRICS_PORT (19998).
-# Prerequisites: docker (the nacos image is the soak stack's tag), a
+# Prerequisites: docker (the harness pulls the pinned Nacos 3 ARM64 image), a
 # running kwok cluster, and the kwok node's capacity patched per
 # docs/dsca-1-scale.md. NOT part of test-all (hours of wall clock).
 OBS_DURATION ?= 2h
