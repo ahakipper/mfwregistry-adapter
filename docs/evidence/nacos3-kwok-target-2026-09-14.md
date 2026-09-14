@@ -80,8 +80,13 @@ NACOS_SERVER=127.0.0.1:38848 NACOS_REAL_SCRATCH=1 NACOS_REAL_ALLOW_WRITE=1 \
   go test -vet=off -tags=nacos_real ./tests/e2e \
   -run '^TestNacosRealPersistentApplicationBatch$' -count=1
 PASS: entries=201, batch_max=100, batches=3, retry=passed,
-      final_catalog_hash=ff7c0cead49d390e63d0fe3685868c0d148de4dacbae7d1996c410a858604111,
+      final_catalog_hash=4a9d857fbba8d392e212502e97af697c15dc2600654e93cf42e8218c06f7f8d4,
       residual_unknown=false
+
+The fresh batch run explicitly selected `HealthPolicyAdminManaged` so the
+one-shot injected Admin/Maintainer failure was observed before the retry. The
+normal deployment-owned policy remains the default and does not construct or
+invoke that optional facade.
 
 An earlier exact-barrier run timed out because the SDK read returned the
 grouped service name (`DEFAULT_GROUP@@service`) while the barrier compared the

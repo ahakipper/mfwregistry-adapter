@@ -57,6 +57,10 @@ func TestNacosRealPersistentApplicationBatch(t *testing.T) {
 	}
 
 	admin := &oneShotBatchAdmin{}
+	// This gate intentionally exercises the optional admin-managed retry path;
+	// deployment-owned is the production default and must not invoke the
+	// injected factory.
+	cfg.client.HealthPolicy = nacos.HealthPolicyAdminManaged
 	cfg.client.ClusterAdminFactory = func() (nacos.NacosClusterAdmin, error) { return admin, nil }
 	sink, err := nacos.NewSinkWithConfig(cfg.client, nil)
 	if err != nil {
