@@ -272,6 +272,17 @@ func TestPushPersistentBatchesPreservesAllEntriesAcross201Items(t *testing.T) {
 	}
 }
 
+func TestSDKShimExposesPersistentVendorCapability(t *testing.T) {
+	facade := &sdkNamingFacade{client: &grpcSDKClient{vendor: nil}}
+	if facade.hasPersistentVendor() {
+		t.Fatal("nil shim vendor reported as available")
+	}
+	facade.client = &grpcSDKClient{vendor: &nacos3GRPCVendor{}}
+	if !facade.hasPersistentVendor() {
+		t.Fatal("shim vendor capability not exposed")
+	}
+}
+
 type replacementBatchRecorder struct {
 	mu      sync.Mutex
 	byScope map[string]map[string]bool

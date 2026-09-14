@@ -109,7 +109,18 @@ type sdkNamingFacade struct {
 	ownedCache bool
 }
 
-func (f *sdkNamingFacade) hasPersistentVendor() bool { return f != nil && f.vendor != nil }
+func (f *sdkNamingFacade) hasPersistentVendor() bool {
+	if f == nil {
+		return false
+	}
+	if f.vendor != nil {
+		return true
+	}
+	if c, ok := f.client.(*grpcSDKClient); ok {
+		return c.vendor != nil
+	}
+	return false
+}
 
 func (f *sdkNamingFacade) close() {
 	if f == nil {
