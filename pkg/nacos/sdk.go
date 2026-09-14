@@ -109,6 +109,8 @@ type sdkNamingFacade struct {
 	ownedCache bool
 }
 
+func (f *sdkNamingFacade) hasPersistentVendor() bool { return f != nil && f.vendor != nil }
+
 func (f *sdkNamingFacade) close() {
 	if f == nil {
 		return

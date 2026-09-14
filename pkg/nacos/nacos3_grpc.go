@@ -175,7 +175,7 @@ func (v *nacos3GRPCVendor) RegisterPersistent(p InstanceParams) error {
 	p.Ephemeral = false
 	instance := model.Instance{InstanceId: instanceID(p), Ip: p.IP, Port: uint64(p.Port), Weight: 1, Enable: p.Enabled, Healthy: p.Enabled, Ephemeral: false, ClusterName: p.ClusterName, ServiceName: p.ServiceName, Metadata: p.Metadata}
 	req := &persistentInstanceRequest{Request: rpc_request.Request{Headers: map[string]string{}}, Namespace: v.namespace, ServiceName: p.ServiceName, GroupName: effectiveGroupValue(p.GroupName, v.group), Type: "registerInstance", Instance: instance}
-	v.server.InjectSecurityInfo(req.GetHeaders(), security.BuildNamingResourceByRequest(req))
+	v.server.InjectSecurityInfo(req.GetHeaders(), security.BuildNamingResource(v.namespace, req.GroupName, req.ServiceName))
 	response, err := v.persistent.GetRpcClient().Request(req, int64(v.proxyTimeout()))
 	ok := response != nil && response.IsSuccess()
 	if err != nil {
@@ -187,12 +187,8 @@ func (v *nacos3GRPCVendor) RegisterPersistent(p InstanceParams) error {
 	return nil
 }
 
-// RegisterPersistentBatch publishes one complete service/cluster snapshot in
-// the official gRPC batch request. Nacos treats single-register calls as
-// replacement publication per (connection, service); using one batch request
-// avoids losing earlier logical chunks. The pinned proxy accepts persistent
-// model.Instance values even though the high-level SDK rejects them for its
-// ephemeral-only BatchRegisterInstance API.
+// RegisterPersistentBatch loops persistent requests; it never uses the
+// protocol BatchRegisterInstance operation.
 func (v *nacos3GRPCVendor) RegisterPersistentBatch(items []InstanceParams) error {
 	var first error
 	for _, item := range items {
@@ -214,7 +210,7 @@ func (v *nacos3GRPCVendor) DeregisterPersistent(p InstanceParams) error {
 	p.Ephemeral = false
 	instance := model.Instance{Ip: p.IP, Port: uint64(p.Port), Ephemeral: false, ClusterName: p.ClusterName, ServiceName: p.ServiceName}
 	req := &persistentInstanceRequest{Request: rpc_request.Request{Headers: map[string]string{}}, Namespace: v.namespace, ServiceName: p.ServiceName, GroupName: effectiveGroupValue(p.GroupName, v.group), Type: "deregisterInstance", Instance: instance}
-	v.server.InjectSecurityInfo(req.GetHeaders(), security.BuildNamingResourceByRequest(req))
+	v.server.InjectSecurityInfo(req.GetHeaders(), security.BuildNamingResource(v.namespace, req.GroupName, req.ServiceName))
 	response, err := v.persistent.GetRpcClient().Request(req, int64(v.proxyTimeout()))
 	ok := response != nil && response.IsSuccess()
 	if err != nil {

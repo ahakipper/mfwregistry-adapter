@@ -165,6 +165,14 @@ func TestNacos3PersistentProtoContract(t *testing.T) {
 	if err != nil || payload == nil {
 		t.Fatalf("codec encode: %v", err)
 	}
+	decoded, err := codec.NewPayloadCodec().Decode(payload)
+	if err != nil {
+		t.Fatalf("codec decode: %v", err)
+	}
+	decodedReq, ok := decoded.(*namingproto.PersistentInstanceRequest)
+	if !ok || decodedReq.GetType() != "registerInstance" || decodedReq.GetInstance().GetIp() != instance.Ip || decodedReq.GetInstance().GetPort() != int32(instance.Port) || decodedReq.GetInstance().GetEphemeral() {
+		t.Fatalf("decoded register = %#v", decoded)
+	}
 	if payload.GetMetadata().GetType() != "PersistentInstanceRequest" {
 		t.Fatalf("metadata type=%q", payload.GetMetadata().GetType())
 	}

@@ -177,7 +177,7 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 				// tests can prove application-scoped partitioning and ordering.
 				s.logger.Infof("nacos persistent batch scope=%s group=%s service=%s cluster=%s operation=%s index=%d size=%d",
 					batch.Key.Namespace, batch.Key.Group, batch.Key.Service, batch.Key.Cluster, batch.Key.Operation, batchNumber, len(batch.Items))
-				if batch.Key.Operation == batchRegister && s.client != nil && s.client.sdk != nil && s.client.sdkFactory != nil {
+				if batch.Key.Operation == batchRegister && s.client != nil && s.client.sdk != nil && s.client.sdk.hasPersistentVendor() {
 					params := make([]InstanceParams, 0, len(batch.Items))
 					for position, ins := range batch.Items {
 						if ins.Ip == "" {
@@ -226,7 +226,7 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 								break
 							}
 						}
-						if !failed && s.client.sdk.vendor != nil {
+						if !failed && s.client.sdk.hasPersistentVendor() {
 							if err := waitForPersistentBatch(s.client, batch.Key, params); err != nil {
 								for _, idx := range validIndexes {
 									errs[idx] = err
