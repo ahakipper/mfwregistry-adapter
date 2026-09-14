@@ -54,10 +54,14 @@ Definitions are fixed for the gate:
   `expected_count` (online plus representable unhealthy Pods) and `nacos_count`.
   Pending Pods remain in `source_count` but are intentionally excluded from
   `expected_count` until they become representable.
-- The exact field projection is membership/app scope, IP, first port 7096,
-  cluster/service/composite ID, enabled/healthy, persistent `Ephemeral=false`,
-  and metadata `spotterOwner`, `instanceId`, `status`. Other domain metadata is
-  outside this controlled snapshot and is recorded as unchecked.
+- The exact Spotter-owned field projection is membership/app scope, IP, first
+  port 7096, cluster/service/composite ID, enabled, persistent
+  `Ephemeral=false`, and metadata `spotterOwner`, `instanceId`, `status`.
+  Nacos `healthy` is recorded but excluded from Spotter equality because
+  persistent-instance health is maintained by Nacos's server-side checker;
+  disabling that checker requires an Admin/Maintainer control API not exposed
+  by the official Go Naming SDK. Other domain metadata is outside this
+  controlled snapshot and is recorded as unchecked.
 
 The 2-hour result is `PASS` only when every tick satisfies these rules and the
 final cleanup reports no residual kwok cluster, Pod, container, temporary

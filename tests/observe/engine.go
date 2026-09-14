@@ -308,9 +308,14 @@ func compareService(appCode string, model *sourceModel, remote []remoteEntry,
 	return result
 }
 
-// remoteEntryMatches compares the deterministic K8s-to-Nacos projection. A
-// manually constructed fixture model has no Entries entry, so the historical
-// ID/enabled assertions remain available to the HTTP fixture tests.
+// remoteEntryMatches compares the deterministic Spotter-owned K8s-to-Nacos
+// projection. Nacos's Healthy bit is intentionally excluded: for persistent
+// instances Nacos may change it asynchronously through its server-side
+// health checker, and the official Go SDK has no cluster-admin method to set
+// that policy. Enabled, endpoint, scope, lifecycle, identity and owned
+// metadata remain strict. A manually constructed fixture model has no Entries
+// entry, so the historical ID/enabled assertions remain available to HTTP
+// fixture tests.
 func remoteEntryMatches(expected sourceEntry, got remoteEntry) bool {
 	if expected.ID == "" {
 		return true
@@ -318,7 +323,7 @@ func remoteEntryMatches(expected sourceEntry, got remoteEntry) bool {
 	if expected.ID != got.ID || expected.IP != got.IP || expected.Port != got.Port ||
 		expected.ClusterName != got.ClusterName || !serviceNameMatches(expected.ServiceName, got.ServiceName) ||
 		expected.CompositeID != got.CompositeID ||
-		expected.Healthy != got.Healthy || expected.Ephemeral != got.Ephemeral {
+		expected.Enabled != got.Enabled || expected.Ephemeral != got.Ephemeral {
 		return false
 	}
 	for key, want := range expected.Metadata {

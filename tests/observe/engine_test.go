@@ -35,7 +35,7 @@ func entry(id string, enabled bool) remoteEntry {
 
 // TestObserveUnitExactEntryFieldsAreCompared pins the data-plane equality
 // contract: a matching domain id is insufficient when Nacos has the wrong
-// endpoint, scope, lifecycle mode, health state, or Spotter ownership.
+// endpoint, scope, lifecycle mode, enabled state, or Spotter ownership.
 func TestObserveUnitExactEntryFieldsAreCompared(t *testing.T) {
 	now := time.Now()
 	model := buildSourceModel([]sourcePod{{
@@ -66,6 +66,7 @@ func TestObserveUnitExactEntryFieldsAreCompared(t *testing.T) {
 		{"cluster mismatch", func(e *remoteEntry) { e.ClusterName = "ecs" }},
 		{"service mismatch", func(e *remoteEntry) { e.ServiceName = "other-service" }},
 		{"ephemeral mismatch", func(e *remoteEntry) { e.Ephemeral = true }},
+		{"enabled mismatch", func(e *remoteEntry) { e.Enabled = false }},
 		{"status metadata mismatch", func(e *remoteEntry) { e.Metadata["status"] = "2" }},
 		{"ownership metadata mismatch", func(e *remoteEntry) { e.Metadata["spotterOwner"] = "other-writer" }},
 	}
@@ -76,6 +77,24 @@ func TestObserveUnitExactEntryFieldsAreCompared(t *testing.T) {
 				t.Fatalf("field mismatch diff = %+v, want one %q divergence", diff.Divergences, divField)
 			}
 		})
+	}
+}
+
+func TestObserveUnitNacosOwnedHealthDriftDoesNotBreakSpotterEquality(t *testing.T) {
+	now := time.Now()
+	model := buildSourceModel([]sourcePod{{
+		Name: "pod-a", AppCode: "obs-app-0", Phase: "Running", PodIP: "10.0.0.7",
+		ContainersReady: true, CreatedAt: now,
+	}}, []string{"obs-app-0"})
+	expected := model.Entries["obs-app-0"]["pod-a"]
+	got := remoteEntry{
+		ID: expected.ID, IP: expected.IP, Port: expected.Port,
+		ClusterName: expected.ClusterName, ServiceName: expected.ServiceName,
+		Healthy: false, Enabled: expected.Enabled, Ephemeral: expected.Ephemeral,
+		Metadata: copyStringMap(expected.Metadata), CompositeID: expected.CompositeID,
+	}
+	if diff := compareService("obs-app-0", model, []remoteEntry{got}, stubLedger(nil), time.Minute, now); len(diff.Divergences) != 0 {
+		t.Fatalf("Nacos-owned healthy drift = %+v, want no Spotter data divergence", diff.Divergences)
 	}
 }
 

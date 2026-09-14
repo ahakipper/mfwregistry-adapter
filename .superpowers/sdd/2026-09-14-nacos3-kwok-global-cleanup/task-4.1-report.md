@@ -46,8 +46,11 @@ treated as exact.
 
 The exact projection is intentionally explicit: membership by application,
 group, and `k8s` cluster; IP; first port 7096; service name; composite instance
-ID; enabled/healthy policy; `Ephemeral=false`; and the stable metadata keys
-`spotterOwner`, `instanceId`, and `status`. The source side also records
+ID; enabled policy; `Ephemeral=false`; and the stable metadata keys
+`spotterOwner`, `instanceId`, and `status`. Nacos `healthy` is observed but
+excluded from Spotter equality because persistent-instance health is
+server-owned; switching that checker to `NONE` requires an Admin/Maintainer
+control API that the official Go Naming SDK does not expose. The source side also records
 `expectedCount` (online plus unhealthy representable Pods) separately from the
 raw Pod count, so Pending Pods are not mistaken for missing Nacos instances.
 Other Spotter metadata such as `sourceKey`, `sourceCluster`, `reversion`, and
