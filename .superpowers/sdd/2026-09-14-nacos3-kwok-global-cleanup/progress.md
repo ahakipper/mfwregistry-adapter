@@ -163,3 +163,25 @@ later bounded task.
 Ruling: Stage 2 is accepted and ready to push. Stage 3 may proceed with the
 deployment-owned default and must not reintroduce an unconditional cluster-admin
 preflight.
+
+## Stage 3 review findings and rulings
+
+Task 3.1/3.2 review round 1: PASS. An independent concurrency review covered
+`6656c5a..ea7fa1e` and confirmed the application-scoped partition key
+(namespace/group/service/cluster/operation), the hard maximum of 100 items, the
+global eight-call semaphore, stable order within a scope, overlap between
+independent scopes, PersistentInstanceRequest item writes, and the
+convergence-before-prune barrier. Focused package tests, the package race run,
+`go vet ./pkg/nacos`, and `git diff --check` passed on the review rerun.
+
+P2 follow-ups: the 201-item replacement regression uses a fallback fake and
+therefore does not itself exercise the `hasPersistentVendor` branch or inspect
+the wire-level `Ephemeral=false`; the separate SDK facade contract test and the
+Stage 1.2 live Nacos 3 evidence cover those properties. The retry metric counts
+failed full-sync executions eligible for replay rather than individual replay
+attempts; this narrower meaning is documented and does not change the existing
+typed retry queue behavior.
+
+Ruling: Stage 3 is accepted and ready to push. The P2 test-strengthening and
+metric-granularity items remain bounded follow-ups and must not weaken the
+no-prune-on-error rule.
