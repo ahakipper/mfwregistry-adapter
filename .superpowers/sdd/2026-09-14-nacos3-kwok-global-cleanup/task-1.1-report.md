@@ -13,7 +13,7 @@ Status: DELIVERED_WITH_LIMITS (RED tests captured; production gRPC vendor adapte
 - Routed `Client.RegisterInstance` / `DeregisterInstance` through the
   operation-specific persistent seam and forced `Ephemeral=false` at its
   boundary.
-- Added focused RED coverage for persistent operation routing, gRPC request
+- Added focused RED coverage for persistent operation routing, vendor seam
   intent, namespace/group/service/cluster identity, and metadata preservation.
 
 ## TDD evidence
@@ -43,9 +43,10 @@ ok   spotter/pkg/nacos
 The complete `pkg/nacos` package is intentionally RED until Task 1.2 wires
 the concrete Nacos 3 gRPC vendor adapter.
 
-`go test ./... -count=1` compiled the repository but an unrelated existing
-`spotter/pkg/distribute/election` timing test (`TestWaitTickFiresLeaderCheckAfterClockAdvance`)
-failed; no Nacos package failures were observed.
+`go test ./... -count=1` is not a green gate: the intentional
+`pkg/nacos` RED black-box assertion fails on the legacy `/v1/ns/instance`
+route, and an unrelated existing `spotter/pkg/distribute/election` timing
+test (`TestWaitTickFiresLeaderCheckAfterClockAdvance`) also failed.
 
 Follow-up commit adding the explicit black-box RED assertion and this exact
 test evidence: `6bdff6d`.
