@@ -166,6 +166,28 @@ func TestBuildOverrides(t *testing.T) {
 	}
 }
 
+func TestBuildUsesRuntimeNacosHealthPolicyFromConfigAndOverrides(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.NacosHealthPolicy = nacos.HealthPolicyAdminManaged
+	rt, err := Build(cfg, Deps{})
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+	defer rt.LogCloser.Close()
+	if rt.NacosHealthPolicy != nacos.HealthPolicyAdminManaged {
+		t.Fatalf("runtime policy = %q, want %q", rt.NacosHealthPolicy, nacos.HealthPolicyAdminManaged)
+	}
+
+	rt, err = Build(cfg, Deps{NacosHealthPolicy: nacos.HealthPolicyDeploymentOwned})
+	if err != nil {
+		t.Fatalf("Build(overrides) returned error: %v", err)
+	}
+	defer rt.LogCloser.Close()
+	if rt.NacosHealthPolicy != nacos.HealthPolicyDeploymentOwned {
+		t.Fatalf("runtime policy override = %q, want %q", rt.NacosHealthPolicy, nacos.HealthPolicyDeploymentOwned)
+	}
+}
+
 // TestBuildUsesMetricsRecorderDefault verifies the default metrics recorder
 // is the infra Prometheus recorder.
 func TestBuildUsesMetricsRecorderDefault(t *testing.T) {

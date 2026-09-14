@@ -295,7 +295,7 @@ func NewClientWithConfig(cfg ClientConfig, logger ports.Logger) (*Client, error)
 	if len(addresses) == 0 {
 		return nil, errors.New("nacos: address is required")
 	}
-	if cfg.TransportMode == TransportSDK && cfg.ClusterAdmin == nil && cfg.ClusterAdminFactory != nil {
+	if cfg.TransportMode == TransportSDK && cfg.HealthPolicy == HealthPolicyAdminManaged && cfg.ClusterAdmin == nil && cfg.ClusterAdminFactory != nil {
 		admin, factoryErr := cfg.ClusterAdminFactory()
 		if factoryErr != nil {
 			if admin != nil {

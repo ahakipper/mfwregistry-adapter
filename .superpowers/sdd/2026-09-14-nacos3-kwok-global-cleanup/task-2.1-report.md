@@ -13,42 +13,52 @@ available.
 
 ## Changes
 
-- Added `HealthPolicy` in `pkg/nacos/client.go` with:
-  - `HealthPolicyDeploymentOwned` (default/zero value),
-  - `HealthPolicyAdminManaged`,
-  - effective-value normalization and strict validation.
-- Threaded `HealthPolicy` through `ClientConfig` and `NewClientWithConfig`, so
-  SDK construction and health-policy validation are explicit and typed.
-- Narrowed SDK sink gating in `pkg/nacos/nacos.go`:
-  - the admin facade is only required when `HealthPolicyAdminManaged` is set;
-  - default/`deployment-owned` construction no longer requires cluster-admin.
-- Made SDK health check updater and cluster config update marker logic conditional on
-  `HealthPolicyAdminManaged` only.
-- Added/updated tests in `pkg/nacos/sdk_test.go` and `pkg/nacos/sink_test.go`:
-  - `NewSinkWithConfig` constructor behavior by policy (no-admin default/deployment-owned
-    succeeds, admin-managed fails fast before writes).
-  - runtime naming operations under deployment-owned policy do not require admin and
-    still call SDK naming methods directly.
-  - blackbox registration under deployment-owned policy skips cluster health update,
-    while admin-managed/legacy HTTP path behavior remains intact.
-- Plumbed typed health policy into config/runtime wiring:
-  - `internal/infra/config/config.go` now carries `NacosHealthPolicy` in
-    `Flags`/`Config`;
-  - `internal/composition/root.go` now carries `NacosHealthPolicy` in
-    `Deps`/`Runtime` and defaults it from config when empty.
+- Added Stage-2 wiring fix in `internal/server.go`:
+  - pass runtime `NacosHealthPolicy` into `nacos.ClientConfig` during sink
+    construction (`HealthPolicy: effectivePolicy`);
+  - compute effective policy from server config (`deployment-owned` when zero);
+  - only create/invoke `nacosAdminFactory` when effective policy is
+    `HealthPolicyAdminManaged`.
+- Made `NewClientWithConfig` policy-gated for optional `ClusterAdminFactory`:
+  - invoke factory only for `TransportSDK + HealthPolicyAdminManaged`.
+- Removed ungated batch `ensureClusterHealthCheckDisabled` callsite in
+  `pkg/nacos/batch.go` by guarding it with `shouldApplyHealthPolicy()`, so
+  deployment-owned paths cannot regress into per-item health-check preflight calls.
+- Added/updated tests:
+  - `pkg/nacos/sdk_test.go`:
+    - `TestSDKClientConfigAdminFactoryIsNotInvokedForDeploymentOwnedPolicy` verifies
+      deployment-owned defaults do not call an injected factory;
+    - `TestSDKClientConfigAdminFactoryIsInvoked` now asserts factory invocation
+      is admin-managed only;
+    - `TestSDKClientZeroHealthPolicyDefaultsToDeploymentOwned` verifies zero-policy
+      normalization;
+    - `TestSDKClientRejectsInvalidHealthPolicy` verifies validation failure;
+    - `TestSDKSinkPushUnderDeploymentOwnedPolicySkipsAdminCalls` proves Push under
+      deployment-owned policy performs naming register without `UpdateHealthChecker`.
+  - `internal/server_test.go`:
+    - updated factory-wiring test to set admin-managed policy explicitly;
+    - `TestStartProvidersSkipsNacosAdminFactoryForDeploymentOwnedPolicy` proves
+      default/deployment-owned wiring does not invoke factory before readiness.
+  - `internal/composition/root_test.go`:
+    - `TestBuildUsesRuntimeNacosHealthPolicyFromConfigAndOverrides` verifies policy
+      propagation from config and explicit deps override.
 
 ## Verification
 
 ```text
-go test ./pkg/nacos -run 'TestSDKSinkConstructionDeploymentOwnedPolicyDefaultsToNoAdmin|TestSDKSinkConstructionNeedsAdminWhenHealthPolicyIsAdminManaged|TestSDKRuntimeNamingCallsDoNotRequireAdminUnderDeploymentPolicy|TestSDKAdminManagedPolicyStillPreflightsAdminForPush|TestBlackboxSinkFirstRegisterInDeploymentOwnedModeSkipsServerSideHealthUpdate|TestBlackboxSinkFirstRegisterDisablesServerSideHealthCheck'
-ok  	spotter/pkg/nacos
-
-go test ./internal/infra/config ./internal/composition
-ok  	spotter/internal/infra/config
-ok  	spotter/internal/composition
+go test ./pkg/nacos -run 'TestDefaultConstructorsUseSDKAndNeverAllocateCompatHTTP|TestSDKClientConfigAdminFactoryIsInvoked|TestSDKClientConfigAdminFactoryIsNotInvokedForDeploymentOwnedPolicy|TestSDKClientZeroHealthPolicyDefaultsToDeploymentOwned|TestSDKClientRejectsInvalidHealthPolicy|TestSDKRuntimeNamingCallsDoNotRequireAdminUnderDeploymentPolicy|TestSDKSinkPushUnderDeploymentOwnedPolicySkipsAdminCalls|TestSDKAdminManagedPolicyStillPreflightsAdminForPush|TestBlackboxSinkFirstRegisterInDeploymentOwnedModeSkipsServerSideHealthUpdate|TestBlackboxSinkFirstRegisterDisablesServerSideHealthCheck'
+ok   	spotter/pkg/nacos
 
 go test ./pkg/nacos -run '^TestDefaultConstructorsUseSDKAndNeverAllocateCompatHTTP$' -count=1
-ok  	spotter/pkg/nacos
+ok   	spotter/pkg/nacos
+
+go test ./internal/infra/config ./internal/composition ./internal -run 'TestBuildUsesRuntimeNacosHealthPolicyFromConfigAndOverrides|TestStartProvidersInvokesFreshNacosAdminFactoryForAdminManagedPolicy|TestStartProvidersSkipsNacosAdminFactoryForDeploymentOwnedPolicy'
+ok   	spotter/internal/infra/config
+ok   	spotter/internal/composition
+ok   	spotter/internal
+
+go test ./...
+ok   	spotter/...
 ```
 
 ## Compatibility / Rollback

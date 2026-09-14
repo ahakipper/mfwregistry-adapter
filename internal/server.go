@@ -343,8 +343,13 @@ func (s *Server) startProviders() error {
 				s.notifier.Notify("Nacos compatibility transport enabled", message)
 			}
 		}
+		effectiveHealthPolicy := s.cfg.NacosHealthPolicy
+		if effectiveHealthPolicy == "" {
+			effectiveHealthPolicy = nacos.HealthPolicyDeploymentOwned
+		}
+
 		var clusterAdmin nacos.NacosClusterAdmin
-		if transportMode == string(nacos.TransportSDK) && s.nacosAdminFactory != nil {
+		if transportMode == string(nacos.TransportSDK) && effectiveHealthPolicy == nacos.HealthPolicyAdminManaged && s.nacosAdminFactory != nil {
 			clusterAdmin, err = s.nacosAdminFactory()
 			if err != nil {
 				if clusterAdmin != nil {
@@ -360,7 +365,7 @@ func (s *Server) startProviders() error {
 				return errors.New("new nacos cluster-admin facade: factory returned nil admin")
 			}
 		}
-		nacosCfg := nacos.ClientConfig{TransportMode: nacos.TransportMode(transportMode), ServerURL: s.cfg.NacosAddr, ServerURLs: s.cfg.NacosServerList, NamespaceID: s.cfg.NacosNamespace, GroupName: s.cfg.NacosGroup, Username: s.cfg.NacosUsername, Password: s.cfg.NacosPassword, AccessToken: s.cfg.NacosAccessToken, CAFile: s.cfg.NacosCAFile, ServerName: s.cfg.NacosServerName, InsecureSkipVerify: s.cfg.NacosInsecureSkipVerify}
+		nacosCfg := nacos.ClientConfig{TransportMode: nacos.TransportMode(transportMode), HealthPolicy: effectiveHealthPolicy, ServerURL: s.cfg.NacosAddr, ServerURLs: s.cfg.NacosServerList, NamespaceID: s.cfg.NacosNamespace, GroupName: s.cfg.NacosGroup, Username: s.cfg.NacosUsername, Password: s.cfg.NacosPassword, AccessToken: s.cfg.NacosAccessToken, CAFile: s.cfg.NacosCAFile, ServerName: s.cfg.NacosServerName, InsecureSkipVerify: s.cfg.NacosInsecureSkipVerify}
 		nacosCfg.ClusterAdmin = clusterAdmin
 		if s.cfg.NacosTimeout > 0 {
 			nacosCfg.Timeout = time.Duration(s.cfg.NacosTimeout) * time.Second

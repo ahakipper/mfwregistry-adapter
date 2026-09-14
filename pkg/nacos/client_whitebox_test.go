@@ -28,6 +28,13 @@ func TestDefaultConstructorsUseSDKAndNeverAllocateCompatHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSink() error = %v, want nil under deployment-owned default policy", err)
 	}
+	gotPolicy := HealthPolicy("")
+	if sink != nil && sink.client != nil {
+		gotPolicy = sink.client.config.HealthPolicy
+	}
+	if sink == nil || sink.client == nil || gotPolicy != HealthPolicyDeploymentOwned {
+		t.Fatalf("NewSink() policy = %q, want %q", gotPolicy, HealthPolicyDeploymentOwned)
+	}
 	if sink == nil || sink.client == nil || sink.client.sdk == nil || sink.client.http != nil {
 		t.Fatalf("NewSink() transport = sdk:%t http:%t, want sdk=true/http=false", sink != nil && sink.client != nil && sink.client.sdk != nil, sink != nil && sink.client != nil && sink.client.http != nil)
 	}

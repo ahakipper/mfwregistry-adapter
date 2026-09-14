@@ -38,14 +38,14 @@ func (serverAdmin) UpdateHealthChecker(context.Context, string, string, string, 
 }
 func (serverAdmin) Close(context.Context) error { return nil }
 
-func TestStartProvidersInvokesFreshNacosAdminFactoryBeforeReadiness(t *testing.T) {
+func TestStartProvidersInvokesFreshNacosAdminFactoryForAdminManagedPolicy(t *testing.T) {
 	logger := zap.NewNop().Sugar()
 	calls := 0
 	initializeCalls := 0
 	s := &Server{
 		isLeader: true, stop: make(chan struct{}), logger: logger,
 		notifier: recordingNotifier{}, localIP: func() (string, error) { return "127.0.0.1", nil },
-		cfg: infraconfig.Config{NacosAddr: "127.0.0.1:1", NacosTransport: string(nacos.TransportSDK), MetricsAddr: "127.0.0.1:0"},
+		cfg: infraconfig.Config{NacosAddr: "127.0.0.1:1", NacosTransport: string(nacos.TransportSDK), NacosHealthPolicy: nacos.HealthPolicyAdminManaged, MetricsAddr: "127.0.0.1:0"},
 		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
 			return discoverycenter.NewClient(noopDiscoveryService{}, nil, nil)
 		},
@@ -63,6 +63,32 @@ func TestStartProvidersInvokesFreshNacosAdminFactoryBeforeReadiness(t *testing.T
 	}
 	if initializeCalls != 0 {
 		t.Fatalf("initializeProviders calls = %d, want 0 before readiness", initializeCalls)
+	}
+}
+
+func TestStartProvidersSkipsNacosAdminFactoryForDeploymentOwnedPolicy(t *testing.T) {
+	logger := zap.NewNop().Sugar()
+	calls := 0
+	initializeCalls := 0
+	s := &Server{
+		isLeader: true, stop: make(chan struct{}), logger: logger,
+		notifier: recordingNotifier{}, localIP: func() (string, error) { return "127.0.0.1", nil },
+		cfg: infraconfig.Config{NacosAddr: "127.0.0.1:1", NacosTransport: string(nacos.TransportSDK), MetricsAddr: "127.0.0.1:0"},
+		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
+			return discoverycenter.NewClient(noopDiscoveryService{}, nil, nil)
+		},
+		initializeProviders: func(context.Context, worker.Worker) ([]providers.Provider, error) { initializeCalls++; return nil, nil },
+		nacosAdminFactory:   func() (nacos.NacosClusterAdmin, error) { calls++; return nil, errors.New("admin factory unavailable") },
+	}
+	err := s.startProviders()
+	if err == nil || !strings.Contains(err.Error(), "nacos") {
+		t.Fatalf("startProviders error = %v, want a readiness failure (not cluster-admin)", err)
+	}
+	if calls != 0 {
+		t.Fatalf("admin factory calls = %d, want 0 for deployment-owned default policy", calls)
+	}
+	if initializeCalls != 0 {
+		t.Fatalf("initializeProviders calls = %d, want 0", initializeCalls)
 	}
 }
 

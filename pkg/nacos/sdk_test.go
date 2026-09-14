@@ -329,7 +329,7 @@ func TestSDKClientConfigAdminFactoryIsInvoked(t *testing.T) {
 	client, err := NewClientWithConfig(ClientConfig{ServerURL: "127.0.0.1:8848", TransportMode: TransportSDK, ClusterAdminFactory: func() (NacosClusterAdmin, error) {
 		calls++
 		return admin, nil
-	}}, ports.NopLogger{})
+	}, HealthPolicy: HealthPolicyAdminManaged}, ports.NopLogger{})
 	if err != nil {
 		t.Fatalf("NewClientWithConfig() error = %v", err)
 	}
@@ -338,6 +338,49 @@ func TestSDKClientConfigAdminFactoryIsInvoked(t *testing.T) {
 	}
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSDKClientConfigAdminFactoryIsNotInvokedForDeploymentOwnedPolicy(t *testing.T) {
+	calls := 0
+	client, err := NewClientWithConfig(ClientConfig{ServerURL: "127.0.0.1:8848", TransportMode: TransportSDK, ClusterAdminFactory: func() (NacosClusterAdmin, error) {
+		calls++
+		return &fakeClusterAdmin{}, nil
+	}}, ports.NopLogger{})
+	if err != nil {
+		t.Fatalf("NewClientWithConfig() error = %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("factory calls=%d, want 0 for deployment-owned policy", calls)
+	}
+	if client.config.HealthPolicy != HealthPolicyDeploymentOwned {
+		t.Fatalf("client policy = %q, want %q", client.config.HealthPolicy, HealthPolicyDeploymentOwned)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSDKClientZeroHealthPolicyDefaultsToDeploymentOwned(t *testing.T) {
+	client, err := NewClientWithConfig(ClientConfig{ServerURL: "127.0.0.1:8848", TransportMode: TransportSDK}, ports.NopLogger{})
+	if err != nil {
+		t.Fatalf("NewClientWithConfig() error = %v", err)
+	}
+	if client.config.HealthPolicy != HealthPolicyDeploymentOwned {
+		t.Fatalf("client policy = %q, want %q", client.config.HealthPolicy, HealthPolicyDeploymentOwned)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSDKClientRejectsInvalidHealthPolicy(t *testing.T) {
+	_, err := NewClientWithConfig(ClientConfig{ServerURL: "127.0.0.1:8848", TransportMode: TransportSDK, HealthPolicy: "invalid"}, ports.NopLogger{})
+	if err == nil {
+		t.Fatal("NewClientWithConfig() error = nil, want unsupported health policy")
+	}
+	if !strings.Contains(err.Error(), "unsupported health policy") {
+		t.Fatalf("NewClientWithConfig() error = %q, want unsupported health policy", err)
 	}
 }
 
@@ -374,6 +417,29 @@ func TestSDKRuntimeNamingCallsDoNotRequireAdminUnderDeploymentPolicy(t *testing.
 	}
 	if err := client.Unsubscribe("svc", DefaultGroup, nil, func(_ []Host, _ error) {}); err != nil {
 		t.Fatalf("Unsubscribe() error = %v", err)
+	}
+}
+
+func TestSDKSinkPushUnderDeploymentOwnedPolicySkipsAdminCalls(t *testing.T) {
+	naming := &fakeSDKNaming{}
+	admin := &fakeClusterAdmin{}
+	sink := &Sink{
+		client: &Client{
+			sdk:          &sdkNamingFacade{client: naming, group: DefaultGroup},
+			clusterAdmin: admin,
+			config:       ClientConfig{HealthPolicy: HealthPolicyDeploymentOwned},
+		},
+		logger:    ports.NopLogger{},
+		groupName: DefaultGroup,
+	}
+	if err := sink.Push(1, []*instance.Instance{{InstanceId: "pod-a", AppCode: "svc", Provider: "k8s", Ip: "10.0.0.1", Status: instance.InstanceStatusOnline, Enabled: true}}); err != nil {
+		t.Fatalf("Push() error = %v", err)
+	}
+	if admin.count() != 0 {
+		t.Fatalf("admin update calls = %d, want 0 for deployment-owned policy", admin.count())
+	}
+	if got := len(naming.registered); got != 1 {
+		t.Fatalf("naming register calls = %d, want 1", got)
 	}
 }
 

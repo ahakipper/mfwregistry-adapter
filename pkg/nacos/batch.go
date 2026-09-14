@@ -189,9 +189,11 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 						if ins.Status == instance.InstanceStatusUnhealthy {
 							enabled = false
 						}
-						if err := s.ensureClusterHealthCheckDisabled(ins.AppCode, clusterOf(ins)); err != nil {
-							errs[batch.Indexes[position]] = err
-							continue
+						if s.shouldApplyHealthPolicy() {
+							if err := s.ensureClusterHealthCheckDisabled(ins.AppCode, clusterOf(ins)); err != nil {
+								errs[batch.Indexes[position]] = err
+								continue
+							}
 						}
 						params = append(params, InstanceParams{ServiceName: ins.AppCode, IP: ins.Ip, Port: firstPort(ins), ClusterName: clusterOf(ins), GroupName: batch.Key.Group, NamespaceID: batch.Key.Namespace, Enabled: enabled, Ephemeral: false, Metadata: metadataOf(ins)})
 					}
