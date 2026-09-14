@@ -477,6 +477,32 @@ func TestObserveUnitVerdictAggregation(t *testing.T) {
 	}
 }
 
+func TestObserveUnitTransitionalClassificationExcludesObservationErrors(t *testing.T) {
+	transitional := tickRecord{
+		Verdict:    string(verdictConsistent),
+		ExactEqual: false,
+		InFlight:   1,
+		Divergence: []divergence{{Kind: divMissing, InFlight: true}},
+	}
+	if !tickIsTransitional(transitional) {
+		t.Fatal("in-flight consistent tick was not classified as transitional")
+	}
+	if tickIsTransitional(tickRecord{
+		Verdict:    string(verdictObsErr),
+		InFlight:   0,
+		Divergence: nil,
+	}) {
+		t.Fatal("OBSERR tick was incorrectly classified as transitional")
+	}
+	if tickIsTransitional(tickRecord{
+		Verdict:    string(verdictConsistent),
+		ExactEqual: true,
+		InFlight:   0,
+	}) {
+		t.Fatal("exact tick was incorrectly classified as transitional")
+	}
+}
+
 // TestObserveUnitBurstSchedule pins the §4.2 OBS_BURSTS marks: the
 // 100-in-1s storm early (5%) + the 200-instance batches at 25%/50%/75%.
 func TestObserveUnitBurstSchedule(t *testing.T) {

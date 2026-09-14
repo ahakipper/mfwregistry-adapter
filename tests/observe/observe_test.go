@@ -628,7 +628,7 @@ func (r *observeRun) recordTick(t *testing.T, record tickRecord) {
 	r.tickCount++
 	if record.ExactEqual {
 		r.exactEqualTicks++
-	} else if record.InFlight == len(record.Divergence) {
+	} else if tickIsTransitional(record) {
 		r.transitionalTicks++
 	}
 	// §4.5's env-overlap separation: a DIVERGENT tick whose tick overlaps

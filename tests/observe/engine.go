@@ -274,6 +274,16 @@ func tickVerdict(diff diffResult) verdictKind {
 	return verdictConsistent
 }
 
+// tickIsTransitional identifies a successful comparison that still contains
+// only in-flight mismatches. OBSERR records are never transitional: they did
+// not produce a complete source/remote comparison and must remain visible as
+// observation errors.
+func tickIsTransitional(record tickRecord) bool {
+	return record.Verdict == string(verdictConsistent) &&
+		!record.ExactEqual && len(record.Divergence) > 0 &&
+		record.InFlight == len(record.Divergence)
+}
+
 // continuityKey keys a divergence across ticks (the §4.3 step-7 ledger:
 // firstSeenTick pins the true age — DS-4-3's fix).
 func continuityKey(d divergence) string {
