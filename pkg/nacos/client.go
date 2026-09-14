@@ -570,7 +570,7 @@ func checkReadinessSDK(c *Client) (retErr error) {
 // RegisterInstance registers (upserts) one persistent instance.
 func (c *Client) RegisterInstance(params InstanceParams) error {
 	if c.sdk != nil {
-		return c.sdk.register(params)
+		return c.sdk.RegisterPersistent(params)
 	}
 	return c.doForm(http.MethodPost, pathInstance, params.values())
 }
@@ -578,7 +578,7 @@ func (c *Client) RegisterInstance(params InstanceParams) error {
 // DeregisterInstance deletes one instance by its composite id parameters.
 func (c *Client) DeregisterInstance(params InstanceParams) error {
 	if c.sdk != nil {
-		return c.sdk.deregister(params)
+		return c.sdk.DeregisterPersistent(params)
 	}
 	return c.doForm(http.MethodDelete, pathInstance, params.values())
 }

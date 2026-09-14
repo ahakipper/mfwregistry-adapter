@@ -7,7 +7,7 @@ require (
 	github.com/hashicorp/consul/api v1.8.1
 	github.com/mitchellh/go-homedir v1.1.0
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
-	github.com/nacos-group/nacos-sdk-go/v2 v2.3.6-0.20260902123754-002486583df5
+	github.com/nacos-group/nacos-sdk-go/v3 v3.0.0-20260831100852-93a93504cc2f
 	github.com/natefinch/lumberjack v2.0.0+incompatible
 	github.com/panjf2000/ants/v2 v2.4.3
 	github.com/pkg/errors v0.9.1
@@ -61,6 +61,7 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.1.0 // indirect
 	github.com/jmespath/go-jmespath v0.0.0-20180206201540-c2b33e8439af // indirect
 	github.com/jonboulle/clockwork v0.5.0 // indirect
+	github.com/nacos-group/nacos-sdk-proto/go v1.0.0-beta.9 // indirect
 	github.com/orcaman/concurrent-map v0.0.0-20210501183033-44dafcb38ecc // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/soheilhy/cmux v0.1.5 // indirect

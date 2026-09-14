@@ -4,7 +4,7 @@
 package e2e
 
 import (
-	"github.com/nacos-group/nacos-sdk-go/v2/vo"
+	"github.com/nacos-group/nacos-sdk-go/v3/vo"
 	"os"
 	"strings"
 	"testing"

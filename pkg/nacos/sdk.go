@@ -15,11 +15,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nacos-group/nacos-sdk-go/v2/clients"
-	"github.com/nacos-group/nacos-sdk-go/v2/clients/naming_client"
-	"github.com/nacos-group/nacos-sdk-go/v2/common/constant"
-	"github.com/nacos-group/nacos-sdk-go/v2/model"
-	"github.com/nacos-group/nacos-sdk-go/v2/vo"
+	"github.com/nacos-group/nacos-sdk-go/v3/clients"
+	"github.com/nacos-group/nacos-sdk-go/v3/clients/naming_client"
+	"github.com/nacos-group/nacos-sdk-go/v3/common/constant"
+	"github.com/nacos-group/nacos-sdk-go/v3/model"
+	"github.com/nacos-group/nacos-sdk-go/v3/vo"
 )
 
 // ErrUnsupportedOperation is returned by the SDK-only path when the pinned
@@ -84,10 +84,26 @@ type sdkNamingClient interface {
 	CloseClient()
 }
 
+// nacos3SDKVendor is the Spotter-owned operation seam for the official Nacos
+// v3 naming SDK.  Keeping operation names explicit prevents callers from
+// reaching the SDK's legacy naming_http delegate for persistent lifecycle
+// operations; the concrete v3 adapter is responsible for emitting the
+// RegisterInstanceRequest/DeregisterInstanceRequest gRPC payloads.
+type nacos3SDKVendor interface {
+	RegisterPersistent(InstanceParams) error
+	DeregisterPersistent(InstanceParams) error
+	SelectAll(service, cluster, group string) ([]Host, error)
+	ListServices(page, size int, namespace, group string) ([]string, int, error)
+	Subscribe(service, group string, clusters []string, callback func([]Host, error)) error
+	Unsubscribe(service, group string, clusters []string, callback func([]Host, error)) error
+	Close() error
+}
+
 var _ sdkNamingClient = (naming_client.INamingClient)(nil)
 
 type sdkNamingFacade struct {
 	client     sdkNamingClient
+	vendor     nacos3SDKVendor
 	group      string
 	cacheDir   string
 	ownedCache bool
@@ -101,6 +117,68 @@ func (f *sdkNamingFacade) close() {
 	if f.ownedCache && f.cacheDir != "" {
 		_ = os.RemoveAll(f.cacheDir)
 	}
+}
+
+// RegisterPersistent and DeregisterPersistent are the operation-specific
+// Nacos 3 seam.  They force Ephemeral=false at the adapter boundary so a
+// persistent publication can never be accidentally sent through an
+// ephemeral-only path.
+func (f *sdkNamingFacade) RegisterPersistent(p InstanceParams) error {
+	p.Ephemeral = false
+	if f.vendor != nil {
+		return f.vendor.RegisterPersistent(p)
+	}
+	return f.register(p)
+}
+
+func (f *sdkNamingFacade) DeregisterPersistent(p InstanceParams) error {
+	p.Ephemeral = false
+	if f.vendor != nil {
+		return f.vendor.DeregisterPersistent(p)
+	}
+	return f.deregister(p)
+}
+
+func (f *sdkNamingFacade) SelectAll(service, cluster, group string) ([]Host, error) {
+	if f.vendor != nil {
+		return f.vendor.SelectAll(service, cluster, group)
+	}
+	if group != "" {
+		f.group = effectiveGroup(group)
+	}
+	return f.list(service, cluster)
+}
+
+func (f *sdkNamingFacade) ListServices(page, size int, namespace, group string) ([]string, int, error) {
+	if f.vendor != nil {
+		return f.vendor.ListServices(page, size, namespace, group)
+	}
+	if group != "" {
+		f.group = effectiveGroup(group)
+	}
+	return f.services(page, size, namespace)
+}
+
+func (f *sdkNamingFacade) Subscribe(service, group string, clusters []string, callback func([]Host, error)) error {
+	if f.vendor != nil {
+		return f.vendor.Subscribe(service, group, clusters, callback)
+	}
+	return f.subscribe(service, group, clusters, callback)
+}
+
+func (f *sdkNamingFacade) Unsubscribe(service, group string, clusters []string, callback func([]Host, error)) error {
+	if f.vendor != nil {
+		return f.vendor.Unsubscribe(service, group, clusters, callback)
+	}
+	return f.unsubscribe(service, group, clusters, callback)
+}
+
+func (f *sdkNamingFacade) Close() error {
+	if f.vendor != nil {
+		return f.vendor.Close()
+	}
+	f.close()
+	return nil
 }
 
 // sdkAPIError preserves the retry classification that the official SDK

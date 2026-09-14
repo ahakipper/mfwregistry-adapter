@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nacos-group/nacos-sdk-go/v2/model"
-	"github.com/nacos-group/nacos-sdk-go/v2/vo"
+	"github.com/nacos-group/nacos-sdk-go/v3/model"
+	"github.com/nacos-group/nacos-sdk-go/v3/vo"
 
 	"spotter/internal/domain/instance"
 	"spotter/internal/ports"
