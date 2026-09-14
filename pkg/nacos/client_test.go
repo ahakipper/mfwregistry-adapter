@@ -152,13 +152,17 @@ func TestBlackboxClientSDKModeUsesGRPCPersistentLifecycle(t *testing.T) {
 	// The fixture only serves the legacy HTTP API, so the gRPC-only client is
 	// expected to report an unavailable connection. The important boundary
 	// assertion is that it never falls back to POST /nacos/v1/ns/instance.
-	_ = client.RegisterInstance(params)
+	if err := client.RegisterInstance(params); err == nil {
+		t.Fatal("SDK RegisterInstance() error = nil, want gRPC connection-unavailable error")
+	}
 	for _, req := range server.Requests() {
 		if req.Path == "/nacos/v1/ns/instance" {
 			t.Fatalf("SDK persistent register used legacy HTTP endpoint %s %s; want vendor persistent seam with Ephemeral=false", req.Method, req.Path)
 		}
 	}
-	_ = client.DeregisterInstance(params)
+	if err := client.DeregisterInstance(params); err == nil {
+		t.Fatal("SDK DeregisterInstance() error = nil, want gRPC connection-unavailable error")
+	}
 	for _, req := range server.Requests() {
 		if req.Path == "/nacos/v1/ns/instance" {
 			t.Fatalf("SDK persistent deregister used legacy HTTP endpoint %s %s; want vendor persistent seam with Ephemeral=false", req.Method, req.Path)
