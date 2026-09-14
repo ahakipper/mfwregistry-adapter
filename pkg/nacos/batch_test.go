@@ -70,6 +70,39 @@ func TestSplitPersistentBatchesHardCapsEachApplicationAt100(t *testing.T) {
 	}
 }
 
+func TestSplitPersistentBatchesScalesTo10001Instances(t *testing.T) {
+	const total = 10001
+	items := make([]*instance.Instance, total)
+	for i := range items {
+		items[i] = &instance.Instance{
+			InstanceId: fmt.Sprintf("large-%05d", i),
+			AppCode:    "large-app",
+			Provider:   "k8s",
+			Status:     instance.InstanceStatusOnline,
+		}
+	}
+	batches := splitPersistentBatches(items, MaxPersistentBatchSize)
+	if got, want := len(batches), 101; got != want {
+		t.Fatalf("batch count = %d, want %d for %d instances", got, want, total)
+	}
+	if got := len(batches[len(batches)-1].Items); got != 1 {
+		t.Fatalf("final batch size = %d, want 1", got)
+	}
+	count := 0
+	for i, batch := range batches {
+		if len(batch.Items) == 0 || len(batch.Items) > MaxPersistentBatchSize {
+			t.Fatalf("batch[%d] size = %d, outside 1..%d", i, len(batch.Items), MaxPersistentBatchSize)
+		}
+		if batch.Key.Service != "large-app" || batch.Key.Cluster != "k8s" || batch.Key.Operation != batchRegister {
+			t.Fatalf("batch[%d] key = %+v, want one application/register scope", i, batch.Key)
+		}
+		count += len(batch.Items)
+	}
+	if count != total {
+		t.Fatalf("partitioned item count = %d, want %d", count, total)
+	}
+}
+
 func TestSplitPersistentBatchesPreservesStableInputOrder(t *testing.T) {
 	items := []*instance.Instance{
 		{InstanceId: "first", AppCode: "pay", Provider: "k8s", Status: instance.InstanceStatusOnline},
