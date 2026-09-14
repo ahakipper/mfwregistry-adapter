@@ -30,8 +30,8 @@ objects while preserving persistent (`Ephemeral=false`) semantics.
 - Preserved SDK server-list failover, timeout, username/password auth, TLS CA,
   server-name, and insecure-skip-verify configuration, plus isolated cache
   ownership and bounded close behavior.
-- Added a protobuf contract test that decodes the official
-  `naming.InstanceRequest` and asserts `registerInstance`/
+- Added a protobuf contract test that runs official codec Encode/Decode for
+  `naming.PersistentInstanceRequest` and asserts `registerInstance`/
   `deregisterInstance` method names and `Ephemeral=false`.
 - Kept the legacy HTTP fixture test explicitly scoped to the no-fallback
   boundary; no product operation falls back to raw HTTP in SDK mode.
@@ -44,6 +44,18 @@ ok   spotter/pkg/nacos
 
 go test -race ./pkg/nacos/... -count=1
 ok   spotter/pkg/nacos
+```
+
+Fresh live verification used the Nacos 3.2.4 ARM64 image digest
+`sha256:2a6d445d567b04c81404a3569309b07bfaf077216dbc3a92c0f56c9113034fb5`:
+
+```text
+NACOS_SERVER=127.0.0.1:38848 NACOS_REAL_SCRATCH=1 NACOS_REAL_ALLOW_WRITE=1 \
+  go test -tags=nacos_real ./tests/e2e/... \
+  -run '^TestNacosRealPersistentApplicationBatch$' -count=1
+PASS: entries=201 batch_max=100 batches=3
+final_catalog_hash=ed36aa2483d2ba0feb77c912c5b45825e485753500e5d420bde2914f43763781
+residual_unknown=false
 ```
 
 The SDK-mode black-box fixture serves HTTP only; its lifecycle calls now return
@@ -68,7 +80,8 @@ The task brief remains the source of acceptance requirements.
 
 - Live Nacos 3.2.4 validation now covers 201 unique persistent entries,
   `100+100+1` logical scheduling, exact cardinality, `Ephemeral=false`, and
-  cleanup. Multi-server failover remains untested in this run.
+  cleanup. Multi-server failover and production authenticated/TLS profiles
+  remain untested in this run.
 - The adapter relies on the pinned SDK's exported `NamingGrpcProxy`; upgrading
   the pseudo-version requires rerunning the protobuf contract and package race
   tests before release.
