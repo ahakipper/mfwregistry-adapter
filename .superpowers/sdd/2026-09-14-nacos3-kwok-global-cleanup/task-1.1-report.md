@@ -50,6 +50,11 @@ failed; no Nacos package failures were observed.
 Follow-up commit adding the explicit black-box RED assertion and this exact
 test evidence: `6bdff6d`.
 
+Coverage follow-up commit `46e5cff` extends seam routing assertions to
+SelectAll, ListServices, Subscribe, Unsubscribe, Close, identity fields, and
+error propagation, and makes the black-box test fail immediately on lifecycle
+errors.
+
 ## Compatibility / rollback
 
 The explicit `http-compat` transport remains available for legacy fixtures.
