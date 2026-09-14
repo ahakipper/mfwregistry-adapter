@@ -45,6 +45,7 @@ const (
 	divExtra    divergenceKind = "extra"    // remote, no source object
 	divDup      divergenceKind = "dup"      // duplicate id within one view
 	divDisabled divergenceKind = "disabled" // enabled-flag mismatch
+	divField    divergenceKind = "field"    // projected field or metadata mismatch
 )
 
 // divergence is one mismatch occurrence on one tick.
@@ -63,12 +64,31 @@ type divergence struct {
 // converter pushes them disabled). Pending pods are filtered entirely
 // (InitInstanceFilters drops InstanceStatePending — the batch-D contract).
 type sourceModel struct {
-	Online    map[string][]string // appCode -> pod names
-	Unhealthy map[string][]string // appCode -> pod names
+	Online    map[string][]string               // appCode -> pod names
+	Unhealthy map[string][]string               // appCode -> pod names
+	Entries   map[string]map[string]sourceEntry // appCode -> pod name -> projected wire fields
 	CreatedAt map[string]time.Time
 	// Count is the raw source population (all phases — the scale
 	// criterion's source count).
 	Count int
+}
+
+// sourceEntry contains the fields that the K8s converter deterministically
+// projects into the Nacos registration. The Observe comparison intentionally
+// checks only this stable projection; source fields such as resourceVersion
+// and sourceKey are unavailable in the one-call Pod snapshot.
+type sourceEntry struct {
+	ID          string
+	IP          string
+	Port        int
+	ClusterName string
+	ServiceName string
+	CompositeID string
+	Enabled     bool
+	Healthy     bool
+	Ephemeral   bool
+	Status      string
+	Metadata    map[string]string
 }
 
 // buildSourceModel derives the expected model from the live pods (the
@@ -77,6 +97,7 @@ func buildSourceModel(pods []sourcePod, appCodes []string) *sourceModel {
 	model := &sourceModel{
 		Online:    map[string][]string{},
 		Unhealthy: map[string][]string{},
+		Entries:   map[string]map[string]sourceEntry{},
 		CreatedAt: map[string]time.Time{},
 		Count:     0,
 	}
@@ -85,17 +106,23 @@ func buildSourceModel(pods []sourcePod, appCodes []string) *sourceModel {
 			continue // a foreign app-code is not this run's model (recorded via Count diff)
 		}
 		model.Count++
+		if model.Entries[pod.AppCode] == nil {
+			model.Entries[pod.AppCode] = map[string]sourceEntry{}
+		}
 		switch {
 		case pod.Phase == "Running" && pod.PodIP != "" && pod.ContainersReady:
 			model.Online[pod.AppCode] = append(model.Online[pod.AppCode], pod.Name)
+			model.Entries[pod.AppCode][pod.Name] = expectedSourceEntry(pod, true, "1")
 		case pod.Phase == "Running" && pod.PodIP != "":
 			// Running but not containers-ready: expected-unhealthy (the
 			// converter pushes it enabled=false — visible in the catalog).
 			model.Unhealthy[pod.AppCode] = append(model.Unhealthy[pod.AppCode], pod.Name)
+			model.Entries[pod.AppCode][pod.Name] = expectedSourceEntry(pod, false, "2")
 		case pod.Phase == "Running":
 			// Running without an IP yet: not representable (the converter's
 			// Online path needs the IP); treated as pending-in-flight.
 			model.Unhealthy[pod.AppCode] = append(model.Unhealthy[pod.AppCode], pod.Name)
+			model.Entries[pod.AppCode][pod.Name] = expectedSourceEntry(pod, false, "2")
 		default:
 			// Pending / other phases: filtered (the Pending filter). The
 			// pod's creationTimestamp is still the in-flight clock — a pod
@@ -113,6 +140,19 @@ func buildSourceModel(pods []sourcePod, appCodes []string) *sourceModel {
 		sort.Strings(ids)
 	}
 	return model
+}
+
+func expectedSourceEntry(pod sourcePod, enabled bool, status string) sourceEntry {
+	const port = 7096 // formatAppPort places the compatibility port first.
+	const cluster = "k8s"
+	const group = "DEFAULT_GROUP"
+	return sourceEntry{
+		ID: pod.Name, IP: pod.PodIP, Port: port, ClusterName: cluster,
+		ServiceName: pod.AppCode,
+		CompositeID: fmt.Sprintf("%s#%d#%s#%s@@%s", pod.PodIP, port, cluster, group, pod.AppCode),
+		Enabled:     enabled, Healthy: enabled, Ephemeral: false, Status: status,
+		Metadata: map[string]string{"spotterOwner": "spotter", "instanceId": pod.Name, "status": status},
+	}
 }
 
 // isObservedAppCode reports whether an app-code is one of this run's
@@ -163,10 +203,10 @@ func compareService(appCode string, model *sourceModel, remote []remoteEntry,
 		expectedUnhealthy[id]++
 	}
 	remoteCount := map[string]int{}
-	remoteEnabled := map[string]bool{}
+	remoteEntries := map[string][]remoteEntry{}
 	for _, entry := range remote {
 		remoteCount[entry.ID]++
-		remoteEnabled[entry.ID] = entry.Enabled
+		remoteEntries[entry.ID] = append(remoteEntries[entry.ID], entry)
 	}
 
 	record := func(kind divergenceKind, id, composite string, clock time.Time) {
@@ -198,7 +238,9 @@ func compareService(appCode string, model *sourceModel, remote []remoteEntry,
 			record(divMissing, id, "", clockSource(id, ledger, model))
 		case count > expectedOnline[id]:
 			record(divDup, id, compositeOf(remote, id), time.Time{})
-		case !remoteEnabled[id]:
+		case !remoteEntryMatches(model.Entries[appCode][id], remoteEntries[id][0]):
+			record(divField, id, remoteEntries[id][0].CompositeID, clockSource(id, ledger, model))
+		case !remoteEntries[id][0].Enabled:
 			record(divDisabled, id, compositeOf(remote, id), clockSource(id, ledger, model))
 		}
 	}
@@ -215,7 +257,9 @@ func compareService(appCode string, model *sourceModel, remote []remoteEntry,
 		if count > expectedUnhealthy[id] {
 			record(divDup, id, compositeOf(remote, id), time.Time{})
 		}
-		if remoteEnabled[id] {
+		if !remoteEntryMatches(model.Entries[appCode][id], remoteEntries[id][0]) {
+			record(divField, id, remoteEntries[id][0].CompositeID, clockSource(id, ledger, model))
+		} else if remoteEntries[id][0].Enabled {
 			record(divDisabled, id, compositeOf(remote, id), clockSource(id, ledger, model))
 		}
 	}
@@ -244,6 +288,42 @@ func compareService(appCode string, model *sourceModel, remote []remoteEntry,
 	return result
 }
 
+// remoteEntryMatches compares the deterministic K8s-to-Nacos projection. A
+// manually constructed fixture model has no Entries entry, so the historical
+// ID/enabled assertions remain available to the HTTP fixture tests.
+func remoteEntryMatches(expected sourceEntry, got remoteEntry) bool {
+	if expected.ID == "" {
+		return true
+	}
+	if expected.ID != got.ID || expected.IP != got.IP || expected.Port != got.Port ||
+		expected.ClusterName != got.ClusterName || !serviceNameMatches(expected.ServiceName, got.ServiceName) ||
+		expected.CompositeID != got.CompositeID ||
+		expected.Healthy != got.Healthy || expected.Ephemeral != got.Ephemeral {
+		return false
+	}
+	for key, want := range expected.Metadata {
+		if got.Metadata[key] != want {
+			return false
+		}
+	}
+	return true
+}
+
+func copyStringMap(input map[string]string) map[string]string {
+	if input == nil {
+		return nil
+	}
+	output := make(map[string]string, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
+}
+
+func serviceNameMatches(expected, got string) bool {
+	return got == expected || got == "DEFAULT_GROUP@@"+expected
+}
+
 // compositeOf finds the composite id of an entry id in the remote view.
 func compositeOf(remote []remoteEntry, id string) string {
 	for _, entry := range remote {
@@ -264,7 +344,7 @@ func tickVerdict(diff diffResult) verdictKind {
 		switch d.Kind {
 		case divDup:
 			return verdictDivergent // never tolerable
-		case divMissing, divExtra, divDisabled:
+		case divMissing, divExtra, divDisabled, divField:
 			if !d.InFlight {
 				return verdictDivergent
 			}
@@ -274,12 +354,25 @@ func tickVerdict(diff diffResult) verdictKind {
 	return verdictConsistent
 }
 
+// strictTickVerdict requires zero data differences whenever no source
+// mutation occurred since the prior observation boundary. A tick that overlaps
+// a known mutation may carry only in-flight mismatches; their age is still
+// bounded by tickVerdict and the continuity tracker.
+func strictTickVerdict(diff diffResult, mutationObserved bool) verdictKind {
+	verdict := tickVerdict(diff)
+	if verdict == verdictConsistent && len(diff.Divergences) > 0 && !mutationObserved {
+		return verdictDivergent
+	}
+	return verdict
+}
+
 // tickIsTransitional identifies a successful comparison that still contains
 // only in-flight mismatches. OBSERR records are never transitional: they did
 // not produce a complete source/remote comparison and must remain visible as
 // observation errors.
 func tickIsTransitional(record tickRecord) bool {
 	return record.Verdict == string(verdictConsistent) &&
+		record.MutationObserved &&
 		!record.ExactEqual && len(record.Divergence) > 0 &&
 		record.InFlight == len(record.Divergence)
 }

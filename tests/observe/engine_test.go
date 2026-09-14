@@ -33,6 +33,52 @@ func entry(id string, enabled bool) remoteEntry {
 	return remoteEntry{ID: id, Enabled: enabled, CompositeID: "10.0.0.1#7096#k8s#DEFAULT_GROUP@@svc"}
 }
 
+// TestObserveUnitExactEntryFieldsAreCompared pins the data-plane equality
+// contract: a matching domain id is insufficient when Nacos has the wrong
+// endpoint, scope, lifecycle mode, health state, or Spotter ownership.
+func TestObserveUnitExactEntryFieldsAreCompared(t *testing.T) {
+	now := time.Now()
+	model := buildSourceModel([]sourcePod{{
+		Name: "pod-a", AppCode: "obs-app-0", Phase: "Running", PodIP: "10.0.0.7",
+		ContainersReady: true, CreatedAt: now,
+	}}, []string{"obs-app-0"})
+	expected := model.Entries["obs-app-0"]["pod-a"]
+	remoteFor := func(mutate func(*remoteEntry)) []remoteEntry {
+		got := remoteEntry{
+			ID: "pod-a", IP: expected.IP, Port: expected.Port,
+			ClusterName: expected.ClusterName, ServiceName: expected.ServiceName,
+			Healthy: expected.Healthy, Enabled: expected.Enabled, Ephemeral: expected.Ephemeral,
+			Metadata:    copyStringMap(expected.Metadata),
+			CompositeID: "10.0.0.7#7096#k8s#DEFAULT_GROUP@@obs-app-0",
+		}
+		mutate(&got)
+		return []remoteEntry{got}
+	}
+	if diff := compareService("obs-app-0", model, remoteFor(func(*remoteEntry) {}), stubLedger(nil), time.Minute, now); len(diff.Divergences) != 0 {
+		t.Fatalf("exact projected entry diff = %+v, want no divergence", diff.Divergences)
+	}
+	checks := []struct {
+		name   string
+		mutate func(*remoteEntry)
+	}{
+		{"ip mismatch", func(e *remoteEntry) { e.IP = "10.0.0.8" }},
+		{"port mismatch", func(e *remoteEntry) { e.Port = 8080 }},
+		{"cluster mismatch", func(e *remoteEntry) { e.ClusterName = "ecs" }},
+		{"service mismatch", func(e *remoteEntry) { e.ServiceName = "other-service" }},
+		{"ephemeral mismatch", func(e *remoteEntry) { e.Ephemeral = true }},
+		{"status metadata mismatch", func(e *remoteEntry) { e.Metadata["status"] = "2" }},
+		{"ownership metadata mismatch", func(e *remoteEntry) { e.Metadata["spotterOwner"] = "other-writer" }},
+	}
+	for _, check := range checks {
+		t.Run(check.name, func(t *testing.T) {
+			diff := compareService("obs-app-0", model, remoteFor(check.mutate), stubLedger(nil), time.Minute, now)
+			if len(diff.Divergences) != 1 || diff.Divergences[0].Kind != divField {
+				t.Fatalf("field mismatch diff = %+v, want one %q divergence", diff.Divergences, divField)
+			}
+		})
+	}
+}
+
 // TestObserveUnitInFlightTolerance pins the §3.4 tolerance: a missing
 // expected entry whose source changed at c(e) is tolerated ONLY while
 // t − c(e) ≤ OBS_BOUND; at c(e)+B it is DIVERGENT (tolerance, not
@@ -477,15 +523,37 @@ func TestObserveUnitVerdictAggregation(t *testing.T) {
 	}
 }
 
+func TestObserveUnitStableTickRequiresExactEquality(t *testing.T) {
+	diff := diffResult{Divergences: []divergence{{Kind: divMissing, InFlight: true}}, InFlightCount: 1}
+	if got := strictTickVerdict(diff, true); got != verdictConsistent {
+		t.Fatalf("mutation-overlap verdict = %s, want CONSISTENT transitional", got)
+	}
+	if got := strictTickVerdict(diff, false); got != verdictDivergent {
+		t.Fatalf("stable young mismatch verdict = %s, want DIVERGENT", got)
+	}
+	if got := strictTickVerdict(diffResult{}, false); got != verdictConsistent {
+		t.Fatalf("stable exact verdict = %s, want CONSISTENT", got)
+	}
+}
+
 func TestObserveUnitTransitionalClassificationExcludesObservationErrors(t *testing.T) {
 	transitional := tickRecord{
-		Verdict:    string(verdictConsistent),
-		ExactEqual: false,
-		InFlight:   1,
-		Divergence: []divergence{{Kind: divMissing, InFlight: true}},
+		Verdict:          string(verdictConsistent),
+		ExactEqual:       false,
+		MutationObserved: true,
+		InFlight:         1,
+		Divergence:       []divergence{{Kind: divMissing, InFlight: true}},
 	}
 	if !tickIsTransitional(transitional) {
 		t.Fatal("in-flight consistent tick was not classified as transitional")
+	}
+	if tickIsTransitional(tickRecord{
+		Verdict:          string(verdictConsistent),
+		MutationObserved: false,
+		InFlight:         1,
+		Divergence:       []divergence{{Kind: divMissing, InFlight: true}},
+	}) {
+		t.Fatal("stable tick with a young stale mismatch was incorrectly classified as transitional")
 	}
 	if tickIsTransitional(tickRecord{
 		Verdict:    string(verdictObsErr),
@@ -500,6 +568,54 @@ func TestObserveUnitTransitionalClassificationExcludesObservationErrors(t *testi
 		InFlight:   0,
 	}) {
 		t.Fatal("exact tick was incorrectly classified as transitional")
+	}
+}
+
+func TestObserveUnitMutationBoundaryTracksBetweenAndOverlappingTicks(t *testing.T) {
+	driver := newChurnDriver("unused", []string{"obs-app-0"}, observePodPrefix)
+	if seq, observed := finishTickMutationState(driver, 0, 0, false); seq != 0 || observed {
+		t.Fatalf("stable mutation state = (%d,%t), want (0,false)", seq, observed)
+	}
+	driver.mu.Lock()
+	driver.mutationSeq = 1
+	driver.mutationActive = 1
+	driver.mu.Unlock()
+	if seq, observed := finishTickMutationState(driver, 0, 0, false); seq != 1 || !observed {
+		t.Fatalf("between-tick mutation state = (%d,%t), want (1,true)", seq, observed)
+	}
+	if seq, observed := finishTickMutationState(driver, 1, 1, true); seq != 1 || !observed {
+		t.Fatalf("overlapping mutation state = (%d,%t), want (1,true)", seq, observed)
+	}
+	driver.finishMutation()
+	if seq, observed := finishTickMutationState(driver, 1, 1, false); seq != 1 || observed {
+		t.Fatalf("post-mutation stable state = (%d,%t), want (1,false)", seq, observed)
+	}
+}
+
+func TestObserveUnitExactAndTransitionalCountersExcludeOBSERR(t *testing.T) {
+	run := &observeRun{tracker: newDivergenceTracker()}
+	run.recordTick(t, tickRecord{Verdict: string(verdictConsistent), ExactEqual: true})
+	run.recordTick(t, tickRecord{
+		Verdict:          string(verdictConsistent),
+		MutationObserved: true,
+		InFlight:         1,
+		Divergence:       []divergence{{Kind: divMissing, InFlight: true}},
+	})
+	run.recordTick(t, tickRecord{Verdict: string(verdictObsErr)})
+	if run.tickCount != 3 || run.exactEqualTicks != 1 || run.transitionalTicks != 1 || run.obsErr != 1 {
+		t.Fatalf("tick counters = total:%d exact:%d transitional:%d obserr:%d, want 3/1/1/1",
+			run.tickCount, run.exactEqualTicks, run.transitionalTicks, run.obsErr)
+	}
+}
+
+func TestObserveUnitChurnFailureFailsAcceptance(t *testing.T) {
+	run := &observeRun{cfg: observeConfig{}, tracker: newDivergenceTracker()}
+	pass, failures := run.evaluateAcceptance(runSummary{ChurnErrors: 1, DrainedAtEnd: true})
+	if pass {
+		t.Fatal("acceptance passed with a source mutation failure")
+	}
+	if got := strings.Join(failures, "; "); !strings.Contains(got, "churn: 1 source mutation operations failed") {
+		t.Fatalf("acceptance failures = %q, want churn failure", got)
 	}
 }
 

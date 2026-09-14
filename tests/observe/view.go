@@ -100,7 +100,9 @@ type nacosHost struct {
 	InstanceID  string            `json:"instanceId"`
 	IP          string            `json:"ip"`
 	Port        int               `json:"port"`
+	Healthy     bool              `json:"healthy"`
 	Enabled     bool              `json:"enabled"`
+	Ephemeral   bool              `json:"ephemeral"`
 	ClusterName string            `json:"clusterName"`
 	ServiceName string            `json:"serviceName"`
 	Metadata    map[string]string `json:"metadata"`
@@ -121,7 +123,14 @@ func domainIDOf(host nacosHost) string {
 // composite id (the forensic record's nacos-side identity).
 type remoteEntry struct {
 	ID          string
+	IP          string
+	Port        int
+	ClusterName string
+	ServiceName string
+	Healthy     bool
 	Enabled     bool
+	Ephemeral   bool
+	Metadata    map[string]string
 	CompositeID string
 }
 
@@ -172,7 +181,7 @@ func (v *nacosView) fullServiceView(service string) (serviceView, error) {
 				ServiceName: host.ServiceName,
 				Metadata:    host.Metadata,
 			}
-			entries = append(entries, remoteEntry{ID: domainIDOf(entry), Enabled: host.Enabled, CompositeID: host.InstanceID})
+			entries = append(entries, remoteEntry{ID: domainIDOf(entry), IP: host.IP, Port: host.Port, ClusterName: host.ClusterName, ServiceName: host.ServiceName, Healthy: host.Healthy, Enabled: host.Enabled, Ephemeral: host.Ephemeral, Metadata: host.Metadata, CompositeID: host.InstanceID})
 		}
 		sort.Slice(entries, func(i, j int) bool {
 			if entries[i].ID == entries[j].ID {
@@ -272,7 +281,14 @@ func (v *nacosView) listView(service string) ([]remoteEntry, error) {
 	for _, host := range body.Hosts {
 		entries = append(entries, remoteEntry{
 			ID:          domainIDOf(host),
+			IP:          host.IP,
+			Port:        host.Port,
+			ClusterName: host.ClusterName,
+			ServiceName: host.ServiceName,
+			Healthy:     host.Healthy,
 			Enabled:     host.Enabled,
+			Ephemeral:   host.Ephemeral,
+			Metadata:    host.Metadata,
 			CompositeID: host.InstanceID,
 		})
 	}
@@ -307,7 +323,14 @@ func (v *nacosView) catalogView(service, cluster string) ([]remoteEntry, error) 
 		for _, host := range body.List {
 			entries = append(entries, remoteEntry{
 				ID:          domainIDOf(host),
+				IP:          host.IP,
+				Port:        host.Port,
+				ClusterName: host.ClusterName,
+				ServiceName: host.ServiceName,
+				Healthy:     host.Healthy,
 				Enabled:     host.Enabled,
+				Ephemeral:   host.Ephemeral,
+				Metadata:    host.Metadata,
 				CompositeID: host.InstanceID,
 			})
 		}
