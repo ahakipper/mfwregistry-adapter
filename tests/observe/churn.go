@@ -421,9 +421,20 @@ func (d *churnDriver) deleteAll() error {
 	if len(filtered) == 0 {
 		return nil
 	}
-	args := append([]string{"delete", "pod", "--ignore-not-found=true", "--wait=false", "--"}, filtered...)
-	if _, err := d.kubectlStdin("", args...); err != nil {
-		return err
+	// Keep teardown requests bounded just like applyBatch. Passing hundreds of
+	// pod names in one kubectl invocation can exceed the apiserver/client
+	// deadline on kwok, leaving a partial population that poisons the next
+	// observation run. Chunks remain name-filtered so foreign pods are never
+	// deleted.
+	for start := 0; start < len(filtered); start += 100 {
+		end := start + 100
+		if end > len(filtered) {
+			end = len(filtered)
+		}
+		args := append([]string{"delete", "pod", "--ignore-not-found=true", "--wait=false", "--"}, filtered[start:end]...)
+		if _, err := d.kubectlStdin("", args...); err != nil {
+			return fmt.Errorf("delete pods teardown chunk (%d pods): %w", end-start, err)
+		}
 	}
 	return nil
 }

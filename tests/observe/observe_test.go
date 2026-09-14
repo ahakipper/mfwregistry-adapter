@@ -17,7 +17,6 @@ import (
 
 	"spotter/internal/testkit/discoverymock"
 	"spotter/internal/testkit/etcdmock"
-	spotternacos "spotter/pkg/nacos"
 )
 
 // TestObserveConsistency is the dsca-4 §4 harness: the sustained
@@ -101,13 +100,7 @@ func TestObserveConsistency(t *testing.T) {
 
 	view := newNacosView(cfg.NacosAddr)
 	defer view.close()
-	if err := spotternacos.CheckReadinessWithConfig(spotternacos.ClientConfig{
-		ServerURL:     cfg.NacosAddr,
-		TransportMode: spotternacos.TransportSDK,
-		NamespaceID:   nacosNamespace,
-		GroupName:     nacosGroup,
-		Timeout:       10 * time.Minute,
-	}, nil); err != nil {
+	if err := waitForNacosSDKReadiness(cfg.NacosAddr, 10*time.Minute); err != nil {
 		t.Skipf("NOT VERIFIED: EnvError/InfraError Nacos 3 SDK read/write readiness failed: %v; cleanup_status=pending", err)
 	}
 	harnessLog.event("Nacos 3 SDK read/write readiness passed at %s", cfg.NacosAddr)

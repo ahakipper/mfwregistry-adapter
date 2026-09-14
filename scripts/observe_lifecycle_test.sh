@@ -25,10 +25,10 @@ case "${FAKE_KUBECTL_MODE:-ok}" in
   badcpu) [[ "$*" == *"allocatable.cpu"* ]] && { printf 'bogus'; exit 0; };;
   badmem) [[ "$*" == *"allocatable.memory"* ]] && { printf 'bogus'; exit 0; };;
   lowpods) [[ "$*" == *"allocatable.pods"* ]] && { printf '1'; exit 0; };;
-  ready) [[ "$*" == *"--raw=/readyz"* ]] && exit 0; exit 1;;
+  ready) [[ "$*" == *"--raw=/livez"* ]] && exit 0; exit 1;;
   capacity) [[ "$*" == *"jsonpath"* ]] && { printf '1000'; exit 0; };;
 esac
-[[ "$*" == *"--raw=/readyz"* ]] && exit 0
+[[ "$*" == *"--raw=/livez"* ]] && exit 0
 [[ "$*" == *"jsonpath"* ]] && { printf '1000'; exit 0; }
 exit 0
 EOF
@@ -51,6 +51,9 @@ if [[ "${1:-}" == -c ]]; then grep -q bad-hash "${2:-}" && exit 1; exit 0; fi
 printf '0000000000000000000000000000000000000000000000000000000000000000  %s\n' "${1:-}"
 EOF
 chmod +x "$fake"/*
+# Keep the fake owned-cluster kubeconfig inside the temporary test directory;
+# real runs use kwokctl's per-cluster ~/.kwok path by default.
+export OBS_KWOK_KUBECONFIG="$tmp/owned-kubeconfig"
 
 assert_fail() { set +e; "$@" >/dev/null 2>&1; rc=$?; set -e; [[ $rc -ne 0 ]] || { echo "expected failure: $*" >&2; exit 1; }; }
 

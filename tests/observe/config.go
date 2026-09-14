@@ -117,6 +117,12 @@ func loadObserveConfig() (observeConfig, error) {
 	}
 	if raw := strings.TrimSpace(os.Getenv("OBS_KUBECONFIG")); raw != "" {
 		cfg.Kubeconfig = resolveRel(raw)
+	} else if stateKC := observeStateKubeconfig(cfg.WorkDir); stateKC != "" {
+		// observe-up.sh records the authoritative kwokctl v0.8 per-cluster
+		// kubeconfig in the signed owned state. Prefer it over the historical
+		// dsca1/build fallback so the child reads the exact cluster created for
+		// this run.
+		cfg.Kubeconfig = stateKC
 	} else {
 		// The default vehicle: track 1's dsca1 kwok cluster kubeconfig
 		// (the cluster this harness owns for its runs — dsca-1's scale
@@ -240,6 +246,23 @@ func resolveRel(path string) string {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func observeStateKubeconfig(workDir string) string {
+	data, err := os.ReadFile(filepath.Join(workDir, "observe-state"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "kubeconfig=") {
+			continue
+		}
+		path := strings.TrimSpace(strings.TrimPrefix(line, "kubeconfig="))
+		if path != "" && fileExists(path) {
+			return path
+		}
+	}
+	return ""
 }
 
 // homeDir returns the user's home directory ("" when unresolvable).

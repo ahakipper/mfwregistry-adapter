@@ -62,6 +62,38 @@ func (v *nacosView) close() {
 	}
 }
 
+// waitForNacosSDKReadiness retries the authoritative SDK read/write canary
+// after the transport listener becomes reachable. Nacos 3 can accept TCP
+// before its naming RPC handlers finish starting, so one immediate canary
+// would turn normal startup latency into a false NOT VERIFIED result.
+func waitForNacosSDKReadiness(addr string, bound time.Duration) error {
+	if bound <= 0 {
+		return fmt.Errorf("nacos SDK readiness bound must be positive")
+	}
+	deadline := time.Now().Add(bound)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		remaining := time.Until(deadline)
+		timeout := 5 * time.Second
+		if remaining < timeout {
+			timeout = remaining
+		}
+		err := spotternacos.CheckReadinessWithConfig(spotternacos.ClientConfig{
+			ServerURL:     addr,
+			TransportMode: spotternacos.TransportSDK,
+			NamespaceID:   nacosNamespace,
+			GroupName:     nacosGroup,
+			Timeout:       timeout,
+		}, nil)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("nacos SDK readiness timed out: %w", lastErr)
+}
+
 // nacosHost mirrors the historical v1 fixture response shape. Live Nacos 3
 // values are converted from pkg/nacos.Host at the SDK boundary above.
 type nacosHost struct {

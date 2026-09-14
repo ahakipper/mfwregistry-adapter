@@ -8,7 +8,12 @@ sha256sum -c "$root/build/observe/observe-state.sha256" >/dev/null || { echo "En
 cluster=$(awk -F= '$1=="cluster"{print $2}' "$state")
 kubeconfig=$(awk -F= '$1=="kubeconfig"{print $2}' "$state")
 [[ "$cluster" =~ ^dsca-observe-[a-zA-Z0-9_-]+$ ]] || { echo "EnvError: invalid owned state" >&2; exit 2; }
-[[ "$kubeconfig" == "$root/build/observe/"* ]] || { echo "EnvError: foreign kubeconfig state" >&2; exit 2; }
+expected_kwok_kubeconfig="${HOME}/.kwok/clusters/${cluster}/kubeconfig.yaml"
+if [[ -n "${OBS_KWOK_KUBECONFIG:-}" ]]; then
+  [[ "$kubeconfig" == "$OBS_KWOK_KUBECONFIG" ]] || { echo "EnvError: foreign kubeconfig state" >&2; exit 2; }
+else
+  [[ "$kubeconfig" == "$root/build/observe/"* || "$kubeconfig" == "$expected_kwok_kubeconfig" ]] || { echo "EnvError: foreign kubeconfig state" >&2; exit 2; }
+fi
 command -v kwokctl >/dev/null || { echo "InfraError: missing kwokctl for teardown" >&2; exit 2; }
 command -v sha256sum >/dev/null || { echo "InfraError: missing sha256sum for state verification" >&2; exit 2; }
 kwokctl delete cluster --name "$cluster" --kubeconfig "$kubeconfig" || { echo "InfraError: kwok teardown failed" >&2; exit 1; }

@@ -147,7 +147,10 @@ func dockerRunNacos(hostPort int) error {
 	}
 	out, err := runCommand("docker", "run", "-d", "--name", observeNacosContainer,
 		"--platform", nacosPlatform,
-		"-e", "MODE=standalone", "-e", "NACOS_AUTH_ENABLE=false", "-e", "JVM_XMS=512m", "-e", "JVM_XMX=512m",
+		"-e", "MODE=standalone", "-e", "NACOS_AUTH_ENABLE=false",
+		"-e", "NACOS_AUTH_IDENTITY_KEY=spotter-observe", "-e", "NACOS_AUTH_IDENTITY_VALUE=spotter-observe",
+		"-e", "NACOS_AUTH_TOKEN=c3BvdHRlci1vYnNlcnZlLW5hY29zMy10b2tlbi0yMDI2MDkxNA==",
+		"-e", "JVM_XMS=512m", "-e", "JVM_XMX=512m",
 		"-p", fmt.Sprintf("%d:8848", hostPort), "-p", fmt.Sprintf("%d:9848", ports.grpc), "-p", fmt.Sprintf("%d:9849", ports.control), canonical)
 	if err != nil {
 		return fmt.Errorf("observe: docker run nacos: %w: %s", err, strings.TrimSpace(out))
