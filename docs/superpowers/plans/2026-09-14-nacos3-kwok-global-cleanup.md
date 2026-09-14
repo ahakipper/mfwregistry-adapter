@@ -121,8 +121,10 @@ Docker, Cobra, zap, Prometheus, Go test/race/vet, and the existing testkit.
       decoding is a Task 1.2 responsibility because the adapter does not yet
       exist in this RED task.
 - [ ] Add tests for namespace/group/service/cluster identity and metadata.
-- [ ] Add tests for SDK-only failover, timeout, auth, TLS configuration, and
-      complete disabled/unhealthy reads.
+- [ ] Keep the existing facade failover/timeout/auth/TLS/complete-read tests as
+      a regression baseline; concrete SDK-only routing and configuration
+      assertions are a Task 1.2 responsibility because the vendor adapter is
+      not constructed in this RED task.
 - [ ] Add a static test that no production Nacos operation constructs a
       `net/http` request outside the explicitly removed compatibility package.
 - [ ] Run the focused tests and verify they fail before implementation.
@@ -144,6 +146,9 @@ Docker, Cobra, zap, Prometheus, Go test/race/vet, and the existing testkit.
       `RegisterInstanceRequest`/`DeregisterInstanceRequest` request types,
       Nacos 3 naming method names, and `Ephemeral=false`; a seam-only fake is
       insufficient for this task.
+- [ ] Add concrete SDK-only tests for failover, timeout, auth, TLS configuration,
+      complete disabled/unhealthy reads, and error propagation across every
+      operation-specific method.
 - [ ] Route persistent register, deregister, select-all, service-list, and
       subscription operations through gRPC.
 - [ ] Preserve the existing retry classification and server-list failover.
