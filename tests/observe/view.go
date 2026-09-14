@@ -11,16 +11,18 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	spotternacos "spotter/pkg/nacos"
 )
 
-// The remote read side (dsca-4 §4.3 step 2 / §6.2's corrected engine): the
-// nacos v1 instance/list view UNIONED with the admin catalog view, per
-// service, max-count set semantics (the assert.go unionClusterView
-// discipline: cross-view overlap collapses, a within-one-view duplicate
-// survives so duplicate detection keeps its teeth). The union keeps the
-// ENABLED flag per id: an enabled=false entry the list hides becomes
-// visible through the catalog (the exact state spotter's own unhealthy
-// pushes write — a disabled zombie must be an observable divergence).
+// The remote read side (dsca-4 §4.3 step 2 / §6.2's corrected engine) uses
+// the official Nacos 3 SDK for live Observe runs. The legacy v1
+// instance/list UNIONED with catalog view below is retained only for the
+// explicit HTTP fixture tests, preserving their max-count set semantics
+// (cross-view overlap collapses, while a within-one-view duplicate survives
+// so duplicate detection keeps its teeth). The live SDK catalog includes the
+// ENABLED flag for disabled entries, so a disabled zombie remains observable.
 //
 // Read failures are OBSERR material, never divergence evidence: a 5xx
 // whose body carries the Raft-leaderless signature classifies as
@@ -33,13 +35,35 @@ import (
 type nacosView struct {
 	addr string
 	http *http.Client
+	// sdk is the active Nacos 3 read/write path used by real Observe runs.
+	// The HTTP client remains only for unit fixtures and historical Nacos 2
+	// compatibility tests; it is never initialized by newNacosView.
+	sdk    *spotternacos.Client
+	sdkErr error
 }
 
 func newNacosView(addr string) *nacosView {
-	return &nacosView{addr: "http://" + addr, http: sharedHTTP}
+	client, err := spotternacos.NewClientWithConfig(spotternacos.ClientConfig{
+		ServerURL:     addr,
+		TransportMode: spotternacos.TransportSDK,
+		NamespaceID:   nacosNamespace,
+		GroupName:     nacosGroup,
+		Timeout:       10 * time.Second,
+	}, nil)
+	return &nacosView{addr: "http://" + addr, sdk: client, sdkErr: err}
 }
 
-// nacosHost mirrors the v2.1.0 host shape (pkg/nacos client + assert.go).
+// close releases the official Nacos 3 SDK session owned by a live Observe
+// run. Fixture views constructed directly in unit tests have no SDK session
+// and therefore remain no-ops.
+func (v *nacosView) close() {
+	if v != nil && v.sdk != nil {
+		_ = v.sdk.Close()
+	}
+}
+
+// nacosHost mirrors the historical v1 fixture response shape. Live Nacos 3
+// values are converted from pkg/nacos.Host at the SDK boundary above.
 type nacosHost struct {
 	InstanceID  string            `json:"instanceId"`
 	IP          string            `json:"ip"`
@@ -97,6 +121,36 @@ func isLeaderlessErr(err error) bool {
 // list only serves enabled=true ids, so an id visible in the list is
 // enabled; the catalog's flag is authoritative for hidden ids).
 func (v *nacosView) fullServiceView(service string) (serviceView, error) {
+	if v.sdkErr != nil {
+		return nil, fmt.Errorf("nacos sdk view unavailable: %w", v.sdkErr)
+	}
+	if v.sdk != nil {
+		hosts, err := v.sdk.ListCatalogInstances(service, "k8s")
+		if err != nil {
+			return nil, err
+		}
+		entries := make([]remoteEntry, 0, len(hosts))
+		for _, host := range hosts {
+			entry := nacosHost{
+				InstanceID:  host.InstanceID,
+				IP:          host.IP,
+				Port:        host.Port,
+				Enabled:     host.Enabled,
+				ClusterName: host.ClusterName,
+				ServiceName: host.ServiceName,
+				Metadata:    host.Metadata,
+			}
+			entries = append(entries, remoteEntry{ID: domainIDOf(entry), Enabled: host.Enabled, CompositeID: host.InstanceID})
+		}
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].ID == entries[j].ID {
+				return entries[i].CompositeID < entries[j].CompositeID
+			}
+			return entries[i].ID < entries[j].ID
+		})
+		return serviceView{"k8s": entries}, nil
+	}
+
 	listIDs, listErr := v.listView(service)
 	catalogIDs, catalogErr := v.catalogView(service, "k8s")
 	if listErr != nil && catalogErr != nil {
@@ -294,6 +348,23 @@ func truncateBody(body string) string {
 const probeService = "obs-env-probe"
 
 func (v *nacosView) writeProbe() error {
+	if v.sdkErr != nil {
+		return fmt.Errorf("nacos write probe SDK unavailable: %w", v.sdkErr)
+	}
+	if v.sdk != nil {
+		return v.sdk.RegisterInstance(spotternacos.InstanceParams{
+			ServiceName: probeService,
+			IP:          "127.0.0.1",
+			Port:        39998,
+			ClusterName: "probe",
+			GroupName:   nacosGroup,
+			NamespaceID: nacosNamespace,
+			Enabled:     true,
+			Ephemeral:   false,
+			Metadata:    map[string]string{"spotterOwner": "spotter", "probe": "readiness"},
+		})
+	}
+
 	target := v.addr + "/nacos/v1/ns/instance?" + url.Values{
 		"serviceName": {probeService},
 		"ip":          {"127.0.0.1"},
@@ -322,6 +393,22 @@ func (v *nacosView) writeProbe() error {
 
 // probeRemove deletes the probe instance (harness teardown hygiene).
 func (v *nacosView) probeRemove() error {
+	if v.sdkErr != nil {
+		return fmt.Errorf("nacos probe cleanup SDK unavailable: %w", v.sdkErr)
+	}
+	if v.sdk != nil {
+		return v.sdk.DeregisterInstance(spotternacos.InstanceParams{
+			ServiceName: probeService,
+			IP:          "127.0.0.1",
+			Port:        39998,
+			ClusterName: "probe",
+			GroupName:   nacosGroup,
+			NamespaceID: nacosNamespace,
+			Enabled:     true,
+			Ephemeral:   false,
+		})
+	}
+
 	target := v.addr + "/nacos/v1/ns/instance?" + url.Values{
 		"serviceName": {probeService},
 		"ip":          {"127.0.0.1"},

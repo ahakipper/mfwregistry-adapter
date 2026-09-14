@@ -35,6 +35,21 @@ func TestNacosPortMappings(t *testing.T) {
 	}
 }
 
+func TestNacosGRPCEndpointUsesNacos3PortOffset(t *testing.T) {
+	got, err := nacosGRPCEndpoint("127.0.0.1:28848")
+	if err != nil {
+		t.Fatalf("nacosGRPCEndpoint() error = %v", err)
+	}
+	if got != "127.0.0.1:29848" {
+		t.Fatalf("nacosGRPCEndpoint() = %q, want 127.0.0.1:29848", got)
+	}
+	for _, addr := range []string{"127.0.0.1", "127.0.0.1:0", "127.0.0.1:65000"} {
+		if _, err := nacosGRPCEndpoint(addr); err == nil {
+			t.Fatalf("nacosGRPCEndpoint(%q) returned nil error", addr)
+		}
+	}
+}
+
 func TestObserveCommandHelpersHonorCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

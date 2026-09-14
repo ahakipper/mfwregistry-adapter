@@ -6,36 +6,37 @@ package observe
 import (
 	"context"
 	"fmt"
-	"net/http"
+	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
 
-// The throwaway-nacos lifecycle (dsca-4 §4.1): a fresh
-// nacos/nacos-server:v2.1.0 docker container on a scratch host port
+// The throwaway-Nacos lifecycle (dsca-4 §4.1): a fresh
+// nacos/nacos-server:v3.2.4-slim docker container on a scratch host port
 // (28848 -> container 8848), pinned heap, health-gated, owned by the
-// harness, removed by the harness. The image tag is the same one the soak
-// stack runs (verified: `docker inspect soak-nacos --format
-// '{{.Config.Image}}'` -> nacos/nacos-server:v2.1.0), so no pull is needed
-// on this host; a missing image is a startup error the caller surfaces.
+// harness, removed by the harness. The image is pinned to the verified
+// ARM64 digest below; a missing image is a startup error the caller surfaces.
+// Observe readiness uses the Nacos 3 naming gRPC listener, not the removed
+// Nacos 2 /nacos/v1 HTTP endpoints.
 //
 // The demo's nacos (18848) and the soak compose's are never addressed.
 
 // observeNacosContainer is the throwaway container's name.
 const observeNacosContainer = "dsca-observe-nacos"
 
-// nacosImage is the throwaway stack's nacos image (the soak stack's tag).
-const nacosImage = "nacos/nacos-server:v2.1.0-slim"
-const nacosImageDigest = "sha256:e689b1c79ca4a391fc478b6b28eac74916bfe569f37abaa8145c156cefe45067"
+// nacosImage is the target Observe image. The digest is the ARM64
+// linux/arm64 manifest verified on the local Apple Silicon host.
+const nacosImage = "nacos/nacos-server:v3.2.4-slim"
+const nacosImageDigest = "sha256:2a6d445d567b04c81404a3569309b07bfaf077216dbc3a92c0f56c9113034fb5"
 const nacosPlatform = "linux/arm64"
 
-// nacosHealthWait boot-waits a fresh standalone nacos: the container start
-// plus the ARM/colima JVM's rebuild window (the soak's (d)-scenario
-// pathology — readiness returns before the naming service serves derby
-// data, so the gate is the SERVICE LIST answering, the assert.go
-// nsAPIReady discipline: a 200 with a non-empty count).
+// nacosHealthWait boot-waits a fresh standalone Nacos 3 instance. The gate is
+// the naming gRPC listener (container 9848, host port +1000), not a Nacos 2
+// /nacos/v1 HTTP endpoint. SDK-level read/write readiness is performed after
+// this transport gate by the observe view.
 func nacosHealthWait(addr string, bound time.Duration) error {
 	if bound <= 0 {
 		return fmt.Errorf("nacos health wait bound must be positive")
@@ -49,15 +50,11 @@ func nacosHealthWaitContext(ctx context.Context, addr string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	base := "http://" + addr
 	var lastErr error
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		// readiness endpoint first (fast fail), then the naming-service gate.
-		if err := httpGetOKContext(ctx, base+"/nacos/v1/console/health/readiness"); err != nil {
-			lastErr = err
-		} else if err := nacosNamingServingContext(ctx, base); err != nil {
+		if err := nacosNamingServingContext(ctx, addr); err != nil {
 			lastErr = err
 		} else {
 			return nil
@@ -73,46 +70,41 @@ func nacosHealthWaitContext(ctx context.Context, addr string) error {
 	}
 }
 
-// nacosNamingServing reports whether the v1 naming API serves its persisted
-// data (the console readiness endpoint turns 200 while the naming service
-// is still rebuilding on a fresh ARM/colima JVM — an empty service list
-// must NOT pass the gate). A fresh empty server legitimately answers
-// count=0: this is a THROWAWAY server, so "serving" here means the endpoint
-// answers 200 at all — the rebuild blindness only matters for a server
-// that had data (the soak's restart scenario). The gate therefore accepts
-// a 200 and distinguishes connection errors.
-func nacosNamingServing(base string) error {
-	return nacosNamingServingContext(context.Background(), base)
+// nacosNamingServing reports whether the Nacos 3 naming gRPC listener is
+// accepting connections. It is intentionally only a transport gate; callers
+// must use the official SDK for naming reads and writes.
+func nacosNamingServing(addr string) error {
+	return nacosNamingServingContext(context.Background(), addr)
 }
 
-func nacosNamingServingContext(ctx context.Context, base string) error {
-	return httpGetOKContext(ctx, base+"/nacos/v1/ns/service/list?pageNo=1&pageSize=1&groupName=DEFAULT_GROUP&namespaceId=public")
-}
-
-// httpGetOK issues one GET and reports non-2xx / transport errors.
-func httpGetOK(target string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), observeCommandTimeout)
-	defer cancel()
-	return httpGetOKContext(ctx, target)
-}
-
-func httpGetOKContext(ctx context.Context, target string) error {
+func nacosNamingServingContext(ctx context.Context, addr string) error {
+	endpoint, err := nacosGRPCEndpoint(addr)
+	if err != nil {
+		return err
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	dialer := &net.Dialer{Timeout: 2 * time.Second}
+	conn, err := dialer.DialContext(ctx, "tcp", endpoint)
 	if err != nil {
-		return err
+		return fmt.Errorf("nacos naming gRPC %s: %w", endpoint, err)
 	}
-	response, err := sharedHTTP.Do(req) //nolint:gosec // fixed loopback URL
+	return conn.Close()
+}
+
+// nacosGRPCEndpoint maps the configured Nacos HTTP port to the Nacos 3
+// naming gRPC port. Nacos's documented default is HTTP+1000 (8848→9848).
+func nacosGRPCEndpoint(addr string) (string, error) {
+	host, portText, err := net.SplitHostPort(addr)
 	if err != nil {
-		return err
+		return "", fmt.Errorf("nacos address %q must be host:port: %w", addr, err)
 	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode >= 300 {
-		return fmt.Errorf("GET %s answered %d", target, response.StatusCode)
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 64535 {
+		return "", fmt.Errorf("nacos address %q has invalid HTTP port", addr)
 	}
-	return nil
+	return net.JoinHostPort(host, strconv.Itoa(port+1000)), nil
 }
 
 // nacosHostPort extracts the host port from a host:port address.
@@ -155,7 +147,7 @@ func dockerRunNacos(hostPort int) error {
 	}
 	out, err := runCommand("docker", "run", "-d", "--name", observeNacosContainer,
 		"--platform", nacosPlatform,
-		"-e", "MODE=standalone", "-e", "JVM_XMS=512m", "-e", "JVM_XMX=512m",
+		"-e", "MODE=standalone", "-e", "NACOS_AUTH_ENABLE=false", "-e", "JVM_XMS=512m", "-e", "JVM_XMX=512m",
 		"-p", fmt.Sprintf("%d:8848", hostPort), "-p", fmt.Sprintf("%d:9848", ports.grpc), "-p", fmt.Sprintf("%d:9849", ports.control), canonical)
 	if err != nil {
 		return fmt.Errorf("observe: docker run nacos: %w: %s", err, strings.TrimSpace(out))

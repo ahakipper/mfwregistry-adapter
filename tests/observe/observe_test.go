@@ -99,6 +99,7 @@ func TestObserveConsistency(t *testing.T) {
 	harnessLog.event("throwaway nacos ready at %s", cfg.NacosAddr)
 
 	view := newNacosView(cfg.NacosAddr)
+	defer view.close()
 	metrics := newMetricsView(cfg.MetricsPort)
 
 	// The embedded etcd (the child's elector campaigns here — the demo's
