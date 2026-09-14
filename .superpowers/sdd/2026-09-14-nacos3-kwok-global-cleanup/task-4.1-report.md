@@ -38,6 +38,12 @@ The `TestObserveConsistency` two-hour run was not started by this task. Task
 4.2 must run it with a real kwokctl cluster and record the complete JSONL
 source/cache/Nacos comparison before any scale PASS is claimed.
 
+The acceptance record distinguishes `exactEqual` ticks from transitional
+ticks. A tick is exact only when the bidirectional comparison has no missing,
+extra, duplicate, or disabled mismatch. A mutation-period mismatch remains
+visible in JSONL and must resolve within `OBS_BOUND`; it is not silently
+treated as exact.
+
 ## Independent review addendum
 
 The first independent review found that a TCP-only gate could allow the child

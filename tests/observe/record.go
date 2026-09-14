@@ -25,6 +25,7 @@ type tickRecord struct {
 	Source     sideCount    `json:"source"`
 	Remote     sideCount    `json:"remote"`
 	InFlight   int          `json:"inFlight"`
+	ExactEqual bool         `json:"exactEqual"`
 	Divergence []divergence `json:"divergences"`
 	Env        envState     `json:"env"`
 	Queue      queueState   `json:"queue"`
@@ -124,13 +125,15 @@ type runSummary struct {
 	ReconcileSource  string  `json:"reconcileSource"`
 
 	// Ticks
-	Ticks            int     `json:"ticks"`
-	Consistent       int     `json:"consistent"`
-	Divergent        int     `json:"divergent"`
-	ObsErr           int     `json:"obserr"`
-	ConsistencyRatio float64 `json:"consistencyRatio"`
-	ObsErrRatio      float64 `json:"obserrRatio"`
-	MaxObsErrStreak  int     `json:"maxObserrStreak"`
+	Ticks             int     `json:"ticks"`
+	Consistent        int     `json:"consistent"`
+	Divergent         int     `json:"divergent"`
+	ObsErr            int     `json:"obserr"`
+	ConsistencyRatio  float64 `json:"consistencyRatio"`
+	ExactEqualTicks   int     `json:"exactEqualTicks"`
+	TransitionalTicks int     `json:"transitionalTicks"`
+	ObsErrRatio       float64 `json:"obserrRatio"`
+	MaxObsErrStreak   int     `json:"maxObserrStreak"`
 
 	// Scale criterion
 	TicksSourceGEBase      int     `json:"ticksSourceGeBase"`
@@ -234,6 +237,7 @@ func renderSummaryMarkdown(s runSummary) string {
 	b.WriteString(fmt.Sprintf("Total %d: CONSISTENT %d, DIVERGENT %d, OBSERR %d (ratio %.4f, max streak %d)\n",
 		s.Ticks, s.Consistent, s.Divergent, s.ObsErr, s.ObsErrRatio, s.MaxObsErrStreak))
 	b.WriteString(fmt.Sprintf("Consistency ratio: %.4f\n", s.ConsistencyRatio))
+	b.WriteString(fmt.Sprintf("Exact-equal ticks: %d; transitional ticks: %d\n", s.ExactEqualTicks, s.TransitionalTicks))
 	b.WriteString(fmt.Sprintf("Scale: source >= %d on %d/%d ticks (%.4f); min source count %d\n",
 		s.Scale, s.TicksSourceGEBase, s.Ticks, s.TicksSourceGEBaseRatio, s.MinSourceCount))
 	b.WriteString("\n## Queue / drops\n\n")

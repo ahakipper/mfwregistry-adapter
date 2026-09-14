@@ -274,18 +274,20 @@ type observeRun struct {
 
 	windowStart time.Time
 
-	tickCount       int
-	consistent      int
-	divergent       int
-	obsErr          int
-	sourceGEBase    int
-	minSource       int
-	maxInFlight     int
-	maxRetryDepth   int
-	maxRobotDepth   int
-	droppedTotal    float64
-	obsErrStreak    int
-	maxObsErrStreak int
+	tickCount         int
+	consistent        int
+	divergent         int
+	obsErr            int
+	sourceGEBase      int
+	minSource         int
+	maxInFlight       int
+	maxRetryDepth     int
+	maxRobotDepth     int
+	droppedTotal      float64
+	obsErrStreak      int
+	maxObsErrStreak   int
+	exactEqualTicks   int
+	transitionalTicks int
 
 	// Latency percentiles (the last scrape's histogram — cumulative).
 	latency *histogramSnapshot
@@ -624,6 +626,11 @@ func (r *observeRun) observeTick(t *testing.T, tickNo int) tickRecord {
 // recordTick folds one tick record into the run's aggregates.
 func (r *observeRun) recordTick(t *testing.T, record tickRecord) {
 	r.tickCount++
+	if record.ExactEqual {
+		r.exactEqualTicks++
+	} else if record.InFlight == len(record.Divergence) {
+		r.transitionalTicks++
+	}
 	// §4.5's env-overlap separation: a DIVERGENT tick whose tick overlaps
 	// an open env window is tagged env-overlap (still recorded as
 	// divergent — the honest log — but the summary separates it from
@@ -753,6 +760,8 @@ func (r *observeRun) evaluate(t *testing.T, stamp string, windowElapsed time.Dur
 		MaxRetryDepth:     r.maxRetryDepth,
 		MaxRobotDepth:     r.maxRobotDepth,
 		DroppedTotal:      r.droppedTotal,
+		ExactEqualTicks:   r.exactEqualTicks,
+		TransitionalTicks: r.transitionalTicks,
 		DrainedAtEnd:      r.lastDrainZero && !r.drainBreach,
 		MaxHeal:           r.tracker.maxHeal().Round(time.Millisecond).String(),
 		EnvWindows:        r.envWindows,
@@ -1041,6 +1050,7 @@ func runTick(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosVi
 	diffResult := diffResult{Divergences: divergences, InFlightCount: inFlight}
 	record.Verdict = string(tickVerdict(diffResult))
 	record.Divergence = divergences
+	record.ExactEqual = len(divergences) == 0
 
 	// 6. The queue state rides the record (metrics scrape failure leaves
 	// the queue unobserved but never fails the tick — the drain criterion
