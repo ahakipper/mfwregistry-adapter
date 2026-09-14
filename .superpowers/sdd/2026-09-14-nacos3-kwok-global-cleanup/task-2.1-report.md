@@ -79,3 +79,14 @@ Rollback scope:
 
 Task file updated with the implemented behavior at:
 `.superpowers/sdd/2026-09-14-nacos3-kwok-global-cleanup/task-2.1-report.md`
+
+## Independent review addendum
+
+The Stage 2 implementation was independently reviewed after commit
+`95cc92d23eff44d4eeabadb543d38d2043eaa8d4`. The review was PASS with no P0/P1
+findings. One P2 usability follow-up remains: the policy is available through
+the typed config/composition path but is not exposed as a CLI flag, so ordinary
+operator startup uses the intended `deployment-owned` default. Adding an
+explicit `--nacos-health-policy` switch is deferred until an operational need
+for `admin-managed` is established; this omission does not block the current
+Nacos 3 SDK path.
