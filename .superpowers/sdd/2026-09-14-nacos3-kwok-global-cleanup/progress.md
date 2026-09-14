@@ -205,3 +205,9 @@ passed.
 Ruling: The P1 is resolved. Stage 4.1 is accepted with the explicit local
 scratch-auth deviation documented; Task 4.2 remains the unverified real
 kwok scale gate.
+
+Task 4.1 review round 2: PASS. A fresh reviewer reran the tagged Observe suite,
+race suite, focused lifecycle tests, and `go vet -tags observe`. The reviewer
+confirmed the direct SDK canary, Nacos 3 image/platform pin, gRPC readiness,
+SDK-backed live reads/probes, fixture-only HTTP fallback, and cleanup. The
+two-hour kwok run remains correctly NOT VERIFIED; no P0/P1 findings remain.
