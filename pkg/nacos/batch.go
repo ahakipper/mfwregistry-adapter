@@ -1,7 +1,9 @@
 package nacos
 
 import (
+	"fmt"
 	"sync"
+	"time"
 
 	"spotter/internal/domain/instance"
 )
@@ -101,6 +103,33 @@ type persistentBatchScope struct {
 	cluster   string
 }
 
+func waitForPersistentBatch(c *Client, key persistentBatchKey, params []InstanceParams) error {
+	want := make(map[string]InstanceParams, len(params))
+	for _, p := range params {
+		want[instanceID(p)] = p
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		hosts, err := c.ListCatalogInstances(key.Service, key.Cluster)
+		if err != nil {
+			return err
+		}
+		seen := 0
+		for _, h := range hosts {
+			p, ok := want[h.InstanceID]
+			if !ok || h.IP != p.IP || h.Port != p.Port || h.ClusterName != p.ClusterName || h.ServiceName != p.ServiceName || h.Ephemeral || h.Enabled != p.Enabled || h.Healthy != p.Enabled {
+				continue
+			}
+			seen++
+		}
+		if seen == len(want) {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("nacos: persistent batch convergence timeout for %s/%s (%d items)", key.Service, key.Cluster, len(params))
+}
+
 // pushPersistentBatches executes a full snapshot as application-scoped,
 // bounded batches. Batches sharing namespace/group/service/cluster are
 // serialized in first-seen order; independent scopes overlap. A single global
@@ -172,10 +201,35 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 								validIndexes = append(validIndexes, batch.Indexes[position])
 							}
 						}
-						if err := s.client.sdk.RegisterPersistentBatch(params); err != nil {
-							for _, index := range validIndexes {
-								if errs[index] == nil {
-									errs[index] = err
+						var wg sync.WaitGroup
+						var mu sync.Mutex
+						for pos, p := range params {
+							pos, p := pos, p
+							wg.Add(1)
+							go func() {
+								defer wg.Done()
+								semaphore <- struct{}{}
+								err := s.client.sdk.RegisterPersistent(p)
+								<-semaphore
+								if err != nil {
+									mu.Lock()
+									errs[validIndexes[pos]] = err
+									mu.Unlock()
+								}
+							}()
+						}
+						wg.Wait()
+						failed := false
+						for _, idx := range validIndexes {
+							if errs[idx] != nil {
+								failed = true
+								break
+							}
+						}
+						if !failed && s.client.sdk.vendor != nil {
+							if err := waitForPersistentBatch(s.client, batch.Key, params); err != nil {
+								for _, idx := range validIndexes {
+									errs[idx] = err
 								}
 							}
 						}

@@ -308,7 +308,7 @@ func (r *replacementBatchRecorder) RegisterInstance(p vo.RegisterInstanceParam) 
 	}
 	// Single-register semantics on one gRPC connection replace the service
 	// publication; this models the Nacos 3 behavior exposed by the SDK proxy.
-	r.byScope[key] = map[string]bool{p.Metadata["instanceId"]: true}
+	r.byScope[key][fmt.Sprintf("%s#%d#%s#%s@@%s", p.Ip, p.Port, p.ClusterName, p.GroupName, p.ServiceName)] = true
 	return true, nil
 }
 func (r *replacementBatchRecorder) BatchRegisterInstance(vo.BatchRegisterInstanceParam) (bool, error) {
