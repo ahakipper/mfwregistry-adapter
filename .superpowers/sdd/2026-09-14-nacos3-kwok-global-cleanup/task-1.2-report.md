@@ -21,7 +21,7 @@ objects while preserving persistent (`Ephemeral=false`) semantics.
   longer creates the SDK NamingClient HTTP delegate for business operations.
 - Reused the long-lived gRPC facade for instance/catalog reads; each read is a
   direct query RPC and does not create a short-lived cached client.
-- Replaced the incorrect per-service `InstanceRequest` lifecycle with the
+- Replaced the incorrect per-service ephemeral `InstanceRequest` lifecycle with the
   official SDK `PersistentInstanceRequest` protobuf over a dedicated SDK RPC
   client. This preserves persistent semantics and allows each logical <=100
   scheduler batch to issue safe per-item writes without replacement loss.
@@ -54,9 +54,12 @@ NACOS_SERVER=127.0.0.1:38848 NACOS_REAL_SCRATCH=1 NACOS_REAL_ALLOW_WRITE=1 \
   go test -tags=nacos_real ./tests/e2e/... \
   -run '^TestNacosRealPersistentApplicationBatch$' -count=1
 PASS: entries=201 batch_max=100 batches=3
-final_catalog_hash=ed36aa2483d2ba0feb77c912c5b45825e485753500e5d420bde2914f43763781
+final_catalog_hash=ff7c0cead49d390e63d0fe3685868c0d148de4dacbae7d1996c410a858604111
 residual_unknown=false
 ```
+
+The exact convergence barrier is active in production wiring; it validates
+the complete expected ID set and fields before `PushAll` is allowed to prune.
 
 The SDK-mode black-box fixture serves HTTP only; its lifecycle calls now return
 the expected gRPC connection-unavailable error and the test confirms no
