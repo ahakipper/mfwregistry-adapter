@@ -712,6 +712,16 @@ func (k *k8s) CompareAndFlush() {
 			k.logger.Errorf("get all instances from atlas failed")
 		}
 		if list == nil || list.Instance == nil || len(list.Instance) == 0 {
+			if k.nacosReconcile {
+				// A Nacos-backed cold start must use the complete snapshot
+				// path. Emitting one incremental event per Pod here lets a
+				// large informer burst overflow the bounded event queue before
+				// the sink can apply its application-scoped batches. The full
+				// event carries the same generation/revalidation barrier used
+				// by periodic SyncAll and therefore preserves prune safety.
+				k.emitSyncAll()
+				return
+			}
 			for _, ins := range all {
 				k.buildAndSendEvent(ins)
 			}

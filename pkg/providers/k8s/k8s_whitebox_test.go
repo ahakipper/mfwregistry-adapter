@@ -1139,6 +1139,24 @@ func TestCompareAndFlushEmptyRemoteListPushesAll(t *testing.T) {
 	}
 }
 
+func TestCompareAndFlushNacosReconcileEmptyRemoteUsesOneFullSnapshot(t *testing.T) {
+	podA := newValidPod("msp", "pod-a")
+	podB := newValidPod("msp", "pod-b")
+	robot := newFakeRobot(nil, []interface{}{podA, podB}, false)
+	w := &fakeWorker{getAllResponse: &sv.InstanceList{}}
+	k := newTestProvider(robot, w)
+	k.SetNacosReconcileSource(true)
+
+	k.CompareAndFlush()
+	events := w.waitForHandles(t, 1)
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want one full snapshot event", len(events))
+	}
+	if events[0].Operate != worker.OperateTypeSyncAll || len(events[0].Data) != 2 {
+		t.Fatalf("event = operate=%q data=%d, want SyncAll with two instances", events[0].Operate, len(events[0].Data))
+	}
+}
+
 func TestCompareAndFlushGetAllErrorPushesAll(t *testing.T) {
 	pod := newValidPod("msp", "pod-a")
 	robot := newFakeRobot(nil, []interface{}{pod}, false)
