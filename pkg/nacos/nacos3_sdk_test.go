@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/nacos-group/nacos-sdk-go/v3/common/remote/codec"
 	"github.com/nacos-group/nacos-sdk-go/v3/model"
 	namingproto "github.com/nacos-group/nacos-sdk-proto/go/naming"
 )
@@ -159,5 +160,12 @@ func TestNacos3PersistentProtoContract(t *testing.T) {
 	}
 	if deregisterProto.GetType() != "deregisterInstance" || deregisterProto.GetInstance().GetEphemeral() {
 		t.Fatalf("deregister proto = %+v, want deregisterInstance with Ephemeral=false", deregisterProto)
+	}
+	payload, err := codec.NewPayloadCodec().Encode("PersistentInstanceRequest", register.ProtoMessage(), register.GetHeaders(), "127.0.0.1")
+	if err != nil || payload == nil {
+		t.Fatalf("codec encode: %v", err)
+	}
+	if payload.GetMetadata().GetType() != "PersistentInstanceRequest" {
+		t.Fatalf("metadata type=%q", payload.GetMetadata().GetType())
 	}
 }

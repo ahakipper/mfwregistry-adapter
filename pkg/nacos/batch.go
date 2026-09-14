@@ -2,7 +2,6 @@ package nacos
 
 import (
 	"sync"
-	"time"
 
 	"spotter/internal/domain/instance"
 )
@@ -142,8 +141,6 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 		scopes.Add(1)
 		go func() {
 			defer scopes.Done()
-			var sdkItems []InstanceParams
-			var sdkIndexes []int
 			for batchNumber, batch := range batchesForScope {
 				// Keep the batch boundary observable through the existing logger
 				// seam. This is intentionally metadata-only: persistent instances
@@ -169,8 +166,19 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 						params = append(params, InstanceParams{ServiceName: ins.AppCode, IP: ins.Ip, Port: firstPort(ins), ClusterName: clusterOf(ins), GroupName: batch.Key.Group, NamespaceID: batch.Key.Namespace, Enabled: enabled, Ephemeral: false, Metadata: metadataOf(ins)})
 					}
 					if len(params) > 0 {
-						sdkItems = append(sdkItems, params...)
-						sdkIndexes = append(sdkIndexes, batch.Indexes...)
+						validIndexes := make([]int, 0, len(params))
+						for position, item := range batch.Items {
+							if item.Ip != "" {
+								validIndexes = append(validIndexes, batch.Indexes[position])
+							}
+						}
+						if err := s.client.sdk.RegisterPersistentBatch(params); err != nil {
+							for _, index := range validIndexes {
+								if errs[index] == nil {
+									errs[index] = err
+								}
+							}
+						}
 					}
 					continue
 				}
@@ -187,27 +195,6 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 					}()
 				}
 				items.Wait()
-			}
-			if len(sdkItems) > 0 {
-				if err := s.client.sdk.RegisterPersistentBatch(sdkItems); err != nil {
-					for _, index := range sdkIndexes {
-						if errs[index] == nil {
-							errs[index] = err
-						}
-					}
-				} else {
-					// Nacos applies large persistent batch publications
-					// asynchronously. Wait for the complete service view before
-					// PushAll proceeds to prune, otherwise an early partial read can
-					// race the publication and incorrectly reconcile in-flight data.
-					for attempt := 0; attempt < 200; attempt++ {
-						hosts, readErr := s.client.ListCatalogInstances(scope.service, scope.cluster)
-						if readErr == nil && len(hosts) >= len(sdkItems) {
-							break
-						}
-						time.Sleep(50 * time.Millisecond)
-					}
-				}
 			}
 		}()
 	}

@@ -23,6 +23,7 @@ import (
 	"github.com/nacos-group/nacos-sdk-go/v3/common/remote/codec"
 	"github.com/nacos-group/nacos-sdk-go/v3/common/remote/rpc"
 	"github.com/nacos-group/nacos-sdk-go/v3/common/remote/rpc/rpc_request"
+	"github.com/nacos-group/nacos-sdk-go/v3/common/security"
 	"github.com/nacos-group/nacos-sdk-go/v3/inner/uuid"
 	"github.com/nacos-group/nacos-sdk-go/v3/model"
 	"github.com/nacos-group/nacos-sdk-go/v3/vo"
@@ -37,6 +38,7 @@ type grpcSubscription struct {
 type nacos3GRPCVendor struct {
 	proxy      *naming_grpc.NamingGrpcProxy
 	persistent rpc.IRpcClient
+	server     *nacos_server.NacosServer
 	holder     *naming_cache.ServiceInfoHolder
 	fuzzy      *naming_cache.FuzzyWatchServiceListHolder
 	cancel     context.CancelFunc
@@ -166,13 +168,15 @@ func newNacos3GRPCVendor(cfg constant.ClientConfig, servers []constant.ServerCon
 		return nil, err
 	}
 	persistent.GetRpcClient().Start()
-	return &nacos3GRPCVendor{proxy: proxy, persistent: persistent, holder: holder, fuzzy: fuzzy, cancel: cancel, namespace: cfg.NamespaceId, group: constant.DEFAULT_GROUP, timeoutMs: cfg.TimeoutMs, subs: make(map[string][]grpcSubscription)}, nil
+	return &nacos3GRPCVendor{proxy: proxy, persistent: persistent, server: server, holder: holder, fuzzy: fuzzy, cancel: cancel, namespace: cfg.NamespaceId, group: constant.DEFAULT_GROUP, timeoutMs: cfg.TimeoutMs, subs: make(map[string][]grpcSubscription)}, nil
 }
 
 func (v *nacos3GRPCVendor) RegisterPersistent(p InstanceParams) error {
 	p.Ephemeral = false
 	instance := model.Instance{InstanceId: instanceID(p), Ip: p.IP, Port: uint64(p.Port), Weight: 1, Enable: p.Enabled, Healthy: p.Enabled, Ephemeral: false, ClusterName: p.ClusterName, ServiceName: p.ServiceName, Metadata: p.Metadata}
-	response, err := v.persistent.GetRpcClient().Request(&persistentInstanceRequest{Namespace: v.namespace, ServiceName: p.ServiceName, GroupName: effectiveGroupValue(p.GroupName, v.group), Type: "registerInstance", Instance: instance}, int64(v.proxyTimeout()))
+	req := &persistentInstanceRequest{Request: rpc_request.Request{Headers: map[string]string{}}, Namespace: v.namespace, ServiceName: p.ServiceName, GroupName: effectiveGroupValue(p.GroupName, v.group), Type: "registerInstance", Instance: instance}
+	v.server.InjectSecurityInfo(req.GetHeaders(), security.BuildNamingResourceByRequest(req))
+	response, err := v.persistent.GetRpcClient().Request(req, int64(v.proxyTimeout()))
 	ok := response != nil && response.IsSuccess()
 	if err != nil {
 		return classifySDKError(err)
@@ -209,7 +213,9 @@ func (v *nacos3GRPCVendor) proxyTimeout() uint64 {
 func (v *nacos3GRPCVendor) DeregisterPersistent(p InstanceParams) error {
 	p.Ephemeral = false
 	instance := model.Instance{Ip: p.IP, Port: uint64(p.Port), Ephemeral: false, ClusterName: p.ClusterName, ServiceName: p.ServiceName}
-	response, err := v.persistent.GetRpcClient().Request(&persistentInstanceRequest{Namespace: v.namespace, ServiceName: p.ServiceName, GroupName: effectiveGroupValue(p.GroupName, v.group), Type: "deregisterInstance", Instance: instance}, int64(v.proxyTimeout()))
+	req := &persistentInstanceRequest{Request: rpc_request.Request{Headers: map[string]string{}}, Namespace: v.namespace, ServiceName: p.ServiceName, GroupName: effectiveGroupValue(p.GroupName, v.group), Type: "deregisterInstance", Instance: instance}
+	v.server.InjectSecurityInfo(req.GetHeaders(), security.BuildNamingResourceByRequest(req))
+	response, err := v.persistent.GetRpcClient().Request(req, int64(v.proxyTimeout()))
 	ok := response != nil && response.IsSuccess()
 	if err != nil {
 		return classifySDKError(err)

@@ -25,6 +25,8 @@ objects while preserving persistent (`Ephemeral=false`) semantics.
   official SDK `PersistentInstanceRequest` protobuf over a dedicated SDK RPC
   client. This preserves persistent semantics and allows each logical <=100
   scheduler batch to issue safe per-item writes without replacement loss.
+- Persistent request headers are populated through the official SDK security
+  resource builder before every RPC, preserving configured authentication.
 - Preserved SDK server-list failover, timeout, username/password auth, TLS CA,
   server-name, and insecure-skip-verify configuration, plus isolated cache
   ownership and bounded close behavior.
