@@ -211,3 +211,24 @@ race suite, focused lifecycle tests, and `go vet -tags observe`. The reviewer
 confirmed the direct SDK canary, Nacos 3 image/platform pin, gRPC readiness,
 SDK-backed live reads/probes, fixture-only HTTP fallback, and cleanup. The
 two-hour kwok run remains correctly NOT VERIFIED; no P0/P1 findings remain.
+
+## Stage 4.2 preflight review findings and rulings
+
+Task 4.2 preflight review round 1: PASS with P2 test-coverage follow-up. The
+reviewer confirmed the kwokctl v0.8 kubeconfig path, fake Node/capacity setup,
+canonical quantity handling, bounded 100-item Pod deletion, Nacos 3 ARM64
+scratch environment, SDK readiness retry, state ownership validation, and
+cleanup behavior. Follow-up verification of `5df7612` passed shell syntax,
+lifecycle shell tests, `go test -race -tags=observe ./tests/observe`, and
+confirmed the earlier relative-path, node-name, and burst-delete concerns are
+resolved.
+
+P2 follow-up: the shell lifecycle test does not force the fake Node creation or
+`1k` quantity branches because its fake kubectl returns success for the initial
+Node lookup and plain numeric quantities. The real kwokctl run has exercised
+both branches; adding deterministic fake assertions remains useful but is not
+a blocker for the live gate.
+
+Ruling: Stage 4.2 code is accepted and pushed. The definitive 2-hour
+1000-Pod/20-application result must be evaluated only from its complete JSONL
+window and cleanup evidence; until then the scale gate remains NOT VERIFIED.
