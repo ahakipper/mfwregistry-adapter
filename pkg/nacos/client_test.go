@@ -138,7 +138,7 @@ func TestBlackboxClientServerListStopsOn4xx(t *testing.T) {
 	}
 }
 
-func TestBlackboxClientSDKModeUsesOfficialPersistentLifecycle(t *testing.T) {
+func TestBlackboxClientSDKModeUsesGRPCPersistentLifecycle(t *testing.T) {
 	server := nacosmock.Start()
 	defer server.Close()
 	client, err := nacos.NewClientWithConfig(nacos.ClientConfig{
@@ -149,19 +149,17 @@ func TestBlackboxClientSDKModeUsesOfficialPersistentLifecycle(t *testing.T) {
 	}
 	defer func() { _ = client.Close() }()
 	params := nacos.InstanceParams{ServiceName: "sdk-svc", IP: "10.0.0.1", Port: 8080, ClusterName: "k8s", Enabled: true, Ephemeral: false}
-	if err := client.RegisterInstance(params); err != nil {
-		t.Fatalf("SDK RegisterInstance() error = %v", err)
+	_ = client.RegisterInstance(params)
+	for _, req := range server.Requests() {
+		if req.Path == "/nacos/v1/ns/instance" {
+			t.Fatalf("SDK persistent register used legacy HTTP endpoint %s %s; want gRPC RegisterInstanceRequest with ephemeral=false", req.Method, req.Path)
+		}
 	}
-	requests := server.Requests()
-	if len(requests) != 1 || requests[0].Method != "POST" || requests[0].Path != "/nacos/v1/ns/instance" {
-		t.Fatalf("SDK register requests = %v, want one POST to the naming endpoint", requests)
-	}
-	if err := client.DeregisterInstance(params); err != nil {
-		t.Fatalf("SDK DeregisterInstance() error = %v", err)
-	}
-	requests = server.Requests()
-	if len(requests) != 2 || requests[1].Method != "DELETE" || requests[1].Path != "/nacos/v1/ns/instance" {
-		t.Fatalf("SDK deregister requests = %v, want POST then DELETE", requests)
+	_ = client.DeregisterInstance(params)
+	for _, req := range server.Requests() {
+		if req.Path == "/nacos/v1/ns/instance" {
+			t.Fatalf("SDK persistent deregister used legacy HTTP endpoint %s %s; want gRPC DeregisterInstanceRequest with ephemeral=false", req.Method, req.Path)
+		}
 	}
 }
 
