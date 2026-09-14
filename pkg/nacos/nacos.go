@@ -262,7 +262,8 @@ func NewHTTPCompatSink(addr string, logger ports.Logger) (*Sink, error) {
 // TransportMode resolves to the official SDK; callers that need the temporary
 // HTTP path must set TransportHTTPCompat explicitly.
 func NewSinkWithConfig(config ClientConfig, logger ports.Logger) (*Sink, error) {
-	if (config.TransportMode == "" || config.TransportMode == TransportSDK) && config.ClusterAdmin == nil && config.ClusterAdminFactory == nil {
+	if (config.TransportMode == "" || config.TransportMode == TransportSDK) &&
+		config.HealthPolicy == HealthPolicyAdminManaged && config.ClusterAdmin == nil && config.ClusterAdminFactory == nil {
 		// The pinned naming SDK has no cluster-admin health-check operation.
 		// A persistent sink cannot safely start without proving that control
 		// plane is available; fail during startup before accepting writes.
@@ -272,7 +273,7 @@ func NewSinkWithConfig(config ClientConfig, logger ports.Logger) (*Sink, error) 
 	if err != nil {
 		return nil, err
 	}
-	if (config.TransportMode == "" || config.TransportMode == TransportSDK) && client.clusterAdmin == nil {
+	if (config.TransportMode == "" || config.TransportMode == TransportSDK) && config.HealthPolicy == HealthPolicyAdminManaged && client.clusterAdmin == nil {
 		_ = client.Close()
 		return nil, fmt.Errorf("nacos: SDK sink startup blocked: %w (cluster-admin factory returned no facade)", ErrUnsupportedOperation)
 	}
@@ -626,7 +627,7 @@ func (s *Sink) register(ins *instance.Instance) error {
 	if ins.Status == instance.InstanceStatusUnhealthy {
 		enabled = false
 	}
-	if s.client.sdk != nil {
+	if s.shouldApplyHealthPolicy() && s.client.sdk != nil {
 		if err := s.ensureClusterHealthCheckDisabled(ins.AppCode, clusterOf(ins)); err != nil {
 			return fmt.Errorf("nacos: register %s blocked by cluster health-check setup: %w", ins.InstanceId, err)
 		}
@@ -644,7 +645,7 @@ func (s *Sink) register(ins *instance.Instance) error {
 		return fmt.Errorf("nacos: register %s: %w", ins.InstanceId, err)
 	}
 	s.logger.Infof("nacos: registered instance %s as %s", ins.InstanceId, s.compositeID(ins))
-	if s.client.sdk == nil {
+	if s.shouldApplyHealthPolicy() && s.client.sdk == nil {
 		if err := s.ensureClusterHealthCheckDisabled(ins.AppCode, clusterOf(ins)); err != nil {
 			// HTTP compatibility preserves its historical warning-only behavior;
 			// the next push retries the failed claim.
@@ -652,6 +653,10 @@ func (s *Sink) register(ins *instance.Instance) error {
 		}
 	}
 	return nil
+}
+
+func (s *Sink) shouldApplyHealthPolicy() bool {
+	return s != nil && s.client != nil && s.client.config.HealthPolicy == HealthPolicyAdminManaged
 }
 
 // ensureClusterHealthCheckDisabled applies the cluster configuration that
@@ -695,6 +700,9 @@ func (s *Sink) register(ins *instance.Instance) error {
 // semantics above survive; the residual duplicate window is a second Push
 // call racing a FAILED first attempt (bounded, idempotent, harmless).
 func (s *Sink) ensureClusterHealthCheckDisabled(service, cluster string) error {
+	if !s.shouldApplyHealthPolicy() {
+		return nil
+	}
 	key := clusterKeyOf{service: service, cluster: cluster}
 	s.rememberedMu.Lock()
 	if s.healthCheckDone == nil {

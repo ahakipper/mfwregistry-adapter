@@ -301,10 +301,25 @@ func TestSDKUnsupportedClusterAdminFailsClosed(t *testing.T) {
 	}
 }
 
-func TestSDKSinkConstructionFailsFastOnUnsupportedClusterAdmin(t *testing.T) {
-	_, err := NewSinkWithConfig(ClientConfig{ServerURL: "127.0.0.1:8848", TransportMode: TransportSDK}, ports.NopLogger{})
+func TestSDKSinkConstructionDeploymentOwnedPolicyDefaultsToNoAdmin(t *testing.T) {
+	_, err := NewSinkWithConfig(ClientConfig{ServerURL: "127.0.0.1:8848", TransportMode: TransportSDK, HealthPolicy: HealthPolicyDeploymentOwned}, ports.NopLogger{})
+	if err != nil {
+		t.Fatalf("NewSinkWithConfig(deployment-owned policy) error = %v, want nil", err)
+	}
+
+	_, err = NewSinkWithConfig(ClientConfig{ServerURL: "127.0.0.1:8848", TransportMode: TransportSDK}, ports.NopLogger{})
+	if err != nil {
+		t.Fatalf("NewSinkWithConfig(default policy) error = %v, want nil", err)
+	}
+}
+
+func TestSDKSinkConstructionNeedsAdminWhenHealthPolicyIsAdminManaged(t *testing.T) {
+	_, err := NewSinkWithConfig(ClientConfig{ServerURL: "127.0.0.1:8848", TransportMode: TransportSDK, HealthPolicy: HealthPolicyAdminManaged}, ports.NopLogger{})
 	if !errors.Is(err, ErrUnsupportedOperation) {
-		t.Fatalf("NewSinkWithConfig(sdk) error = %v, want ErrUnsupportedOperation", err)
+		t.Fatalf("NewSinkWithConfig(admin-managed policy) error = %v, want ErrUnsupportedOperation", err)
+	}
+	if !strings.Contains(err.Error(), "cluster-health-check-update requires") {
+		t.Fatalf("NewSinkWithConfig(admin-managed) error = %q, want preflight reason", err)
 	}
 }
 
@@ -328,7 +343,7 @@ func TestSDKClientConfigAdminFactoryIsInvoked(t *testing.T) {
 
 func TestSDKSinkAdminFactoryAllowsConstruction(t *testing.T) {
 	admin := &fakeClusterAdmin{}
-	sink, err := NewSinkWithConfig(ClientConfig{ServerURL: "127.0.0.1:8848", TransportMode: TransportSDK, ClusterAdminFactory: func() (NacosClusterAdmin, error) {
+	sink, err := NewSinkWithConfig(ClientConfig{ServerURL: "127.0.0.1:8848", TransportMode: TransportSDK, HealthPolicy: HealthPolicyAdminManaged, ClusterAdminFactory: func() (NacosClusterAdmin, error) {
 		return admin, nil
 	}}, ports.NopLogger{})
 	if err != nil {
@@ -342,9 +357,45 @@ func TestSDKSinkAdminFactoryAllowsConstruction(t *testing.T) {
 	}
 }
 
-func adminTestSink(admin NacosClusterAdmin, naming *fakeSDKNaming, timeout time.Duration) *Sink {
+func TestSDKRuntimeNamingCallsDoNotRequireAdminUnderDeploymentPolicy(t *testing.T) {
+	fake := &fakeSDKNaming{}
+	client := &Client{config: ClientConfig{HealthPolicy: HealthPolicyDeploymentOwned}, sdk: &sdkNamingFacade{client: fake, group: DefaultGroup}}
+	if err := client.RegisterInstance(InstanceParams{ServiceName: "svc", IP: "10.0.0.1", Port: 80}); err != nil {
+		t.Fatalf("RegisterInstance() error = %v", err)
+	}
+	if _, err := client.ListInstances("svc"); err != nil {
+		t.Fatalf("ListInstances() error = %v", err)
+	}
+	if err := client.DeregisterInstance(InstanceParams{ServiceName: "svc", IP: "10.0.0.1", Port: 80}); err != nil {
+		t.Fatalf("DeregisterInstance() error = %v", err)
+	}
+	if err := client.Subscribe("svc", DefaultGroup, nil, func(_ []Host, _ error) {}); err != nil {
+		t.Fatalf("Subscribe() error = %v", err)
+	}
+	if err := client.Unsubscribe("svc", DefaultGroup, nil, func(_ []Host, _ error) {}); err != nil {
+		t.Fatalf("Unsubscribe() error = %v", err)
+	}
+}
+
+func TestSDKAdminManagedPolicyStillPreflightsAdminForPush(t *testing.T) {
+	fake := &fakeSDKNaming{}
+	sink := &Sink{
+		client: &Client{sdk: &sdkNamingFacade{client: fake, group: DefaultGroup}, config: ClientConfig{HealthPolicy: HealthPolicyAdminManaged}},
+		logger: ports.NopLogger{},
+	}
+	ins := &instance.Instance{InstanceId: "pod-a", AppCode: "svc", Provider: "k8s", Ip: "10.0.0.1", Status: instance.InstanceStatusOnline, Enabled: true}
+	err := sink.Push(1, []*instance.Instance{ins})
+	if !errors.Is(err, ErrUnsupportedOperation) {
+		t.Fatalf("SDK sink Push(admin-managed) error = %v, want ErrUnsupportedOperation", err)
+	}
+	if len(fake.registered) != 0 {
+		t.Fatalf("SDK sink issued %d remote register calls despite missing admin", len(fake.registered))
+	}
+}
+
+func adminTestSink(admin NacosClusterAdmin, naming *fakeSDKNaming, timeout time.Duration, healthPolicy HealthPolicy) *Sink {
 	return &Sink{
-		client: &Client{sdk: &sdkNamingFacade{client: naming, group: DefaultGroup}, clusterAdmin: admin, config: ClientConfig{Timeout: timeout}},
+		client: &Client{sdk: &sdkNamingFacade{client: naming, group: DefaultGroup}, clusterAdmin: admin, config: ClientConfig{Timeout: timeout, HealthPolicy: healthPolicy}},
 		logger: ports.NopLogger{}, groupName: DefaultGroup,
 	}
 }
@@ -357,7 +408,7 @@ func TestSDKAdminRunsBeforeBusinessRegister(t *testing.T) {
 	events := []string{}
 	naming := &fakeSDKNaming{events: &events}
 	admin := &fakeClusterAdmin{events: &events}
-	sink := adminTestSink(admin, naming, time.Second)
+	sink := adminTestSink(admin, naming, time.Second, HealthPolicyAdminManaged)
 	if err := sink.register(adminTestInstance()); err != nil {
 		t.Fatalf("register() error = %v", err)
 	}
@@ -369,7 +420,7 @@ func TestSDKAdminRunsBeforeBusinessRegister(t *testing.T) {
 func TestSDKAdminFailurePreventsBusinessRegister(t *testing.T) {
 	naming := &fakeSDKNaming{}
 	admin := &fakeClusterAdmin{err: errors.New("admin unavailable")}
-	sink := adminTestSink(admin, naming, time.Second)
+	sink := adminTestSink(admin, naming, time.Second, HealthPolicyAdminManaged)
 	err := sink.register(adminTestInstance())
 	if err == nil {
 		t.Fatal("register() error = nil, want admin failure")
@@ -388,7 +439,7 @@ func TestSDKAdminConcurrentRegistrationsShareOneUpdate(t *testing.T) {
 	release := make(chan struct{})
 	admin := &fakeClusterAdmin{started: started, release: release}
 	naming := &fakeSDKNaming{}
-	sink := adminTestSink(admin, naming, time.Second)
+	sink := adminTestSink(admin, naming, time.Second, HealthPolicyAdminManaged)
 	results := make(chan error, 2)
 	go func() { results <- sink.register(adminTestInstance()) }()
 	<-started
@@ -413,7 +464,7 @@ func TestSDKAdminConcurrentRegistrationsShareOneUpdate(t *testing.T) {
 
 func TestSDKAdminTimeoutPreventsRegister(t *testing.T) {
 	admin := &fakeClusterAdmin{release: make(chan struct{})}
-	sink := adminTestSink(admin, &fakeSDKNaming{}, 20*time.Millisecond)
+	sink := adminTestSink(admin, &fakeSDKNaming{}, 20*time.Millisecond, HealthPolicyAdminManaged)
 	if err := sink.register(adminTestInstance()); err == nil {
 		t.Fatal("register() error = nil, want timeout")
 	}
@@ -427,22 +478,6 @@ func TestClientAdminCloseIsBoundedAndIdempotent(t *testing.T) {
 	}
 	if err := client.Close(); err == nil || admin.closeCount() != 1 {
 		t.Fatalf("second Close() error=%v calls=%d, want idempotent one close", err, admin.closeCount())
-	}
-}
-
-func TestSDKSinkRegisterFailsClosedBeforeRemoteWrite(t *testing.T) {
-	fake := &fakeSDKNaming{}
-	sink := &Sink{
-		client: &Client{sdk: &sdkNamingFacade{client: fake, group: DefaultGroup}},
-		logger: ports.NopLogger{},
-	}
-	ins := &instance.Instance{InstanceId: "pod-a", AppCode: "svc", Provider: "k8s", Ip: "10.0.0.1", Status: instance.InstanceStatusOnline, Enabled: true}
-	err := sink.Push(1, []*instance.Instance{ins})
-	if !errors.Is(err, ErrUnsupportedOperation) {
-		t.Fatalf("SDK sink Push() error = %v, want ErrUnsupportedOperation", err)
-	}
-	if len(fake.registered) != 0 {
-		t.Fatalf("SDK sink issued %d remote register calls despite unsupported cluster admin, want 0", len(fake.registered))
 	}
 }
 

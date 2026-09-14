@@ -52,6 +52,10 @@ type Deps struct {
 	// sink lifecycle. A nil factory intentionally leaves SDK startup
 	// fail-closed until an approved implementation is supplied.
 	NacosClusterAdminFactory func() (nacos.NacosClusterAdmin, error)
+	// NacosHealthPolicy controls cluster-health-check ownership.
+	// Empty (zero value) defaults to deployment-owned, so no admin facade
+	// is required for naming operations.
+	NacosHealthPolicy nacos.HealthPolicy
 	// Config is the resolved runtime configuration.
 	Config infraconfig.Config
 	// LocalIP resolves the current node IP for leader-loss notices. When
@@ -73,6 +77,7 @@ type Runtime struct {
 	// Metrics records synchronization metrics.
 	Metrics                  ports.MetricsRecorder
 	NacosClusterAdminFactory func() (nacos.NacosClusterAdmin, error)
+	NacosHealthPolicy        nacos.HealthPolicy
 	// Config is the resolved runtime configuration.
 	Config infraconfig.Config
 	// LocalIP resolves the current node IP (never nil).
@@ -162,6 +167,10 @@ func Build(cfg infraconfig.Config, deps Deps) (*Runtime, error) {
 		runtime.Metrics = inframetrics.New()
 	}
 	runtime.NacosClusterAdminFactory = deps.NacosClusterAdminFactory
+	runtime.NacosHealthPolicy = deps.NacosHealthPolicy
+	if runtime.NacosHealthPolicy == "" {
+		runtime.NacosHealthPolicy = cfg.NacosHealthPolicy
+	}
 
 	return runtime, nil
 }

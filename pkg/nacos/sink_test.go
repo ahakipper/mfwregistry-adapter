@@ -30,10 +30,14 @@ func TestBlackboxSinkNameMatchesFanoutConvention(t *testing.T) {
 
 // newSinkAt starts a nacosmock server and builds a Nacos sink over it.
 func newSinkAt(t *testing.T) (*nacos.Sink, *nacosmock.Server) {
+	return newSinkAtWithPolicy(t, nacos.HealthPolicyAdminManaged)
+}
+
+func newSinkAtWithPolicy(t *testing.T, policy nacos.HealthPolicy) (*nacos.Sink, *nacosmock.Server) {
 	t.Helper()
 	server := nacosmock.Start()
 	t.Cleanup(server.Close)
-	sink, err := nacos.NewHTTPCompatSink(server.URL(), &fakes.FakeLogger{})
+	sink, err := nacos.NewSinkWithConfig(nacos.ClientConfig{ServerURL: server.URL(), TransportMode: nacos.TransportHTTPCompat, HealthPolicy: policy}, &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewSink(%s) error = %v", server.URL(), err)
 	}
@@ -107,6 +111,23 @@ func clusterUpdateRequests(server *nacosmock.Server, service, cluster string) []
 // spotter owns health authority (K8s readiness / consul checks drive the
 // pushed enabled flag), so Nacos's own TCP probes must not run on
 // spotter-managed data. The PUT lands AFTER the register it configures.
+func TestBlackboxSinkFirstRegisterInDeploymentOwnedModeSkipsServerSideHealthUpdate(t *testing.T) {
+	sink, server := newSinkAtWithPolicy(t, nacos.HealthPolicyDeploymentOwned)
+
+	ins := domainInstance("pod-a", "pay-user", "10.0.0.1", 8080, "k8s", 1)
+	if err := sink.Push(1, []*instance.Instance{ins}); err != nil {
+		t.Fatalf("Push() error = %v", err)
+	}
+
+	updates := clusterUpdateRequests(server, "pay-user", "k8s")
+	if len(updates) != 0 {
+		t.Fatalf("deployment-owned policy should skip cluster updates, got %d; requests = %v", len(updates), server.Requests())
+	}
+	if got := len(server.Requests()); got != 1 {
+		t.Fatalf("requests = %d, want 1 (only register under deployment-owned policy); requests = %v", got, server.Requests())
+	}
+}
+
 func TestBlackboxSinkFirstRegisterDisablesServerSideHealthCheck(t *testing.T) {
 	sink, server := newSinkAt(t)
 
@@ -210,7 +231,11 @@ func TestBlackboxSinkClusterUpdateFailureDoesNotFailPushAndRetries(t *testing.T)
 		writeStubOK(w)
 	}))
 	defer stub.Close()
-	sink, err := nacos.NewHTTPCompatSink(stub.URL, &fakes.FakeLogger{})
+	sink, err := nacos.NewSinkWithConfig(nacos.ClientConfig{
+		TransportMode: nacos.TransportHTTPCompat,
+		ServerURL:     stub.URL,
+		HealthPolicy:  nacos.HealthPolicyAdminManaged,
+	}, &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewSink(stub) error = %v", err)
 	}
@@ -1618,7 +1643,7 @@ func TestBlackboxSinkCustomGroupAndNamespaceRoundTripAndPrune(t *testing.T) {
 	server := nacosmock.Start()
 	defer server.Close()
 	sink, err := nacos.NewSinkWithConfig(nacos.ClientConfig{
-		TransportMode: nacos.TransportHTTPCompat, ServerURL: server.URL(), NamespaceID: "tenant-a", GroupName: "blue",
+		TransportMode: nacos.TransportHTTPCompat, ServerURL: server.URL(), NamespaceID: "tenant-a", GroupName: "blue", HealthPolicy: nacos.HealthPolicyAdminManaged,
 	}, &fakes.FakeLogger{})
 	if err != nil {
 		t.Fatalf("NewSinkWithConfig() error = %v", err)

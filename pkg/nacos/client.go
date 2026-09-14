@@ -114,6 +114,37 @@ type ServicePage struct {
 	Doms  []string `json:"doms"`
 }
 
+// HealthPolicy controls whether deployment cluster health-check setup is
+// considered pre-provisioned (default) or must be explicitly owned by an
+// injected admin facade.
+type HealthPolicy string
+
+const (
+	// HealthPolicyDeploymentOwned means the deployment is responsible for
+	// Nacos cluster-level health-check configuration; no admin facade is
+	// required for naming operations.
+	HealthPolicyDeploymentOwned HealthPolicy = "deployment-owned"
+	// HealthPolicyAdminManaged requires an injected admin facade and an
+	// explicit preflight before health-check configuration operations.
+	HealthPolicyAdminManaged HealthPolicy = "admin-managed"
+)
+
+func effectiveHealthPolicy(policy HealthPolicy) HealthPolicy {
+	if policy == "" {
+		return HealthPolicyDeploymentOwned
+	}
+	return policy
+}
+
+func (policy HealthPolicy) valid() bool {
+	switch effectiveHealthPolicy(policy) {
+	case HealthPolicyDeploymentOwned, HealthPolicyAdminManaged:
+		return true
+	default:
+		return false
+	}
+}
+
 // Client is the transport-neutral client boundary. When ClientConfig selects
 // TransportSDK, every operation implemented by the official naming SDK routes
 // through sdkNamingFacade; otherwise the explicitly opt-in HTTP compatibility
@@ -140,6 +171,11 @@ type ClientConfig struct {
 	// HTTP compatibility adapter ("http-compat"). Empty resolves to SDK;
 	// callers that need compatibility must opt in explicitly.
 	TransportMode TransportMode
+	// HealthPolicy controls how cluster-level health-check configuration is
+	// handled. The zero value is treated as HealthPolicyDeploymentOwned:
+	// the deployment owns the cluster's health-check setup, so no admin
+	// facade is required for normal naming operations.
+	HealthPolicy HealthPolicy
 	// ServerURL is the legacy single-address setting. When ServerURLs is
 	// non-empty it is ignored; list order is the failover order.
 	ServerURL string
@@ -242,11 +278,15 @@ func NewHTTPCompatClient(addr string, logger ports.Logger) (*Client, error) {
 // NewClientWithConfig creates a configured Nacos client. NewClient remains a
 // compatibility wrapper for existing callers.
 func NewClientWithConfig(cfg ClientConfig, logger ports.Logger) (*Client, error) {
+	cfg.HealthPolicy = effectiveHealthPolicy(cfg.HealthPolicy)
 	if cfg.TransportMode == "" {
 		cfg.TransportMode = TransportSDK
 	}
 	if cfg.TransportMode != "" && cfg.TransportMode != TransportSDK && cfg.TransportMode != TransportHTTPCompat {
 		return nil, fmt.Errorf("nacos: unsupported transport mode %q (want %q or %q)", cfg.TransportMode, TransportSDK, TransportHTTPCompat)
+	}
+	if !cfg.HealthPolicy.valid() {
+		return nil, fmt.Errorf("nacos: unsupported health policy %q (want %q or %q)", cfg.HealthPolicy, HealthPolicyDeploymentOwned, HealthPolicyAdminManaged)
 	}
 	addresses := append([]string(nil), cfg.ServerURLs...)
 	if len(addresses) == 0 && cfg.ServerURL != "" {

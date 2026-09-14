@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"spotter/pkg/nacos"
 )
 
 // Endpoints holds an environment-specific endpoint preset.
@@ -197,6 +199,10 @@ type Flags struct {
 	// by server wiring; the compatibility value is intended only for tests or
 	// an explicitly approved rollback window and is rejected for Env=product.
 	NacosTransport string
+	// NacosHealthPolicy controls whether cluster-level Nacos health checks
+	// are pre-provisioned by the deployment (default) or managed by an
+	// injected admin facade.
+	NacosHealthPolicy nacos.HealthPolicy
 	// ReconcileSource is the --reconcile-source flag (dsca-3 §3.1): the
 	// fanout sink NAME whose view the periodic compare reads ("nacos"
 	// designates the nacos sink). A plain string mirroring NacosAddr's
@@ -301,6 +307,7 @@ type Config struct {
 	NacosInsecureSkipVerify bool
 	NacosTimeout            int
 	NacosTransport          string
+	NacosHealthPolicy       nacos.HealthPolicy
 
 	// ReconcileSource is the fanout sink name whose view the periodic
 	// compare reads (dsca-3 §3.1); empty keeps the primary (Atlas) — the
@@ -435,6 +442,7 @@ func Load(env string, flags Flags) (Config, error) {
 	cfg.NacosInsecureSkipVerify = flags.NacosInsecureSkipVerify
 	cfg.NacosTimeout = flags.NacosTimeout
 	cfg.NacosTransport = flags.NacosTransport
+	cfg.NacosHealthPolicy = flags.NacosHealthPolicy
 
 	// Reconcile source: additive flag of dsca-3 §3.1 — empty means the
 	// primary (Atlas) stays the compare source (no default, no preset
