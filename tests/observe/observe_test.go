@@ -161,7 +161,7 @@ func TestObserveConsistency(t *testing.T) {
 	lastMutationSequence := driver.mutationSequence()
 	lastSourceFingerprint := ""
 	for time.Since(started) < 10*time.Minute {
-		record := runTick(t, cfg, driver, view, metrics, child, records, harnessLog, 0, started, lastMutationSequence, lastSourceFingerprint)
+		record := runTick(t, cfg, driver, view, metrics, child, records, harnessLog, 0, started, lastMutationSequence, lastSourceFingerprint, false)
 		lastMutationSequence = record.MutationSequence
 		if record.SourceFingerprint != "" {
 			lastSourceFingerprint = record.SourceFingerprint
@@ -283,6 +283,11 @@ type observeRun struct {
 	windowStart           time.Time
 	lastMutationSequence  uint64
 	lastSourceFingerprint string
+	// lastTransitional carries an in-flight mismatch across adjacent ticks.
+	// A source mutation may finish between reads while its Nacos publication
+	// is still propagating; the continuity ledger and OBS_BOUND decide when
+	// that mismatch becomes stale.
+	lastTransitional bool
 
 	tickCount         int
 	consistent        int
@@ -649,8 +654,9 @@ func pickVictims(candidates []string, n int) []string {
 // continuity tracker (the §4.3 step-7 ledger: firstSeen pins the true
 // age), and returns the tick record.
 func (r *observeRun) observeTick(t *testing.T, tickNo int) tickRecord {
-	record := runTick(t, r.cfg, r.driver, r.view, r.metrics, r.child, r.records, r.log, tickNo, r.windowStart, r.lastMutationSequence, r.lastSourceFingerprint)
+	record := runTick(t, r.cfg, r.driver, r.view, r.metrics, r.child, r.records, r.log, tickNo, r.windowStart, r.lastMutationSequence, r.lastSourceFingerprint, r.lastTransitional)
 	r.lastMutationSequence = record.MutationSequence
+	r.lastTransitional = tickIsTransitional(record)
 	if record.SourceFingerprint != "" {
 		r.lastSourceFingerprint = record.SourceFingerprint
 	}
@@ -1005,7 +1011,7 @@ func (r *observeRun) evaluateAcceptance(s runSummary) (bool, []string) {
 // the cold-attach wait and the window loop.
 func runTick(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosView,
 	metrics *metricsView, child *spotterChild, records *recordWriter, log *harnessLog,
-	tickNo int, windowStart time.Time, previousMutationSequence uint64, previousSourceFingerprint string) tickRecord {
+	tickNo int, windowStart time.Time, previousMutationSequence uint64, previousSourceFingerprint string, previousTransitional bool) tickRecord {
 
 	tickStart := time.Now()
 	mutationAtStart, mutationActiveAtStart := driver.mutationState()
@@ -1116,7 +1122,7 @@ func runTick(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosVi
 	record.ExactEqual = len(divergences) == 0 && record.ExpectedCount == record.Remote.Count
 	record.MutationSequence, record.MutationObserved = finishTickMutationState(driver, previousMutationSequence, mutationAtStart, mutationActiveAtStart)
 	record.MutationObserved = record.MutationObserved || (previousSourceFingerprint != "" && record.SourceFingerprint != previousSourceFingerprint)
-	record.Verdict = string(strictTickVerdict(diffResult, record.MutationObserved))
+	record.Verdict = string(strictTickVerdict(diffResult, record.MutationObserved || previousTransitional))
 
 	// 6. The queue state rides the record (metrics scrape failure leaves
 	// the queue unobserved but never fails the tick — the drain criterion
