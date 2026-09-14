@@ -374,6 +374,40 @@ func TestPushPersistentBatchesAttemptsEveryItemAndReturnsFirstInputError(t *test
 	}
 }
 
+func TestPushPersistentBatchesReportsLogicalBatchMetrics(t *testing.T) {
+	recorder := &batchRecorder{errByIP: map[string]error{}}
+	sink := newBatchTestSink(recorder)
+	items := make([]*instance.Instance, 201)
+	for i := range items {
+		items[i] = &instance.Instance{InstanceId: fmt.Sprintf("metric-%03d", i), AppCode: "metrics-app", Provider: "k8s", Ip: fmt.Sprintf("10.20.0.%d", i+1), Status: instance.InstanceStatusOnline, Enabled: true}
+	}
+	SetPushConcurrency(8)
+	t.Cleanup(func() { SetPushConcurrency(DefaultPushConcurrency) })
+	if err := sink.pushPersistentBatches(items); err != nil {
+		t.Fatalf("pushPersistentBatches() error = %v", err)
+	}
+	got := sink.BatchMetrics()
+	if got.LogicalBatches != 3 || got.Items != uint64(len(items)) {
+		t.Fatalf("batch metrics = %+v, want logical_batches=3 items=201", got)
+	}
+	if got.ConcurrencyCap != 8 || got.RetryCount != 0 {
+		t.Fatalf("batch metrics = %+v, want concurrency_cap=8 retry_count=0", got)
+	}
+}
+
+func TestPushPersistentBatchesCountsFailedExecutionForWorkerRetry(t *testing.T) {
+	recorder := &batchRecorder{errByIP: map[string]error{"10.21.0.1": errors.New("transient registration failure")}}
+	sink := newBatchTestSink(recorder)
+	item := &instance.Instance{InstanceId: "retry", AppCode: "retry-app", Provider: "k8s", Ip: "10.21.0.1", Status: instance.InstanceStatusOnline, Enabled: true}
+	if err := sink.pushPersistentBatches([]*instance.Instance{item}); err == nil {
+		t.Fatal("pushPersistentBatches() error = nil, want registration failure")
+	}
+	got := sink.BatchMetrics()
+	if got.LogicalBatches != 1 || got.Items != 1 || got.RetryCount != 1 {
+		t.Fatalf("batch metrics = %+v, want one failed logical execution", got)
+	}
+}
+
 func TestPushAllSkipsPruneWhenPersistentBatchFails(t *testing.T) {
 	recorder := &batchRecorder{errByIP: map[string]error{"10.0.0.1": errors.New("registration failed")}}
 	sink := newBatchTestSink(recorder)

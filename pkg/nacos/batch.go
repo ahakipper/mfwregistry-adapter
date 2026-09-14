@@ -36,6 +36,32 @@ type persistentBatch struct {
 	Indexes []int
 }
 
+// BatchMetricsSnapshot is the sink-local accounting exported for Observe and
+// test harnesses. LogicalBatches and Items are cumulative full-sync work;
+// RetryCount counts cumulative failed executions that the worker retry queue
+// may replay. ConcurrencyCap is the configured global item-call limit observed
+// by the latest execution.
+type BatchMetricsSnapshot struct {
+	LogicalBatches uint64
+	Items          uint64
+	RetryCount     uint64
+	ConcurrencyCap uint64
+}
+
+// BatchMetrics returns cumulative logical batch accounting for this sink.
+// Reads are atomic and safe while a full sync is running.
+func (s *Sink) BatchMetrics() BatchMetricsSnapshot {
+	if s == nil {
+		return BatchMetricsSnapshot{}
+	}
+	return BatchMetricsSnapshot{
+		LogicalBatches: s.batchLogicalCount.Load(),
+		Items:          s.batchItemCount.Load(),
+		RetryCount:     s.batchFailedCount.Load(),
+		ConcurrencyCap: s.batchConcurrencyCap.Load(),
+	}
+}
+
 // splitPersistentBatches partitions a snapshot using the default Nacos
 // namespace and group. The Sink-specific helper below supplies configured
 // values when the full-sync executor is called in production.
@@ -149,6 +175,11 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 	if len(batches) == 0 {
 		return nil
 	}
+	s.batchConcurrencyCap.Store(uint64(currentPushConcurrency()))
+	for _, batch := range batches {
+		s.batchLogicalCount.Add(1)
+		s.batchItemCount.Add(uint64(len(batch.Items)))
+	}
 
 	// Keep scope order separate from the map used to append batches. This lets
 	// us launch one worker per independent application scope without relying on
@@ -258,6 +289,7 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 	scopes.Wait()
 	for _, err := range errs {
 		if err != nil {
+			s.batchFailedCount.Add(1)
 			return err
 		}
 	}

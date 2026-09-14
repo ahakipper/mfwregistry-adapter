@@ -135,6 +135,15 @@ type Sink struct {
 	logger    ports.Logger
 	groupName string
 
+	// batch metrics are kept on the sink so each Nacos sink reports its own
+	// logical work-unit accounting without widening the shared metrics port.
+	// FailedExecutions counts a failed PushAll batch attempt; the worker's
+	// typed retry queue replays that complete operation.
+	batchLogicalCount   atomic.Uint64
+	batchItemCount      atomic.Uint64
+	batchFailedCount    atomic.Uint64
+	batchConcurrencyCap atomic.Uint64
+
 	// remembered (AUDIT-B-4) records every (service, cluster) pair the sink
 	// has ever pushed non-offline instances for — the pairs whose remote
 	// registrations this sink owns. The prune sweeps the pushed pairs UNION
