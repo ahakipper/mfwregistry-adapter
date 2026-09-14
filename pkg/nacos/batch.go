@@ -117,7 +117,8 @@ func waitForPersistentBatch(c *Client, key persistentBatchKey, params []Instance
 		matched := make(map[string]bool, len(want))
 		for _, h := range hosts {
 			p, ok := want[h.InstanceID]
-			if !ok || matched[h.InstanceID] || h.IP != p.IP || h.Port != p.Port || h.ClusterName != p.ClusterName || h.ServiceName != p.ServiceName || h.Ephemeral || h.Enabled != p.Enabled || h.Healthy != p.Enabled {
+			groupedService := effectiveGroup(p.GroupName) + "@@" + p.ServiceName
+			if !ok || matched[h.InstanceID] || h.IP != p.IP || h.Port != p.Port || h.ClusterName != p.ClusterName || (h.ServiceName != p.ServiceName && h.ServiceName != groupedService) || h.Ephemeral || h.Enabled != p.Enabled || h.Healthy != p.Enabled {
 				continue
 			}
 			matched[h.InstanceID] = true
