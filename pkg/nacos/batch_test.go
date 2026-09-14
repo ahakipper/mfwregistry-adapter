@@ -252,6 +252,96 @@ func TestPushPersistentBatchesLimitsRequestsAndPreservesApplicationOrder(t *test
 	}
 }
 
+// A Nacos gRPC connection keeps one publication per (service, connection);
+// another single RegisterInstance replaces that publication. The application
+// batch executor must therefore publish all 201 entries without losing the
+// earlier 100+100 chunks.
+func TestPushPersistentBatchesPreservesAllEntriesAcross201Items(t *testing.T) {
+	recorder := &replacementBatchRecorder{}
+	sink := &Sink{client: &Client{sdk: &sdkNamingFacade{client: recorder, group: DefaultGroup}, clusterAdmin: successfulBatchAdmin{}, config: ClientConfig{}}, logger: nopBatchLogger{}, groupName: DefaultGroup}
+	sink.client.sdkFactory = func(ClientConfig) (*sdkNamingFacade, error) { return sink.client.sdk, nil }
+	items := make([]*instance.Instance, 201)
+	for i := range items {
+		items[i] = &instance.Instance{InstanceId: fmt.Sprintf("batch-%03d", i), AppCode: "svc", Provider: "k8s", Ip: fmt.Sprintf("10.0.0.%d", i+1), Ports: []*instance.PortInfo{{Port: int32(20000 + i)}}, Enabled: true, Status: instance.InstanceStatusOnline}
+	}
+	if err := sink.pushPersistentBatches(items); err != nil {
+		t.Fatalf("pushPersistentBatches() error = %v", err)
+	}
+	if got := recorder.count("svc", "k8s"); got != len(items) {
+		t.Fatalf("final published entries = %d, want exactly %d after 100+100+1", got, len(items))
+	}
+}
+
+type replacementBatchRecorder struct {
+	mu      sync.Mutex
+	byScope map[string]map[string]bool
+}
+
+func (r *replacementBatchRecorder) RegisterPersistentBatch(items []InstanceParams) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.byScope == nil {
+		r.byScope = map[string]map[string]bool{}
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	key := items[0].ServiceName + "/" + items[0].ClusterName
+	if r.byScope[key] == nil {
+		r.byScope[key] = map[string]bool{}
+	}
+	for _, item := range items {
+		r.byScope[key][item.Metadata["instanceId"]] = true
+	}
+	return nil
+}
+
+func (r *replacementBatchRecorder) RegisterInstance(p vo.RegisterInstanceParam) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.byScope == nil {
+		r.byScope = map[string]map[string]bool{}
+	}
+	key := p.ServiceName + "/" + p.ClusterName
+	if r.byScope[key] == nil {
+		r.byScope[key] = map[string]bool{}
+	}
+	// Single-register semantics on one gRPC connection replace the service
+	// publication; this models the Nacos 3 behavior exposed by the SDK proxy.
+	r.byScope[key] = map[string]bool{p.Metadata["instanceId"]: true}
+	return true, nil
+}
+func (r *replacementBatchRecorder) BatchRegisterInstance(vo.BatchRegisterInstanceParam) (bool, error) {
+	return false, ErrUnsupportedOperation
+}
+func (r *replacementBatchRecorder) DeregisterInstance(vo.DeregisterInstanceParam) (bool, error) {
+	return true, nil
+}
+func (r *replacementBatchRecorder) UpdateInstance(vo.UpdateInstanceParam) (bool, error) {
+	return true, nil
+}
+func (r *replacementBatchRecorder) SelectAllInstances(p vo.SelectAllInstancesParam) ([]model.Instance, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	result := make([]model.Instance, 0)
+	for id := range r.byScope[p.ServiceName+"/k8s"] {
+		result = append(result, model.Instance{InstanceId: id})
+	}
+	return result, nil
+}
+func (r *replacementBatchRecorder) GetAllServicesInfo(vo.GetAllServiceInfoParam) (model.ServiceList, error) {
+	return model.ServiceList{}, nil
+}
+func (r *replacementBatchRecorder) Subscribe(*vo.SubscribeParam) error   { return nil }
+func (r *replacementBatchRecorder) Unsubscribe(*vo.SubscribeParam) error { return nil }
+func (r *replacementBatchRecorder) ServerHealthy() bool                  { return true }
+func (r *replacementBatchRecorder) CloseClient()                         {}
+func (r *replacementBatchRecorder) count(service, cluster string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.byScope[service+"/"+cluster])
+}
+
 func TestPushPersistentBatchesAttemptsEveryItemAndReturnsFirstInputError(t *testing.T) {
 	first := errors.New("first input error")
 	recorder := &batchRecorder{errByIP: map[string]error{"10.0.0.1": first, "10.0.0.2": errors.New("second input error")}}

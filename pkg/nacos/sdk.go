@@ -97,6 +97,10 @@ type nacos3SDKVendor interface {
 	Close() error
 }
 
+type persistentBatchVendor interface {
+	RegisterPersistentBatch([]InstanceParams) error
+}
+
 type sdkNamingFacade struct {
 	client     sdkNamingClient
 	vendor     nacos3SDKVendor
@@ -129,6 +133,24 @@ func (f *sdkNamingFacade) RegisterPersistent(p InstanceParams) error {
 		return f.vendor.RegisterPersistent(p)
 	}
 	return f.register(p)
+}
+
+func (f *sdkNamingFacade) RegisterPersistentBatch(items []InstanceParams) error {
+	for i := range items {
+		items[i].Ephemeral = false
+	}
+	if batcher, ok := f.vendor.(persistentBatchVendor); ok {
+		return batcher.RegisterPersistentBatch(items)
+	}
+	if batcher, ok := f.client.(persistentBatchVendor); ok {
+		return batcher.RegisterPersistentBatch(items)
+	}
+	for _, item := range items {
+		if err := f.RegisterPersistent(item); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (f *sdkNamingFacade) DeregisterPersistent(p InstanceParams) error {

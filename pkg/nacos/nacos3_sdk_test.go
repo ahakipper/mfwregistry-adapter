@@ -5,7 +5,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/nacos-group/nacos-sdk-go/v3/common/remote/rpc/rpc_request"
 	"github.com/nacos-group/nacos-sdk-go/v3/model"
 	namingproto "github.com/nacos-group/nacos-sdk-proto/go/naming"
 )
@@ -142,18 +141,21 @@ func TestNacos3FacadePropagatesVendorErrors(t *testing.T) {
 // ephemeral-only batch shape.
 func TestNacos3PersistentProtoContract(t *testing.T) {
 	instance := model.Instance{Ip: "10.0.0.8", Port: 8080, Ephemeral: false}
-	register := rpc_request.NewInstanceRequest("tenant-a", "payments", "blue", "registerInstance", instance)
-	registerProto, ok := register.ProtoMessage().(*namingproto.InstanceRequest)
+	register := &persistentInstanceRequest{Namespace: "tenant-a", ServiceName: "payments", GroupName: "blue", Type: "registerInstance", Instance: instance}
+	if register.GetRequestType() != "PersistentInstanceRequest" {
+		t.Fatalf("request type = %q", register.GetRequestType())
+	}
+	registerProto, ok := register.ProtoMessage().(*namingproto.PersistentInstanceRequest)
 	if !ok {
-		t.Fatalf("register proto type = %T, want *naming.InstanceRequest", register.ProtoMessage())
+		t.Fatalf("register proto type = %T, want *naming.PersistentInstanceRequest", register.ProtoMessage())
 	}
 	if registerProto.GetType() != "registerInstance" || registerProto.GetInstance().GetEphemeral() {
 		t.Fatalf("register proto = %+v, want registerInstance with Ephemeral=false", registerProto)
 	}
-	deregister := rpc_request.NewInstanceRequest("tenant-a", "payments", "blue", "deregisterInstance", instance)
-	deregisterProto, ok := deregister.ProtoMessage().(*namingproto.InstanceRequest)
+	deregister := &persistentInstanceRequest{Namespace: "tenant-a", ServiceName: "payments", GroupName: "blue", Type: "deregisterInstance", Instance: instance}
+	deregisterProto, ok := deregister.ProtoMessage().(*namingproto.PersistentInstanceRequest)
 	if !ok {
-		t.Fatalf("deregister proto type = %T, want *naming.InstanceRequest", deregister.ProtoMessage())
+		t.Fatalf("deregister proto type = %T, want *naming.PersistentInstanceRequest", deregister.ProtoMessage())
 	}
 	if deregisterProto.GetType() != "deregisterInstance" || deregisterProto.GetInstance().GetEphemeral() {
 		t.Fatalf("deregister proto = %+v, want deregisterInstance with Ephemeral=false", deregisterProto)

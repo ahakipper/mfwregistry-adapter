@@ -21,6 +21,10 @@ objects while preserving persistent (`Ephemeral=false`) semantics.
   longer creates the SDK NamingClient HTTP delegate for business operations.
 - Reused the long-lived gRPC facade for instance/catalog reads; each read is a
   direct query RPC and does not create a short-lived cached client.
+- Replaced the incorrect per-service `InstanceRequest` lifecycle with the
+  official SDK `PersistentInstanceRequest` protobuf over a dedicated SDK RPC
+  client. This preserves persistent semantics and allows each logical <=100
+  scheduler batch to issue safe per-item writes without replacement loss.
 - Preserved SDK server-list failover, timeout, username/password auth, TLS CA,
   server-name, and insecure-skip-verify configuration, plus isolated cache
   ownership and bounded close behavior.
@@ -60,8 +64,9 @@ The task brief remains the source of acceptance requirements.
 
 ## Concerns
 
-- A live Nacos 3 endpoint was not available in this workspace, so wire-level
-  round-trip success and server-side failover were not exercised end-to-end.
+- Live Nacos 3.2.4 validation now covers 201 unique persistent entries,
+  `100+100+1` logical scheduling, exact cardinality, `Ephemeral=false`, and
+  cleanup. Multi-server failover remains untested in this run.
 - The adapter relies on the pinned SDK's exported `NamingGrpcProxy`; upgrading
   the pseudo-version requires rerunning the protobuf contract and package race
   tests before release.
