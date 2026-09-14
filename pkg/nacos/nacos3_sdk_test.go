@@ -50,9 +50,7 @@ func (v *recordingNacos3Vendor) Close() error { v.closed++; return v.err }
 // Keep the test name as a readable alias of the production seam contract.
 type nacos3Vendor = nacos3SDKVendor
 
-// RED: sdkNamingFacade does not yet expose the Nacos 3 vendor seam.  This
-// compile-time contract is deliberate; Task 1.2 will provide the adapter that
-// satisfies it and emits RegisterInstanceRequest/DeregisterInstanceRequest
+// The facade contract emits RegisterInstanceRequest/DeregisterInstanceRequest
 // through the persistent vendor seam with Ephemeral=false.
 func TestNacos3FacadeOwnsVendorOperations(t *testing.T) {
 	vendor := &recordingNacos3Vendor{}

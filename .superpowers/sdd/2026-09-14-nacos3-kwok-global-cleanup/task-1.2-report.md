@@ -19,6 +19,8 @@ objects while preserving persistent (`Ephemeral=false`) semantics.
   and authoritative reads.
 - Added a gRPC-backed `sdkNamingClient` shim so production SDK construction no
   longer creates the SDK NamingClient HTTP delegate for business operations.
+- Reused the long-lived gRPC facade for instance/catalog reads; each read is a
+  direct query RPC and does not create a short-lived cached client.
 - Preserved SDK server-list failover, timeout, username/password auth, TLS CA,
   server-name, and insecure-skip-verify configuration, plus isolated cache
   ownership and bounded close behavior.
