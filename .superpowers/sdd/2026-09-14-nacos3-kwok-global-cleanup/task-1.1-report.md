@@ -55,6 +55,18 @@ SelectAll, ListServices, Subscribe, Unsubscribe, Close, identity fields, and
 error propagation, and makes the black-box test fail immediately on lifecycle
 errors.
 
+Error-coverage follow-up commit `eb65f9f` adds explicit
+DeregisterPersistent error propagation and aliases the test seam to the
+production contract. Exact verification:
+
+```text
+go test ./pkg/nacos -run 'TestNacos3Facade' -count=1   # PASS
+go test ./pkg/nacos -run TestBlackboxClientSDKModeUsesGRPCPersistentLifecycle -count=1   # RED: POST /nacos/v1/ns/instance
+```
+
+Concrete SDK configuration, failover, and proto decoding remain scoped to
+Task 1.2; this task only establishes the injectable operation seam.
+
 ## Compatibility / rollback
 
 The explicit `http-compat` transport remains available for legacy fixtures.
