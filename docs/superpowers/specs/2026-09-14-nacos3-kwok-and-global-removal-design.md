@@ -46,14 +46,16 @@ recorded. If the high-level SDK routes persistent instances over legacy HTTP,
 the facade must use the SDK's official gRPC naming surface or fail the Nacos 3
 gate; it must never construct a hidden raw HTTP client for business writes.
 
-Protocol-level `BatchRegisterInstance` is not assumed to be additive. The
-current SDK development branch documents batch publication as a replacement
-of one service publication for one connection. Spotter therefore keeps its
-safe logical batch contract: one application scope, at most 100 items per
-work unit, bounded execution, and persistent single-item gRPC calls unless a
-Nacos 3 integration test proves a protocol batch has additive semantics for
-the exact scope and chunking used. A 201-instance test must end with all 201
-instances present; a final-count loss is a release failure.
+Protocol-level `BatchRegisterInstance` is not used for the persistent sink. The
+current SDK development branch documents batch publication as a replacement of
+one service publication for one connection, and its high-level `RegisterInstance`
+path uses the ephemeral `InstanceRequest` handler. Spotter instead uses the
+official SDK's lower-level gRPC transport with the Nacos 3
+`PersistentInstanceRequest` payload for each persistent item. The safe logical
+batch contract remains one application scope, at most 100 items per work unit,
+and bounded execution. A 201-instance test must end with all 201 instances
+present and `Ephemeral=false`; a final-count loss or an ephemeral projection is
+a release failure.
 
 ### Health-check management boundary
 

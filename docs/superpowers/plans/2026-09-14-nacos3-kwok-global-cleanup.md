@@ -39,9 +39,9 @@ Docker, Cobra, zap, Prometheus, Go test/race/vet, and the existing testkit.
   scope and no more than 100 items.
 - Same application scope executes in source order; independent scopes share a
   global Nacos item-call limit of 8.
-- Do not use protocol `BatchRegisterInstance` until a Nacos 3 test proves its
-  semantics are additive for the exact scope. A 201-item service must not lose
-  the first 200 items after the final chunk.
+- Do not use protocol `BatchRegisterInstance` for persistent Spotter data. Use
+  the official SDK gRPC `PersistentInstanceRequest` per item; a 201-item
+  service must retain all 201 persistent entries.
 - A failed registration/update batch never runs prune for that snapshot.
 - `healthChecker=NONE` is deployment configuration or an explicit
   Admin/Maintainer preflight, not a hidden requirement for naming SDK calls.
@@ -143,9 +143,9 @@ Docker, Cobra, zap, Prometheus, Go test/race/vet, and the existing testkit.
 - [ ] Construct the official SDK gRPC naming proxy behind the Spotter-owned
       interface; do not import vendor concrete types outside this adapter.
 - [ ] Decode or capture the actual vendor request objects in tests and assert
-      `RegisterInstanceRequest`/`DeregisterInstanceRequest` request types,
-      Nacos 3 naming method names, and `Ephemeral=false`; a seam-only fake is
-      insufficient for this task.
+      `PersistentInstanceRequest` request type, `registerInstance`/
+      `deregisterInstance` method names, and `Ephemeral=false`; a seam-only
+      fake is insufficient for this task.
 - [ ] Add concrete SDK-only tests for failover, timeout, auth, TLS configuration,
       complete disabled/unhealthy reads, and error propagation across every
       operation-specific method.
@@ -250,8 +250,10 @@ Docker, Cobra, zap, Prometheus, Go test/race/vet, and the existing testkit.
 **Steps:**
 
 - [ ] Keep the application-level batch boundary at 100.
-- [ ] Use persistent gRPC single-item calls inside each logical batch unless
-      the target-specific contract test proves additive protocol batch behavior.
+- [ ] Use the official SDK gRPC `PersistentInstanceRequest` for every
+      persistent item inside each logical batch. Do not use
+      `BatchInstanceRequest`: on Nacos 3 it is a complete publication and its
+      high-level SDK path rejects persistent items.
 - [ ] Preserve global 8-call concurrency and per-application order.
 - [ ] Ensure `PushAll` registration/update completes before prune.
 - [ ] Preserve retry metadata, source generation, and scope ownership.
