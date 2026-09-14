@@ -15,8 +15,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nacos-group/nacos-sdk-go/v3/clients"
-	"github.com/nacos-group/nacos-sdk-go/v3/clients/naming_client"
 	"github.com/nacos-group/nacos-sdk-go/v3/common/constant"
 	"github.com/nacos-group/nacos-sdk-go/v3/model"
 	"github.com/nacos-group/nacos-sdk-go/v3/vo"
@@ -99,8 +97,6 @@ type nacos3SDKVendor interface {
 	Close() error
 }
 
-var _ sdkNamingClient = (naming_client.INamingClient)(nil)
-
 type sdkNamingFacade struct {
 	client     sdkNamingClient
 	vendor     nacos3SDKVendor
@@ -113,7 +109,11 @@ func (f *sdkNamingFacade) close() {
 	if f == nil {
 		return
 	}
-	f.client.CloseClient()
+	if f.vendor != nil {
+		_ = f.vendor.Close()
+	} else if f.client != nil {
+		f.client.CloseClient()
+	}
 	if f.ownedCache && f.cacheDir != "" {
 		_ = os.RemoveAll(f.cacheDir)
 	}
@@ -283,14 +283,14 @@ func newSDKNamingFacade(cfg ClientConfig) (*sdkNamingFacade, error) {
 		CacheDir:            cacheDir,
 		TLSCfg:              constant.TLSConfig{Appointed: true, Enable: servers[0].Scheme == "https", TrustAll: cfg.InsecureSkipVerify, CaFile: cfg.CAFile, ServerNameOverride: cfg.ServerName},
 	}
-	naming, err := clients.NewNamingClient(vo.NacosClientParam{ClientConfig: clientCfg, ServerConfigs: servers})
+	grpcVendor, err := newNacos3GRPCVendor(*clientCfg, servers)
 	if err != nil {
 		if owned {
 			_ = os.RemoveAll(cacheDir)
 		}
-		return nil, fmt.Errorf("nacos sdk: create naming client: %w", err)
+		return nil, fmt.Errorf("nacos sdk: create grpc naming facade: %w", err)
 	}
-	return &sdkNamingFacade{client: naming, group: effectiveGroup(cfg.GroupName), cacheDir: cacheDir, ownedCache: owned}, nil
+	return &sdkNamingFacade{client: &grpcSDKClient{vendor: grpcVendor}, group: effectiveGroup(cfg.GroupName), cacheDir: cacheDir, ownedCache: owned}, nil
 }
 
 func normalizeNacosURL(raw string) (*url.URL, error) {
