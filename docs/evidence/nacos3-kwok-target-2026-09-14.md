@@ -35,7 +35,8 @@ tick, observed_at, source_count, source_sha256,
 spotter_observed_count, spotter_observed_sha256,
 nacos_count, nacos_sha256, divergence_count, divergence_age_seconds,
 inflight_count, batch_sizes, retry_count, dropped_event_count,
-queue_depth, verdict, cleanup_status
+queue_depth, exact_equal, mutation_observed, expected_count, verdict,
+cleanup_status
 ```
 
 Definitions are fixed for the gate:
@@ -49,6 +50,14 @@ Definitions are fixed for the gate:
   `inflight` and must still disappear within the same bound.
 - `verdict=CONSISTENT` requires zero ghosts, zero missing confirmed entries,
   zero dropped events, and no source/read error for that tick.
+- `exact_equal=true` requires zero divergence entries and equality between
+  `expected_count` (online plus representable unhealthy Pods) and `nacos_count`.
+  Pending Pods remain in `source_count` but are intentionally excluded from
+  `expected_count` until they become representable.
+- The exact field projection is membership/app scope, IP, first port 7096,
+  cluster/service/composite ID, enabled/healthy, persistent `Ephemeral=false`,
+  and metadata `spotterOwner`, `instanceId`, `status`. Other domain metadata is
+  outside this controlled snapshot and is recorded as unchecked.
 
 The 2-hour result is `PASS` only when every tick satisfies these rules and the
 final cleanup reports no residual kwok cluster, Pod, container, temporary

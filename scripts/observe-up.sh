@@ -60,7 +60,12 @@ kubectl --kubeconfig "$kc" label node "$node" kwok.x-k8s.io/node=fake --overwrit
 # Pre-seed a generous allocatable capacity so large observe runs do not depend
 # on a user's pre-existing node patch. The status subresource is best-effort
 # across kwok versions; verify the node and fail closed when capacity is absent.
-scale="${OBS_SCALE:-1000}"
+base_scale="${OBS_SCALE:-1000}"
+scale="${OBS_NODE_POD_CAPACITY:-$base_scale}"
+[[ "$base_scale" =~ ^[0-9]+$ && "$scale" =~ ^[0-9]+$ && "$scale" -ge "$base_scale" ]] || { echo "EnvError: invalid kwok node pod capacity $scale for base $base_scale" >&2; exit 2; }
+if [[ "${OBS_BURSTS:-false}" == true || "${OBS_BURSTS:-false}" == 1 ]]; then
+  [[ "$scale" -ge $((base_scale + 200)) ]] || { echo "EnvError: burst run needs node capacity >= base+200 (got $scale)" >&2; exit 2; }
+fi
 kubectl --kubeconfig "$kc" patch node "$node" --subresource=status --type=merge -p "{\"status\":{\"capacity\":{\"pods\":\"$scale\"},\"allocatable\":{\"pods\":\"$scale\"}}}" >/dev/null || { echo "InfraError: kwok node capacity patch failed" >&2; exit 3; }
 capacity=$(kubectl --kubeconfig "$kc" get node "$node" -o jsonpath='{.status.allocatable.pods}')
 capacity_ok=0

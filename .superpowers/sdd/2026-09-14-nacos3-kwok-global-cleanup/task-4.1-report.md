@@ -44,6 +44,16 @@ extra, duplicate, or disabled mismatch. A mutation-period mismatch remains
 visible in JSONL and must resolve within `OBS_BOUND`; it is not silently
 treated as exact.
 
+The exact projection is intentionally explicit: membership by application,
+group, and `k8s` cluster; IP; first port 7096; service name; composite instance
+ID; enabled/healthy policy; `Ephemeral=false`; and the stable metadata keys
+`spotterOwner`, `instanceId`, and `status`. The source side also records
+`expectedCount` (online plus unhealthy representable Pods) separately from the
+raw Pod count, so Pending Pods are not mistaken for missing Nacos instances.
+Other Spotter metadata such as `sourceKey`, `sourceCluster`, `reversion`, and
+resource fields are not asserted by this controlled Pod snapshot and remain
+explicitly unchecked; this harness must not claim full domain-metadata equality.
+
 ## Independent review addendum
 
 The first independent review found that a TCP-only gate could allow the child

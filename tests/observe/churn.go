@@ -38,10 +38,12 @@ type churnDriver struct {
 	appCodes   []string
 	prefix     string
 
-	mu      sync.Mutex
-	ledger  map[string]ledgerEntry // podName -> latest mutation
-	counter int                    // monotonically increasing pod-name suffix
-	applied int                    // live pod count the driver tracks
+	mu             sync.Mutex
+	ledger         map[string]ledgerEntry // podName -> latest mutation
+	mutationSeq    uint64                 // monotonic source-mutation epoch
+	mutationActive int                    // overlapping source mutation operations
+	counter        int                    // monotonically increasing pod-name suffix
+	applied        int                    // live pod count the driver tracks
 }
 
 // ledgerEntry is one mutation's record (the in-flight clock source).
@@ -207,7 +209,10 @@ func (d *churnDriver) applyBatch(count, batchSize int, issuedAt time.Time) ([]st
 	for _, p := range pods {
 		d.ledger[p.name] = ledgerEntry{Op: "create", PodName: p.name, AppCode: p.appCode, IssuedAt: issuedAt}
 	}
+	d.mutationSeq++
+	d.mutationActive++
 	d.mu.Unlock()
+	defer d.finishMutation()
 
 	for start := 0; start < len(pods); start += batchSize {
 		end := start + batchSize
@@ -248,7 +253,10 @@ func (d *churnDriver) deletePods(names []string, issuedAt time.Time) error {
 		}
 		d.ledger[name] = ledgerEntry{Op: "delete", PodName: name, AppCode: appCode, IssuedAt: issuedAt}
 	}
+	d.mutationSeq++
+	d.mutationActive++
 	d.mu.Unlock()
+	defer d.finishMutation()
 	for start := 0; start < len(names); start += 100 {
 		end := start + 100
 		if end > len(names) {
@@ -286,6 +294,28 @@ func (d *churnDriver) ledgerSnapshot() map[string]ledgerEntry {
 		out[name] = entry
 	}
 	return out
+}
+
+// mutationSequence returns the latest source mutation epoch. It advances
+// before an apply/delete API call so a tick overlapping the request is
+// treated as transitional even if the API response is still propagating.
+func (d *churnDriver) mutationSequence() uint64 {
+	seq, _ := d.mutationState()
+	return seq
+}
+
+func (d *churnDriver) mutationState() (uint64, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.mutationSeq, d.mutationActive > 0
+}
+
+func (d *churnDriver) finishMutation() {
+	d.mu.Lock()
+	if d.mutationActive > 0 {
+		d.mutationActive--
+	}
+	d.mu.Unlock()
 }
 
 // podJSONReport is the shape of one row of `kubectl get pods -o json`.

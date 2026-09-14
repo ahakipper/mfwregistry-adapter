@@ -158,9 +158,15 @@ func TestObserveConsistency(t *testing.T) {
 	// full-push path is the worst-case healer at 1000+ instances).
 	started := time.Now()
 	converged := false
+	lastMutationSequence := driver.mutationSequence()
+	lastSourceFingerprint := ""
 	for time.Since(started) < 10*time.Minute {
-		record := runTick(t, cfg, driver, view, metrics, child, records, harnessLog, 0, started)
-		if record.Verdict == string(verdictConsistent) && record.Remote.Count == record.Source.Count {
+		record := runTick(t, cfg, driver, view, metrics, child, records, harnessLog, 0, started, lastMutationSequence, lastSourceFingerprint)
+		lastMutationSequence = record.MutationSequence
+		if record.SourceFingerprint != "" {
+			lastSourceFingerprint = record.SourceFingerprint
+		}
+		if record.ExactEqual && record.Remote.Count == record.ExpectedCount {
 			// CONSISTENT with the REMOTE side actually populated: the first
 			// tick after the child's informer sync is CONSISTENT purely by
 			// the in-flight tolerance (every expected entry young) with an
@@ -182,16 +188,18 @@ func TestObserveConsistency(t *testing.T) {
 	// --- the observation window -------------------------------------------
 	windowStart := time.Now()
 	run := &observeRun{
-		cfg:         cfg,
-		driver:      driver,
-		view:        view,
-		metrics:     metrics,
-		child:       child,
-		records:     records,
-		log:         harnessLog,
-		tracker:     newDivergenceTracker(),
-		appCodes:    appCodes,
-		windowStart: windowStart,
+		cfg:                   cfg,
+		driver:                driver,
+		view:                  view,
+		metrics:               metrics,
+		child:                 child,
+		records:               records,
+		log:                   harnessLog,
+		tracker:               newDivergenceTracker(),
+		appCodes:              appCodes,
+		windowStart:           windowStart,
+		lastMutationSequence:  lastMutationSequence,
+		lastSourceFingerprint: lastSourceFingerprint,
 	}
 	run.runWindow(t)
 	windowElapsed := time.Since(windowStart)
@@ -272,7 +280,9 @@ type observeRun struct {
 	tracker  *divergenceTracker
 	appCodes []string
 
-	windowStart time.Time
+	windowStart           time.Time
+	lastMutationSequence  uint64
+	lastSourceFingerprint string
 
 	tickCount         int
 	consistent        int
@@ -288,6 +298,8 @@ type observeRun struct {
 	maxObsErrStreak   int
 	exactEqualTicks   int
 	transitionalTicks int
+	steadyTicks       int
+	steadyExactTicks  int
 
 	// Latency percentiles (the last scrape's histogram — cumulative).
 	latency *histogramSnapshot
@@ -307,6 +319,7 @@ type observeRun struct {
 	envDivergentTicks     int
 
 	// Churn accounting.
+	churnStatsMu  sync.Mutex
 	churnCreates  int
 	churnDeletes  int
 	churnErrors   int
@@ -343,6 +356,20 @@ type burstEvent struct {
 	DeleteIssued  time.Time
 	ConvergedUp   time.Time
 	ConvergedDown time.Time
+}
+
+func (r *observeRun) addChurnStats(created, deleted, failed int) {
+	r.churnStatsMu.Lock()
+	r.churnCreates += created
+	r.churnDeletes += deleted
+	r.churnErrors += failed
+	r.churnStatsMu.Unlock()
+}
+
+func (r *observeRun) churnStats() (int, int, int) {
+	r.churnStatsMu.Lock()
+	defer r.churnStatsMu.Unlock()
+	return r.churnCreates, r.churnDeletes, r.churnErrors
 }
 
 // burstSchedule derives the window's burst marks: the storm at 5% (early),
@@ -384,7 +411,7 @@ func (r *observeRun) runBursts(stop <-chan struct{}) {
 		issued := time.Now()
 		pods, err := r.driver.applyBatch(b.n, 100, issued)
 		if err != nil {
-			r.churnErrors++
+			r.addChurnStats(0, 0, 1)
 			r.log.event("burst %s: apply failed: %v", b.id, err)
 			continue
 		}
@@ -393,7 +420,7 @@ func (r *observeRun) runBursts(stop <-chan struct{}) {
 			Name: b.id, Size: b.n, Pods: pods, CreateIssued: issued,
 		})
 		r.burstMu.Unlock()
-		r.churnCreates += b.n
+		r.addChurnStats(b.n, 0, 0)
 		r.log.event("burst %s: %d pods applied (ledger create@%s)", b.id, b.n, formatTime(issued))
 		// The settle: one OBS_BOUND + one tick, so the up-convergence is
 		// judged by real ticks (an entry unconverged past the bound makes
@@ -405,14 +432,14 @@ func (r *observeRun) runBursts(stop <-chan struct{}) {
 		}
 		delIssued := time.Now()
 		if err := r.driver.deletePods(pods, delIssued); err != nil {
-			r.churnErrors++
+			r.addChurnStats(0, 0, 1)
 			r.log.event("burst %s: delete failed: %v", b.id, err)
 			continue
 		}
 		r.burstMu.Lock()
 		r.burstEvents[len(r.burstEvents)-1].DeleteIssued = delIssued
 		r.burstMu.Unlock()
-		r.churnDeletes += b.n
+		r.addChurnStats(0, b.n, 0)
 		r.log.event("burst %s: %d pods deleted (ledger delete@%s)", b.id, b.n, formatTime(delIssued))
 	}
 }
@@ -482,8 +509,10 @@ func (r *observeRun) runWindow(t *testing.T) {
 	deadline := r.windowStart.Add(r.cfg.Duration)
 	churnEvery := r.cfg.ChurnEvery
 	stopChurn := make(chan struct{})
-	defer close(stopChurn)
+	var churnWG sync.WaitGroup
+	churnWG.Add(1)
 	go func() {
+		defer churnWG.Done()
 		tick := time.NewTicker(churnEvery)
 		defer tick.Stop()
 		for {
@@ -502,7 +531,11 @@ func (r *observeRun) runWindow(t *testing.T) {
 	// observation ticks continue across a burst (the storm shape is a
 	// superposition, not a pause).
 	if r.cfg.Bursts {
-		go r.runBursts(stopChurn)
+		churnWG.Add(1)
+		go func() {
+			defer churnWG.Done()
+			r.runBursts(stopChurn)
+		}()
 	}
 
 	tickNo := 0
@@ -522,6 +555,8 @@ func (r *observeRun) runWindow(t *testing.T) {
 			next = time.Now().Add(r.cfg.Tick)
 		}
 	}
+	close(stopChurn)
+	churnWG.Wait()
 	r.churnQuiesced = time.Now()
 }
 
@@ -544,7 +579,7 @@ func (r *observeRun) churnOnce() {
 	// filter is load-bearing, not cosmetic.
 	pods, err := r.driver.liveSourcePods("app-code")
 	if err != nil {
-		r.churnErrors++
+		r.addChurnStats(0, 0, 1)
 		r.log.event("churn: source read failed: %v", err)
 		return
 	}
@@ -567,16 +602,16 @@ func (r *observeRun) churnOnce() {
 	if len(victims) > 0 {
 		// CREATE first (net-neutral: the population never drops below base).
 		if _, err := r.driver.applyBatch(len(victims), 100, issued); err != nil {
-			r.churnErrors++
+			r.addChurnStats(0, 0, 1)
 			r.log.event("churn: create failed: %v", err)
 		} else {
-			r.churnCreates += len(victims)
+			r.addChurnStats(len(victims), 0, 0)
 		}
 		if err := r.driver.deletePods(victims, issued); err != nil {
-			r.churnErrors++
+			r.addChurnStats(0, 0, 1)
 			r.log.event("churn: delete failed: %v", err)
 		} else {
-			r.churnDeletes += len(victims)
+			r.addChurnStats(0, len(victims), 0)
 		}
 	}
 }
@@ -614,12 +649,18 @@ func pickVictims(candidates []string, n int) []string {
 // continuity tracker (the §4.3 step-7 ledger: firstSeen pins the true
 // age), and returns the tick record.
 func (r *observeRun) observeTick(t *testing.T, tickNo int) tickRecord {
-	record := runTick(t, r.cfg, r.driver, r.view, r.metrics, r.child, r.records, r.log, tickNo, r.windowStart)
+	record := runTick(t, r.cfg, r.driver, r.view, r.metrics, r.child, r.records, r.log, tickNo, r.windowStart, r.lastMutationSequence, r.lastSourceFingerprint)
+	r.lastMutationSequence = record.MutationSequence
+	if record.SourceFingerprint != "" {
+		r.lastSourceFingerprint = record.SourceFingerprint
+	}
 	// The continuity tracker sees the tick's divergences (the §6.2-corrected
 	// semantics: in-flight mismatches still count as divergences — their
 	// heal time is the acceptance's convergence criterion — while the tick
 	// verdict tolerates them inside the bound).
-	r.tracker.observeTick(time.Now(), record.Divergence)
+	if record.Verdict != string(verdictObsErr) {
+		r.tracker.observeTick(time.Now(), record.Divergence)
+	}
 	return record
 }
 
@@ -630,6 +671,12 @@ func (r *observeRun) recordTick(t *testing.T, record tickRecord) {
 		r.exactEqualTicks++
 	} else if tickIsTransitional(record) {
 		r.transitionalTicks++
+	}
+	if record.Verdict != string(verdictObsErr) && !record.MutationObserved {
+		r.steadyTicks++
+		if record.ExactEqual {
+			r.steadyExactTicks++
+		}
 	}
 	// §4.5's env-overlap separation: a DIVERGENT tick whose tick overlaps
 	// an open env window is tagged env-overlap (still recorded as
@@ -741,6 +788,7 @@ func (r *observeRun) drainCheck(t *testing.T) {
 
 // evaluate folds the aggregates into the §5.2 acceptance verdict.
 func (r *observeRun) evaluate(t *testing.T, stamp string, windowElapsed time.Duration) runSummary {
+	churnCreates, churnDeletes, churnErrors := r.churnStats()
 	summary := runSummary{
 		Stamp:             stamp,
 		Duration:          windowElapsed.Round(time.Second).String(),
@@ -762,12 +810,14 @@ func (r *observeRun) evaluate(t *testing.T, stamp string, windowElapsed time.Dur
 		DroppedTotal:      r.droppedTotal,
 		ExactEqualTicks:   r.exactEqualTicks,
 		TransitionalTicks: r.transitionalTicks,
+		SteadyTicks:       r.steadyTicks,
+		SteadyExactTicks:  r.steadyExactTicks,
 		DrainedAtEnd:      r.lastDrainZero && !r.drainBreach,
 		MaxHeal:           r.tracker.maxHeal().Round(time.Millisecond).String(),
 		EnvWindows:        r.envWindows,
-		ChurnCreates:      r.churnCreates,
-		ChurnDeletes:      r.churnDeletes,
-		ChurnErrors:       r.churnErrors,
+		ChurnCreates:      churnCreates,
+		ChurnDeletes:      churnDeletes,
+		ChurnErrors:       churnErrors,
 	}
 	// The burst events' measured records (§4.2 OBS_BURSTS): both legs'
 	// convergence times, judged against OBS_BOUND by the acceptance below.
@@ -879,6 +929,11 @@ func (r *observeRun) evaluateAcceptance(s runSummary) (bool, []string) {
 	if s.ProductDivergentTicks > 0 {
 		fails = append(fails, fmt.Sprintf("consistency: %d product-divergent ticks (requirement: zero; see the forensics)", s.ProductDivergentTicks))
 	}
+	if s.SteadyTicks == 0 {
+		fails = append(fails, "strict consistency: no completed steady ticks were observed")
+	} else if s.SteadyExactTicks != s.SteadyTicks {
+		fails = append(fails, fmt.Sprintf("strict consistency: only %d/%d steady ticks were exactly equal", s.SteadyExactTicks, s.SteadyTicks))
+	}
 	// OBSERR bounds: no streak > 6 ticks, < 5% of ticks.
 	if s.MaxObsErrStreak > 6 {
 		fails = append(fails, fmt.Sprintf("observability: max consecutive OBSERR streak %d ticks (> 6)", s.MaxObsErrStreak))
@@ -902,6 +957,9 @@ func (r *observeRun) evaluateAcceptance(s runSummary) (bool, []string) {
 	// Drops: zero over the window (the completeness SLO).
 	if s.DroppedTotal > 0 {
 		fails = append(fails, fmt.Sprintf("completeness: events_dropped_total = %.0f over the window (SLO: 0)", s.DroppedTotal))
+	}
+	if s.ChurnErrors > 0 {
+		fails = append(fails, fmt.Sprintf("churn: %d source mutation operations failed", s.ChurnErrors))
 	}
 	// Convergence: every ledger entry converged within OBS_BOUND; the max
 	// observed heal must be <= the bound.
@@ -947,9 +1005,10 @@ func (r *observeRun) evaluateAcceptance(s runSummary) (bool, []string) {
 // the cold-attach wait and the window loop.
 func runTick(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosView,
 	metrics *metricsView, child *spotterChild, records *recordWriter, log *harnessLog,
-	tickNo int, windowStart time.Time) tickRecord {
+	tickNo int, windowStart time.Time, previousMutationSequence uint64, previousSourceFingerprint string) tickRecord {
 
 	tickStart := time.Now()
+	mutationAtStart, mutationActiveAtStart := driver.mutationState()
 	record := tickRecord{
 		Tick: tickNo,
 		TS:   formatTime(tickStart),
@@ -962,10 +1021,12 @@ func runTick(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosVi
 		record.Verdict = string(verdictObsErr)
 		record.Env = envState{Class: "read-error", Detail: fmt.Sprintf("source: %v", srcErr)}
 		finalizeTick(&record, tickStart, nil)
+		record.MutationSequence, record.MutationObserved = finishTickMutationState(driver, previousMutationSequence, mutationAtStart, mutationActiveAtStart)
 		writeTickRecord(t, records, log, record)
 		return record
 	}
 	model := buildSourceModel(pods, driver.appCodes)
+	record.SourceFingerprint = sourceMutationFingerprint(pods, driver.appCodes)
 	record.Source = sideCount{
 		Count:     model.Count,
 		Online:    lenIDs(model.Online),
@@ -973,6 +1034,7 @@ func runTick(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosVi
 		Pending:   countPending(pods, driver.appCodes),
 		Services:  countServices(model),
 	}
+	record.ExpectedCount = record.Source.Online + record.Source.Unhealthy
 
 	// 2. REMOTE: per service, the list ∪ catalog union; any read failure
 	// is OBSERR.
@@ -1006,6 +1068,8 @@ func runTick(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosVi
 			}
 		}
 		finalizeTick(&record, tickStart, nil)
+		record.MutationSequence, record.MutationObserved = finishTickMutationState(driver, previousMutationSequence, mutationAtStart, mutationActiveAtStart)
+		record.MutationObserved = record.MutationObserved || (previousSourceFingerprint != "" && record.SourceFingerprint != previousSourceFingerprint)
 		writeTickRecord(t, records, log, record)
 		return record
 	}
@@ -1048,9 +1112,11 @@ func runTick(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosVi
 
 	// 5. VERDICT.
 	diffResult := diffResult{Divergences: divergences, InFlightCount: inFlight}
-	record.Verdict = string(tickVerdict(diffResult))
 	record.Divergence = divergences
-	record.ExactEqual = len(divergences) == 0
+	record.ExactEqual = len(divergences) == 0 && record.ExpectedCount == record.Remote.Count
+	record.MutationSequence, record.MutationObserved = finishTickMutationState(driver, previousMutationSequence, mutationAtStart, mutationActiveAtStart)
+	record.MutationObserved = record.MutationObserved || (previousSourceFingerprint != "" && record.SourceFingerprint != previousSourceFingerprint)
+	record.Verdict = string(strictTickVerdict(diffResult, record.MutationObserved))
 
 	// 6. The queue state rides the record (metrics scrape failure leaves
 	// the queue unobserved but never fails the tick — the drain criterion
@@ -1069,6 +1135,12 @@ func runTick(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosVi
 	return record
 }
 
+func finishTickMutationState(driver *churnDriver, previousSequence, startSequence uint64, activeAtStart bool) (uint64, bool) {
+	endSequence, activeAtEnd := driver.mutationState()
+	observed := startSequence != previousSequence || endSequence != startSequence || activeAtStart || activeAtEnd
+	return endSequence, observed
+}
+
 // finalizeTick stamps the elapsed time and ages.
 func finalizeTick(record *tickRecord, tickStart time.Time, divergences []divergence) {
 	record.TickMS = time.Since(tickStart).Milliseconds()
@@ -1081,9 +1153,9 @@ func writeTickRecord(t *testing.T, records *recordWriter, log *harnessLog, recor
 	if err := records.writeTick(record); err != nil {
 		t.Errorf("write tick record: %v", err)
 	}
-	log.event("tick %d %s src=%d(on %d/unh %d/pend %d/svc %d) rmt=%d(on %d/dis %d/svc %d) inflight=%d div=%d queue=[retry %d robot %d dropped %.0f] %dms",
+	log.event("tick %d %s src=%d(expected %d,on %d/unh %d/pend %d/svc %d) rmt=%d(on %d/dis %d/svc %d) inflight=%d div=%d queue=[retry %d robot %d dropped %.0f] %dms",
 		record.Tick, record.Verdict,
-		record.Source.Count, record.Source.Online, record.Source.Unhealthy, record.Source.Pending, record.Source.Services,
+		record.Source.Count, record.ExpectedCount, record.Source.Online, record.Source.Unhealthy, record.Source.Pending, record.Source.Services,
 		record.Remote.Count, record.Remote.Online, record.Remote.Unhealthy, record.Remote.Services,
 		record.InFlight, len(record.Divergence), record.Queue.RetryNacos, record.Queue.RobotDepth, record.Queue.Dropped,
 		record.TickMS)

@@ -4,8 +4,11 @@
 package observe
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -140,6 +143,23 @@ func buildSourceModel(pods []sourcePod, appCodes []string) *sourceModel {
 		sort.Strings(ids)
 	}
 	return model
+}
+
+// sourceMutationFingerprint covers the source fields that can change an
+// instance's discovery eligibility or projected Nacos value. It detects kwok
+// controller status transitions as well as explicit driver create/delete
+// operations, so a stable tick cannot borrow an old driver mutation epoch.
+func sourceMutationFingerprint(pods []sourcePod, appCodes []string) string {
+	rows := make([]string, 0, len(pods))
+	for _, pod := range pods {
+		if !isObservedAppCode(pod.AppCode, appCodes) {
+			continue
+		}
+		rows = append(rows, fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%t", pod.Name, pod.AppCode, pod.Phase, pod.PodIP, pod.ContainersReady))
+	}
+	sort.Strings(rows)
+	sum := sha256.Sum256([]byte(strings.Join(rows, "\n")))
+	return hex.EncodeToString(sum[:])
 }
 
 func expectedSourceEntry(pod sourcePod, enabled bool, status string) sourceEntry {
