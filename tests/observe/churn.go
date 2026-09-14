@@ -236,7 +236,6 @@ func (d *churnDriver) deletePods(names []string, issuedAt time.Time) error {
 	if len(names) == 0 {
 		return nil
 	}
-	args := append([]string{"delete", "pod", "--ignore-not-found=true", "--wait=false", "--"}, names...)
 	// Publish delete clocks before issuing the API call so a concurrent
 	// observation cannot see the remote extra without its in-flight ledger
 	// entry. The entry remains useful even if kubectl reports an error; the
@@ -250,8 +249,15 @@ func (d *churnDriver) deletePods(names []string, issuedAt time.Time) error {
 		d.ledger[name] = ledgerEntry{Op: "delete", PodName: name, AppCode: appCode, IssuedAt: issuedAt}
 	}
 	d.mu.Unlock()
-	if _, err := d.kubectlStdin("", args...); err != nil {
-		return fmt.Errorf("delete pods (%d): %w", len(names), err)
+	for start := 0; start < len(names); start += 100 {
+		end := start + 100
+		if end > len(names) {
+			end = len(names)
+		}
+		args := append([]string{"delete", "pod", "--ignore-not-found=true", "--wait=false", "--"}, names[start:end]...)
+		if _, err := d.kubectlStdin("", args...); err != nil {
+			return fmt.Errorf("delete pods (%d): %w", end-start, err)
+		}
 	}
 	d.mu.Lock()
 	for range names {

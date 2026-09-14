@@ -15,6 +15,9 @@ docker info >/dev/null 2>&1 || { echo "InfraError: docker daemon unavailable" >&
 cluster="${OBS_KWOK_CLUSTER:-dsca-observe-$$}"
 [[ "$cluster" =~ ^dsca-observe-[a-zA-Z0-9_-]+$ ]] || { echo "EnvError: invalid cluster name" >&2; exit 2; }
 kc="${OBS_KWOK_KUBECONFIG:-${HOME}/.kwok/clusters/${cluster}/kubeconfig.yaml}"
+if [[ "$kc" != /* ]]; then
+  kc="$root/$kc"
+fi
 api="${OBS_KWOK_API_PORT:-34567}"
 etcd="${OBS_KWOK_ETCD_PORT:-34679}"
 for port in "$api" "$etcd" "${OBS_NACOS_PORT:-28848}" "${OBS_NACOS_GRPC_PORT:-29848}" "${OBS_NACOS_CONTROL_PORT:-29849}" "${OBS_ATLAS_PORT:-19997}" "${OBS_METRICS_PORT:-19998}"; do
@@ -32,6 +35,7 @@ for i in {1..30}; do [[ -s "$kc" ]] && kubectl --kubeconfig "$kc" get --raw=/liv
 [[ -s "$kc" ]] || { echo "InfraError: kwok kubeconfig not created" >&2; exit 3; }
 kubectl --kubeconfig "$kc" get --raw=/livez >/dev/null || { echo "InfraError: kwok apiserver not live" >&2; exit 3; }
 node="${OBS_KWOK_NODE:-kwok-node-observe}"
+[[ "$node" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || { echo "EnvError: invalid kwok node name" >&2; exit 2; }
 if ! kubectl --kubeconfig "$kc" get node "$node" >/dev/null 2>&1; then
   kubectl --kubeconfig "$kc" apply -f - >/dev/null <<EOF
 apiVersion: v1
