@@ -6,7 +6,6 @@
 package nacos
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -25,8 +24,12 @@ func TestDefaultConstructorsUseSDKAndNeverAllocateCompatHTTP(t *testing.T) {
 	if client.sdk == nil || client.http != nil {
 		t.Fatalf("NewClient() transport = sdk:%t http:%t, want sdk=true/http=false", client.sdk != nil, client.http != nil)
 	}
-	if _, err := NewSink("127.0.0.1:8848", nil); !errors.Is(err, ErrUnsupportedOperation) {
-		t.Fatalf("NewSink() error = %v, want SDK startup capability gate", err)
+	sink, err := NewSink("127.0.0.1:8848", nil)
+	if err != nil {
+		t.Fatalf("NewSink() error = %v, want nil under deployment-owned default policy", err)
+	}
+	if sink == nil || sink.client == nil || sink.client.sdk == nil || sink.client.http != nil {
+		t.Fatalf("NewSink() transport = sdk:%t http:%t, want sdk=true/http=false", sink != nil && sink.client != nil && sink.client.sdk != nil, sink != nil && sink.client != nil && sink.client.http != nil)
 	}
 }
 
