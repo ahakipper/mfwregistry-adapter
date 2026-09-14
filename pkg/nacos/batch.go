@@ -114,15 +114,15 @@ func waitForPersistentBatch(c *Client, key persistentBatchKey, params []Instance
 		if err != nil {
 			return err
 		}
-		seen := 0
+		matched := make(map[string]bool, len(want))
 		for _, h := range hosts {
 			p, ok := want[h.InstanceID]
-			if !ok || h.IP != p.IP || h.Port != p.Port || h.ClusterName != p.ClusterName || h.ServiceName != p.ServiceName || h.Ephemeral || h.Enabled != p.Enabled || h.Healthy != p.Enabled {
+			if !ok || matched[h.InstanceID] || h.IP != p.IP || h.Port != p.Port || h.ClusterName != p.ClusterName || h.ServiceName != p.ServiceName || h.Ephemeral || h.Enabled != p.Enabled || h.Healthy != p.Enabled {
 				continue
 			}
-			seen++
+			matched[h.InstanceID] = true
 		}
-		if seen == len(want) {
+		if len(matched) == len(want) {
 			return nil
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -197,7 +197,7 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 					if len(params) > 0 {
 						validIndexes := make([]int, 0, len(params))
 						for position, item := range batch.Items {
-							if item.Ip != "" {
+							if item.Ip != "" && errs[batch.Indexes[position]] == nil {
 								validIndexes = append(validIndexes, batch.Indexes[position])
 							}
 						}
