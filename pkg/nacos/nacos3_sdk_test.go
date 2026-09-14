@@ -43,19 +43,8 @@ func (v *recordingNacos3Vendor) Unsubscribe(service, group string, clusters []st
 }
 func (v *recordingNacos3Vendor) Close() error { v.closed++; return v.err }
 
-// nacos3Vendor is the Spotter-owned seam for the Nacos 3 naming SDK.  The
-// implementation must route persistent lifecycle and all naming reads through
-// this seam; tests intentionally require operation-specific methods so a
-// future adapter cannot silently fall back to naming_http or /v1/ns.
-type nacos3Vendor interface {
-	RegisterPersistent(InstanceParams) error
-	DeregisterPersistent(InstanceParams) error
-	SelectAll(service, cluster, group string) ([]Host, error)
-	ListServices(page, size int, namespace, group string) ([]string, int, error)
-	Subscribe(service, group string, clusters []string, callback func([]Host, error)) error
-	Unsubscribe(service, group string, clusters []string, callback func([]Host, error)) error
-	Close() error
-}
+// Keep the test name as a readable alias of the production seam contract.
+type nacos3Vendor = nacos3SDKVendor
 
 // RED: sdkNamingFacade does not yet expose the Nacos 3 vendor seam.  This
 // compile-time contract is deliberate; Task 1.2 will provide the adapter that
@@ -124,6 +113,9 @@ func TestNacos3FacadePropagatesVendorErrors(t *testing.T) {
 	facade := &sdkNamingFacade{vendor: vendor}
 	if err := facade.RegisterPersistent(InstanceParams{ServiceName: "svc"}); !errors.Is(err, want) {
 		t.Fatalf("RegisterPersistent() error = %v, want %v", err, want)
+	}
+	if err := facade.DeregisterPersistent(InstanceParams{ServiceName: "svc"}); !errors.Is(err, want) {
+		t.Fatalf("DeregisterPersistent() error = %v, want %v", err, want)
 	}
 	if _, err := facade.SelectAll("svc", "", ""); !errors.Is(err, want) {
 		t.Fatalf("SelectAll() error = %v, want %v", err, want)
