@@ -76,21 +76,25 @@ policy and the ephemeral/persistent lifecycle flag are independent concerns.
 The real scale vehicle is `kwokctl` plus a fake Kubernetes node and the real
 client-go informer/watch path. Fake providers and in-memory mocks remain unit
 test tools only. The definitive gate creates at least 1,000 Pods across at
-least 20 applications and runs for at least two hours. It performs continuous
-source-to-Sink comparison and records every observation tick.
+least 20 applications/services (`OBS_SERVICES=20`, with one application mapped
+to one Nacos service scope) and runs for at least two hours. It performs
+continuous source-to-Sink comparison and records every observation tick.
 
 Each tick compares:
 
 1. the authoritative kwok/Kubernetes Pod snapshot;
-2. Spotter's internal observed/cache projection where it is observable; and
+2. Spotter's internal observed/cache projection, exposed through a test-only
+   read port or observer callback; and
 3. Nacos's complete SDK view, including disabled/unhealthy persistent entries.
 
 The gate must exercise create-before-delete churn, burst deletes, application
 batch boundaries (`100 + 100 + 1`), retry after an injected failure, and
-reconciliation after a missed or delayed watch event. Acceptance requires no
-dropped events, no unexplained Nacos ghosts, bounded divergence age, exact
-final cardinality, and verified cleanup of Pods, containers, temporary files,
-and Nacos registrations.
+reconciliation after a missed or delayed watch event. The fixed observation
+bound is `OBS_BOUND = max(10 seconds, configured full-push interval)`; an entry
+younger than that bound may be marked `inflight`, while an older missing or
+extra composite identity is a divergence. Acceptance requires no dropped
+events, zero divergences older than `OBS_BOUND`, exact final cardinality, and
+verified cleanup of Pods, containers, temporary files, and Nacos registrations.
 
 ### Legacy package removal
 
@@ -103,7 +107,9 @@ surface. Deployment assets under `config/certs/` and `config/kubeconfigs/`
 remain.
 
 The final static gate must find no production or test import of the deleted
-packages, no writes to package globals, and no deprecated constructor files.
+packages, no writes (`=`, `+=`, `-=`, `++`, `--`) to package globals, and no
+deprecated constructor files. Equality comparisons and short declarations are
+not assignment violations.
 
 ## Error and consistency rules
 

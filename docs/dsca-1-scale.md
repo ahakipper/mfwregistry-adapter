@@ -1,5 +1,11 @@
 # DSCA Track 1 — Scale Vehicle & Event-Path Capacity
 
+> **Current target correction (2026-09-14):** The historical experiments in
+> this document used kwok successfully, but the active reliability gate now
+> pairs that real vehicle with Nacos 3.2.4-slim ARM64 and the official SDK gRPC
+> naming facade. The required 1000-Pod/2-hour run and its source/cache/Nacos
+> consistency evidence remain `NOT VERIFIED` until rerun against that target.
+
 **Auditor:** DS-1 (scale vehicle & event-path capacity)
 **Repo state:** `spotter` @ `refactor/all`, HEAD `69b0105` — this document was audited at that commit; the current HEAD `0ff71f7` is a docs-only delta (five DSCA documents added, no code drift).
 **Date:** 2026-09-11 (revised same day after adversarial review: event-arithmetic provenance, DS-1-2 regime split, drop-metric spec unified with dsca-2-latency.md §6, kwok stage-config and E9/E14 corrections)
@@ -208,7 +214,12 @@ No counter, no log, no metric. Repo-wide grep for queue metrics in `internal/inf
 
 **Scenario:** 1,000-instance cold registration (spotter restart or new cluster attach): regime (b) — the event wave converges in ~1-2s IF the server holds under ~100-way parallelism; a burst that pushes the server past its knee (the 50-parallel degradation shape) drops the aggregate toward the serial rate while the serial regime (a) full-push tick is already running at ~250/s, with the unhealthy → enabled=false and health-check-PUT extra calls on first register of each (service, cluster) pair (nacos.go:379, `ensureClusterHealthCheckDisabled`). Under the 2× churn of a rolling update, tens of seconds of nacos-bound pushing — and every one of those seconds the queue is filling (see DS-1-1's math: even at the corrected event counts, a 5,000-replica rollout's 20,000-30,000 events overrun the queue when the drain is knee- or timeout-bound).
 
-**Fix design: bounded-parallelism group of single-instance calls at the nacos sink — NOT a batch API (there is none):** nacos v1/v2 have **no batch register/deregister endpoint** (track 2 verified against the 2.1.0 source and OpenAPI docs: `/nacos/v1/ns/instance` and `/nacos/v2/ns/instance` are single-instance; the only "batch" endpoints are `instance/metadata/batch` — Beta and metadata-only, they cannot register or deregister). So: (a) keep Push's per-instance policy, but issue the per-instance registers/deregisters as a **bounded-parallelism group of single-instance calls** (a small worker set or errgroup+semaphore, start 8 — the API is idempotent upserts, ordering within one instance is all that matters, and the concurrency must be capped well below the server's measured knee); (b) aggregate partial failures through the existing retry-friendly shape — the FanoutError already aggregates per-sink, so a partially-failed parallel group stays expressible; (c) an end-to-end latency metric (QueueObject.CreateAt → nacos-register-complete histogram) as designed by track 2 (dsca-2-latency.md §3/§6), so the parallelism win is measurable, not asserted. The 10s RequestTimeout stays per-request; only concurrency changes.
+**Historical Nacos 2 fix design:** bounded-parallelism group of
+single-instance calls at the nacos sink — Nacos v1/v2 had no persistent batch
+endpoint in the tested contract. The active Nacos 3 plan supersedes this
+conclusion: it keeps the safe logical application batch cap of 100 and must
+prove the official SDK gRPC request semantics against Nacos 3.2.4 before using
+any protocol-level batch call.
 
 ### DS-1-3 (P1): A slow sink stalls the single Pop loop through the blocking ants pool — converting downstream latency into upstream event loss
 
@@ -331,7 +342,11 @@ Reuse the existing soak harness shape (tests/soak/drivers.go `k8sDriver.apply/sc
 
 - **Source side:** informer event counts by type (the scratch informer from E6 — a 60-line client-go program — can run as a sidecar against the same kubeconfig; or spotter's own queue metrics post-fix).
 - **Spotter side:** the existing Prometheus port (`:8090` in the demo): `sync_once_durations_histogram` (per-event Atlas push), `sync_all_durations_histogram` (per full-push), `sync_error_gauge` per sink; add nothing to the repo — the harness scrapes.
-- **Nacos side:** the catalog view per (service, cluster) — `GET /nacos/v1/ns/catalog/instances` pagination (the prune's own view, client.go:250-286), and the instance list per service; convergence = catalog view equals the live pod set (by composite id `ip#port#k8s#DEFAULT_GROUP@@app`).
+- **Historical Nacos 2 side:** the catalog view per (service, cluster) —
+  `GET /nacos/v1/ns/catalog/instances` pagination (the prune's old view,
+  client.go:250-286), and the instance list per service. The active Nacos 3
+  gate replaces this with the official SDK complete view; convergence is still
+  defined by the composite identity `ip#port#k8s#DEFAULT_GROUP@@app`.
 - **Divergence bound:** per observation tick (track 4's cadence), compare K8s live pods (kubectl, by app-code label) vs nacos catalog; record max staleness (age of any divergence) and the heal time after each churn phase — the same `waitForConverged` + `retryClusterView` shape the soak scenarios already use (scenarios.go:482-497).
 - **The verdict for the user requirement:** at each of 1000/3000/5000, the observation must show (a) no unexplained instance loss (drop counter flat or explained), (b) K8s→nacos lag p50/p99 in the seconds, driven to the milliseconds target by the DS-1-2 fix, (c) both views consistent at every tick (track 4's ownership).
 

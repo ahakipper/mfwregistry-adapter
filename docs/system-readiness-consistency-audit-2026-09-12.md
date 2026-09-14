@@ -1,5 +1,13 @@
 # spotter 当前工程就绪度与一致性闭环审计
 
+> **Current target correction (2026-09-14):** The Nacos 2.1.0 and v2 SDK
+> records in this historical audit are provenance only. The active release
+> target is Nacos 3.2.4-slim on `linux/arm64` with an official SDK gRPC
+> facade. Nacos 3 integration and the real kwok 1000-instance/2-hour
+> observation remain `NOT VERIFIED` until fresh evidence is recorded.
+> `healthChecker=NONE` is deployment-owned service/cluster configuration, not
+> a naming-SDK startup prerequisite.
+
 **审计日期：** 2026-09-12（当前状态增量更新至 2026-09-13）
 
 > Current scope: Atlas is an existing Sink/mock integration point deferred
@@ -106,28 +114,28 @@ amd64，QEMU 下 Java 持续高 CPU 超过 5 分钟仍无 readiness 响应。容
 | Burst delete race | **IMPLEMENTED / TESTED; REAL OBS PENDING** | keyed per-identity gate、trusted full revalidation、scoped tombstone 和 typed full retry 已提交；真实长时 burst/生产延迟仍需重跑观察 | 部分过时：原始 burst 结果保留为历史证据，当前实现状态见增量章节 |
 | Observe `logSlice` + ledger/apply 竞态 | **HARNESS FIXED; 2H PENDING** | zap JSON `ts`/行首时间解析和 apply/delete 前 ledger clock 已修复并有 deterministic tests；完整自包含 2h 观察尚未执行 | 是：旧缺口已修复，长时证据仍缺 |
 | Consul 同等规模观察 | **ACCEPTED NON-GOAL** | 2h/1000 观察只启动 `--providers k8s`；当前没有机器部署场景，按本次范围暂不展开 | 否；范围边界已明确 |
-| Nacos HTTP/SDK Sink | **SDK DEFAULT / PRODUCTION SDK-ONLY / REAL PARTIAL** | SDK client query/list/subscribe/batch/reconnect and Admin capability evidence remains partial; cluster Admin lacks an SDK equivalent and fails closed. Deployment HA/multi-node/TLS/auth/namespace/leaderless checks are out of scope. | 是 |
-| Nacos 官方 SDK gRPC 能力 | **SUPPORTED BY SDK AND WIRED** | 当前 pseudo-pin `0024865` naming facade 已接入；persistent register/deregister 按 SDK 设计走 HTTP，ephemeral/batch 走 gRPC；SDK client/Admin code/scratch evidence remains partial. Deployment HA/multi-node/TLS/auth/namespace/leaderless checks are out of scope. | 是 |
+| Nacos HTTP/SDK Sink | **HISTORICAL V2 / Nacos 3 MIGRATION IN PROGRESS** | The v2 evidence below is retained for provenance; the active v3.2.4 ARM64 SDK/gRPC lifecycle and Admin policy remain NOT VERIFIED. Deployment HA/multi-node/TLS/auth/namespace/leaderless checks are out of scope. | 是 |
+| Nacos 官方 SDK gRPC 能力 | **NACOS 3 TARGET / REAL NOT VERIFIED** | Current branch pins the official v3 development pseudo-version and adds a vendor seam; Task 1.2 must prove persistent register/deregister request types use gRPC. | 是 |
 | Nacos SDK 统一接入约束 | **CODE PASS / RELEASE NOT VERIFIED (P1)** | SDK query/list/subscribe/batch/reconnect/Admin evidence is partial; deployment HA/multi-node/TLS/auth/namespace/leaderless checks are out of scope. | 是 |
 | Atlas 真实 protobuf wire | **DEFERRED / NON-BLOCKING** | Historical limitation retained; real wire remains a future entry gate if Atlas is re-enabled. | No current release blocker |
 | Notice / appcenter 告警 | **OPTIONAL / OUT OF SCOPE** | AppCenter endpoint/payload/auth/SLA are deployment-owned and not wired in this release; notifier adapter remains optional. | No current release blocker |
 | DDD 目标架构 | **CODE PARTIAL / SHIM RETIREMENT PENDING** | active provider/elector/conversion/metrics graph 已使用显式依赖；legacy constructors/bridge 保留兼容，aggregate 已由 `legacyaggregate` build tag 隔离 | 是 |
 | `go vet ./...` | **PASS** | `eb6bf0c` 修复 cache printf 和 K8s unkeyed literal；当前命令退出 0 | 是 |
 
-**总体判定：** 业务主路径已经达到“可构建、可测试、可在本地 Nacos 2.1 形状运行”的阶段；身份、顺序、全量重试、空源 ownership、Nacos SDK naming/catalog/readiness、K8s cache swap 和 vet 缺陷已有代码修复与离线/竞态证据，但还不是“生产一致性闭环已证明”。仍未闭环的是真实 Nacos/Atlas 协议与 HA/TLS/auth 证据、完整 2h Observe、DDD globals、真实 appcenter 告警，以及 cluster-admin health-check 的官方 SDK 替代方案。Consul 大规模观察按当前没有机器部署场景处理为 accepted non-goal，不影响本次 K8s 主路径结论；一旦重新启用 ECS/机器部署，必须单独打开该验证项。
+**总体判定（历史基线）：** 业务主路径曾达到“可构建、可测试、可在本地 Nacos 2.1 形状运行”的阶段；该结论不适用于当前 Nacos 3 目标。当前仍未闭环的是真实 Nacos 3 SDK/gRPC、完整 2h kwok Observe、DDD globals 删除、真实 AppCenter 告警，以及 deployment-owned health policy evidence。Consul 大规模观察按当前没有机器部署场景处理为 accepted non-goal，不影响本次 K8s 主路径结论。
 
 ## 3. Nacos Sink 审计
 
 ### 3.1 已经具备的能力
 
-当前 `pkg/nacos` 的生产路径通过官方 `nacos-sdk-go/v2` pseudo-pin `0024865` naming facade；兼容 HTTP 客户端仍保留，但只能由显式 `TransportHTTPCompat` 选择。SDK mode 不分配 compatibility `net/http` client，也不会在不支持的 SDK 操作上回退裸 HTTP。
+当前 `pkg/nacos` 正在从官方 `nacos-sdk-go/v2` 迁移到 pinned `nacos-sdk-go/v3` development facade；v2 的 HTTP 路由记录仅作为历史证据。Nacos 3 生产路径不允许兼容 HTTP 业务写入。
 HTTP 客户端仍保留，但只能由显式 `TransportHTTPCompat` 选择。SDK mode 不分配
 compatibility `net/http` client，也不会在任何不支持的 SDK 操作上偷偷回退裸 HTTP。
 
 - 生产 Nacos 操作统一经官方 SDK（或官方 SDK 暴露的等价 facade）；不得在业务路径新增散落裸 `net/http` 调用。
-- persistent register/deregister 通过官方 SDK（persistent 的内部 HTTP 是 SDK 自身实现）；service-list、SelectAll/query、subscribe/unsubscribe、catalog/prune 和 readiness read/write canary 均通过 SDK API。
+- persistent register/deregister、service-list、SelectAll/query、subscribe/unsubscribe、catalog/prune 和 readiness read/write canary 必须通过官方 Nacos 3 SDK gRPC facade；Task 1.2 的 request-type gate 尚未通过。
 - catalog/prune 在 SDK mode 通过 `SelectAllInstances` 完整视图实现（包含 `enabled=false`、unhealthy 和 zero-weight host），避免依赖 Admin catalog HTTP endpoint；HTTP catalog 仅保留在明确标注的兼容 fixture。
-- cluster health-check `UpdateCluster` 在当前 pseudo-pin `0024865` naming SDK 没有等价 Admin API；SDK mode 返回 typed `ErrUnsupportedOperation` 并输出 release blocker，绝不回退裸 HTTP。只有显式兼容模式允许该 PUT。
+- cluster health-check `UpdateCluster` is a deployment-owned management concern. Its absence from the naming SDK must not block ordinary runtime naming calls; any future Admin/Maintainer preflight is explicit and SDK-only.
 - product 环境启动拒绝 `TransportHTTPCompat`；兼容 transport 只用于测试或有审批的迁移回滚。
 
 现有实现证据：
@@ -229,10 +237,14 @@ health-check update 因 SDK 无 Admin API 而返回 typed `ErrUnsupportedOperati
 
 ### 3.3 官方 Go SDK 与 gRPC 结论
 
-**结论：官方 Go SDK 支持 Nacos 2.x gRPC，当前仓库已通过 facade 接入；生产路径
-不再裸 HTTP，但真实目标版本证据仍未提供。**
+**历史结论：** 官方 Go SDK v2 提供 Nacos 2.x gRPC proxy, but its high-level
+delegate routes persistent instances through legacy HTTP. The active Nacos 3
+conclusion is not yet proven; the pinned v3 facade must pass the request-type
+and real-server gates first.
 
-本地核验 `github.com/nacos-group/nacos-sdk-go/v2` pseudo-pin `v2.3.6-0.20260902123754-002486583df5`（commit `0024865`）：
+**Historical v2 source evidence (not the active target):** 本地核验
+`github.com/nacos-group/nacos-sdk-go/v2` pseudo-pin
+`v2.3.6-0.20260902123754-002486583df5`（commit `0024865`）：
 
 - `clients/naming_client/naming_grpc/naming_grpc_proxy.go` 提供 `RegisterInstance`、`BatchRegisterInstance`、`DeregisterInstance`、`GetServiceList` 等 gRPC proxy。
 - `clients/naming_client/naming_proxy_delegate.go` 的 `getExecuteClientProxy` 按 `instance.Ephemeral` 选择：persistent (`false`) 走 `naming_http`，ephemeral (`true`) 走 `naming_grpc`。

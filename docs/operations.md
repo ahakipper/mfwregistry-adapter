@@ -4,14 +4,22 @@ Operational reference for building, running, monitoring and troubleshooting
 spotter. See [architecture.md](architecture.md) for design background and
 [data-model.md](data-model.md) for the pushed data model.
 
-## Current release status (2026-09-13, HEAD `33606fa`)
+## Current release status (2026-09-14, target baseline `refactor/all`)
 
-- Nacos production startup defaults to the official SDK but is **BLOCKED / NOT
-  VERIFIED** before readiness until an official Admin/Maintainer cluster-health
-  operation is available. `http-compat` is restricted to tests/rollback.
-- Real Nacos has bounded ARM64 scratch evidence. Deployment-level HA,
-  multi-node failover, TLS/auth, namespace and leaderless checks are outside
-  this release scope; the single-Sink SDK integration remains covered.
+- The supported Nacos target is `nacos/nacos-server:v3.2.4-slim` on
+  `linux/arm64`. The historical Nacos 2.1.0 scratch records below are
+  compatibility evidence only, not Nacos 3 release evidence.
+- Nacos 3 business operations must use the official Go SDK's gRPC-capable
+  naming facade. The current v3 development pseudo-version is pinned in
+  `go.mod`; the Nacos 3 integration gate remains **NOT VERIFIED** until a real
+  v3.2.4 target passes the persistent lifecycle and 201-instance batch tests.
+- `healthChecker=NONE` is a service/cluster management setting provisioned by
+  the Nacos deployment. It is not a prerequisite for the SDK's register,
+  deregister, query, or subscribe calls. Spotter does not silently fall back to
+  raw HTTP when an Admin/Maintainer SDK is unavailable.
+- Real Nacos deployment HA, multi-node failover, TLS/auth policy, namespace
+  authorization, and leaderless recovery remain outside this Spotter release
+  scope; the Nacos 3 single-Sink runtime gate is still required.
 - Atlas remains an existing Sink/mock integration point, deferred for a future
   release. Real protobuf/method/TLS/auth compatibility is its future entry gate,
   not a current release blocker.
@@ -19,9 +27,10 @@ spotter. See [architecture.md](architecture.md) for design background and
   commands and explicit EnvError/InfraError skips; the full 2h/1000+ run is
   still pending. Consul scale observation is an accepted non-goal until ECS
   deployment returns.
-- DDD active paths use injected logger/notifier/metrics ports; residual legacy
-  reads are confined to `internal/infra/legacycompat`. AppCenter delivery is
-  fail-closed without a deployment-owned endpoint/payload/auth/SLA contract.
+- DDD active paths use injected logger/notifier/metrics ports. The deprecated
+  global packages are scheduled for removal after repository callers migrate.
+  AppCenter delivery is fail-closed without a deployment-owned
+  endpoint/payload/auth/SLA contract.
 
 Current code gates: `go vet ./...`, package race tests, observe-tagged unit/race
 tests, and guarded `nacos_real`/`atlas_real` tag tests. A skipped external gate
@@ -99,21 +108,19 @@ process is normally started from the directory that contains `config/`.
 ### Nacos sink transport
 
 When enabled, production naming operations use the official
-`nacos-sdk-go/v2` facade. `--nacos-transport=sdk` is the default; set
+`nacos-sdk-go/v3` facade. `--nacos-transport=sdk` is the default; set
 `--nacos-transport=http-compat` only for an explicitly approved migration
 rollback or local mock run, which emits a `NON_PRODUCTION_COMPAT` warning and
 is rejected when `Env=product`. SDK mode allocates no compatibility
 `net/http` client.
 `--nacos-server-list` provides ordered failover addresses; namespace/group,
-username/password, TLS CA/server name, and timeout flags are passed to the
-same client configuration. Catalog/prune uses the official SDK
-`SelectAllInstances` complete view (including disabled/unhealthy entries),
-and readiness uses the SDK service-list RPC plus a persistent register /
-deregister canary. The pinned SDK pseudo-version `0024865` has no cluster-admin API for the
-NONE health checker; SDK mode returns `ErrUnsupportedOperation` before any
-business register and records the release gap rather than issuing a raw HTTP
-request. The HTTP cluster update remains a separately owned, expiring
-compatibility exception and is never a product-path fallback.
+username/password, TLS CA/server name, and timeout flags are passed to the same
+client configuration. Catalog/prune uses the SDK complete view (including
+disabled/unhealthy entries), and readiness uses the SDK service-list RPC plus a
+persistent register/deregister canary. The pinned v3 development SDK is not
+accepted as Nacos 3 evidence until the real v3.2.4 gate proves that persistent
+operations use gRPC rather than `/v1/ns` HTTP. The explicit `http-compat`
+transport is test-only and is never a product fallback.
 
 For notifications, configure `--appcenter-notice-endpoint`,
 `--appcenter-notice-auth-token`, `--appcenter-notice-timeout` and
@@ -204,6 +211,12 @@ and three "Instance data inconsistency" variants emitted during full pushes.
 - [architecture.md](architecture.md) — architecture design.
 - [data-model.md](data-model.md) — the `Instance` model and state machines.
 - [../README.md](../README.md) — project README.
-### Nacos production startup gate
+### Nacos 3 production startup gate
 
-SDK routing and offline tests are PASS, but production startup remains BLOCKED: `NewSinkWithConfig` rejects SDK construction before readiness probes because the pinned official SDK lacks cluster-admin health-check control. No Nacos read or canary write is attempted. Production can resume only after an official Admin/Maintainer SDK or approved versioned adapter is verified; `http-compat` is test/rollback only.
+Offline SDK routing tests are not sufficient for release. Production startup
+requires the Nacos 3.2.4 ARM64 integration gate to prove persistent gRPC
+register/deregister, complete reads, retry, and 201-instance application
+batching. Missing Admin/Maintainer support does not disable ordinary naming
+operations; it only means Spotter cannot change the deployment's
+`healthChecker=NONE` setting itself. The deployment must provision that policy
+before startup, or an approved Admin/Maintainer SDK preflight must be injected.

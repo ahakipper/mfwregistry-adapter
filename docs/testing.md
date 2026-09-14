@@ -546,29 +546,30 @@ The owned lifecycle writes state before creation and uses an EXIT cleanup trap;
 state hashes and residual markers permit safe retry after partial failure.
 When `OBS_KUBECONFIG` is set, `make test-observe` runs only read-only
 `TestObserveUnit` cases and exits before any apply/delete driver operation.
-### Nacos SDK startup capability gate and persistent application batches
+### Nacos 3 SDK and persistent application batches
 
-The SDK eval classifies a Nacos 2.1.0 `RequestHandler Not Found` response for
-the *protocol-level ephemeral batch endpoint* as `NOT VERIFIED: batch
-unsupported by target`; it never promotes that target to PASS. This result must
-not be read as evidence that Spotter cannot batch its work. The production sink
-now provides a separate persistent application-batch path: a full snapshot is
-grouped by namespace/group/service/cluster/operation, split into at most 100
-items per application batch, and each persistent item is sent through the
-official SDK with bounded concurrency. Newer protocol versions still require
-independent verification; protocol-level persistent batching remains
-unsupported by the pinned SDK. Other batch errors remain hard failures and
-cleanup still runs.
+Nacos 2.1.0 records in this document are historical compatibility evidence;
+they do not establish the current target. The active gate is a real
+`nacos/nacos-server:v3.2.4-slim` ARM64 target. Nacos 3 runtime naming supports
+persistent gRPC operations, but the adapter must prove the exact official Go
+SDK route rather than infer it from a module version string.
 
-Latest ARM64 evidence records `TestNacosReal -race` persistent lifecycle PASS;
-the SDK eval ephemeral protocol batch remains NOT VERIFIED on Nacos 2.1.0,
-while `TestNacosRealPersistentApplicationBatch` is the guarded gate for the
-Spotter persistent application-batch fallback. A successful run records the
-exact 201-item catalog, retry convergence, final catalog hash and
-`residual_unknown=false`; without explicit scratch guards it skips as
-`NOT VERIFIED: EnvError`.
+Spotter's application batch remains distinct from a Nacos protocol batch: one
+namespace/group/application/cluster/operation scope, maximum 100 items, global
+item-call cap 8, and no prune after a failed registration phase. A 201-item
+test must observe all 201 persistent composite identities after the final
+`100 + 100 + 1` work units. The test must fail if a protocol batch replaces the
+previous chunk or if any item silently routes through `/v1/ns` HTTP.
 
-The SDK-only code path is covered by unit and race tests. A production SDK sink must fail before readiness or canary side effects while the pinned SDK lacks the required cluster-admin health-check operation; real Nacos/Admin verification is therefore `BLOCKED / NOT VERIFIED`.
+The guarded Nacos 3 gate records the immutable image digest, SDK module and
+checksum, transport/request type, namespace/group, exact catalog hash, retry
+convergence, and `residual_unknown=false`. Without an authorized writable
+target it skips explicitly as `NOT VERIFIED: EnvError`.
+
+`healthChecker=NONE` is a deployment-owned service/cluster setting. The naming
+SDK's register, deregister, query, and subscribe calls do not require a
+cluster-admin facade. Spotter must not issue a raw HTTP substitute; an optional
+Admin/Maintainer preflight is separate from runtime naming writes.
 
 ### Observe lifecycle status
 

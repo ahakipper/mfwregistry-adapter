@@ -51,7 +51,7 @@ Docker, Cobra, zap, Prometheus, Go test/race/vet, and the existing testkit.
   at least two hours, continuous comparison, churn, burst deletion, retry,
   and verified cleanup.
 - No production or test package may import deleted `pkg/log`, `pkg/notice`,
-  `pkg/notice/appcenternotice`, `config/config.go`, or
+  `pkg/notice/appcenternotice`, package `spotter/config` for mutable globals, or
   `internal/infra/legacycompat` after the cleanup stage.
 - Every stage commit uses detailed English subject/body sections:
   `Problem`, `Changes`, `Verification`, `Compatibility / Rollback`, and
@@ -81,6 +81,9 @@ Docker, Cobra, zap, Prometheus, Go test/race/vet, and the existing testkit.
 - [ ] Mark old Nacos 2.1 scratch results as historical compatibility evidence.
 - [ ] State that the current v2 facade routes persistent instances to legacy
       HTTP and is therefore not Nacos 3 release evidence.
+- [ ] Add `docs/evidence/nacos3-kwok-target-2026-09-14.md` with the exact
+      module pseudo-version/checksum, image target, gate status, tick schema,
+      divergence-age formula, and ghost definition.
 - [ ] Define the kwok gate, required environment, exact commands, JSONL
       evidence fields, cleanup checks, and `NOT VERIFIED` rules.
 - [ ] Record the health-check decision: runtime naming does not require
@@ -113,8 +116,10 @@ Docker, Cobra, zap, Prometheus, Go test/race/vet, and the existing testkit.
       official `v3.x-dev` pseudo-version resolving to commit `93a93504...` and
       record the reason in `docs/evidence/nacos3-kwok-target-2026-09-14.md`.
 - [ ] Add tests that fail when persistent register/deregister are routed to
-      `naming_http` or `/v1/ns`; tests must assert the gRPC request type and
-      `Ephemeral=false`.
+      `naming_http` or `/v1/ns`; tests must assert the Spotter-owned persistent
+      operation seam and `Ephemeral=false`. Concrete vendor proto request
+      decoding is a Task 1.2 responsibility because the adapter does not yet
+      exist in this RED task.
 - [ ] Add tests for namespace/group/service/cluster identity and metadata.
 - [ ] Add tests for SDK-only failover, timeout, auth, TLS configuration, and
       complete disabled/unhealthy reads.
@@ -135,6 +140,10 @@ Docker, Cobra, zap, Prometheus, Go test/race/vet, and the existing testkit.
 
 - [ ] Construct the official SDK gRPC naming proxy behind the Spotter-owned
       interface; do not import vendor concrete types outside this adapter.
+- [ ] Decode or capture the actual vendor request objects in tests and assert
+      `RegisterInstanceRequest`/`DeregisterInstanceRequest` request types,
+      Nacos 3 naming method names, and `Ephemeral=false`; a seam-only fake is
+      insufficient for this task.
 - [ ] Route persistent register, deregister, select-all, service-list, and
       subscription operations through gRPC.
 - [ ] Preserve the existing retry classification and server-list failover.
@@ -299,6 +308,9 @@ Docker, Cobra, zap, Prometheus, Go test/race/vet, and the existing testkit.
 - [ ] Record every 10-second tick: source count/hash, Spotter observed count,
       Nacos complete count/hash, divergence age, queue depth, batch sizes,
       retry state, and dropped-event count.
+- [ ] Treat `OBS_SERVICES` as the application count; each application maps to
+      one Nacos service scope. Use “application/service” consistently in
+      evidence and summaries.
 - [ ] Exercise create-before-delete churn, four burst shapes, deletion of all
       instances from one application, reconnect/retry, and final cleanup.
 - [ ] Require 0 dropped events, 0 unexplained ghosts, bounded divergence age,

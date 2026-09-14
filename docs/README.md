@@ -16,6 +16,8 @@ the discovery center ("Atlas") over gRPC.
 | [evidence/nacos-arm64-scratch-2026-09-13.md](evidence/nacos-arm64-scratch-2026-09-13.md) | Real ARM64 local Nacos SDK lifecycle evidence with immutable image, port mappings, cleanup status, and explicit production evidence limits. |
 | [nacos-sdk-provenance.md](nacos-sdk-provenance.md) | Pinned upstream SDK race fix provenance, expiry, and lifecycle CI gate. |
 | [remediation-execution-status-2026-09-13.md](remediation-execution-status-2026-09-13.md) | Current implementation, test evidence, release blockers, and external verification boundary. |
+| [superpowers/plans/2026-09-14-nacos3-kwok-global-cleanup.md](superpowers/plans/2026-09-14-nacos3-kwok-global-cleanup.md) | Active Nacos 3, real kwok scale, health-policy, batching, and legacy-global removal plan. |
+| [evidence/nacos3-kwok-target-2026-09-14.md](evidence/nacos3-kwok-target-2026-09-14.md) | Current Nacos 3 SDK provenance, ARM64 target, kwok acceptance schema, and evidence status. |
 
 Start with [architecture.md](architecture.md) for the big picture; see the
 [project README](../README.md) for build and usage basics.

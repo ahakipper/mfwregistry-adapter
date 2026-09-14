@@ -1,5 +1,12 @@
 # spotter 全面修复与验证计划
 
+> **Current target correction (2026-09-14):** This historical v6 plan was
+> written around Nacos 2.1.0 and the v2 SDK. Its current successor is
+> [the Nacos 3/kwok plan](superpowers/plans/2026-09-14-nacos3-kwok-global-cleanup.md),
+> which targets Nacos 3.2.4-slim ARM64, official SDK gRPC persistent writes,
+> and a real 1000-Pod/2-hour kwok gate. The old version-specific records stay
+> as provenance and must not be used as the current release verdict.
+
 > Current scope: Atlas is an optional existing Sink/mock deferred from the
 > current release; real wire compatibility is a future entry gate. Deployment
 > Nacos HA/TLS/auth/namespace/leaderless checks are outside scope.
@@ -15,7 +22,7 @@
 
 **版本变更：** v6 将“禁止 Nacos 生产路径裸 HTTP、统一经官方 Nacos SDK/facade”从可选 POC 提升为 P1 强制整改和 Nacos 启用时的发布门禁，并补充 SDK 迁移、例外管理和完整测试矩阵。
 
-> **Current-status addendum (2026-09-13, implementation baseline `c986632`):** SDK-only Nacos production startup remains **BLOCKED / NOT VERIFIED** before readiness because the pinned SDK lacks an official Admin/Maintainer cluster-health capability. Deployment-level Nacos HA/multi-node/TLS/auth/namespace/leaderless checks are outside current Spotter scope; single-Sink SDK integration remains in scope. Atlas is an optional existing Sink/mock deferred to a future entry gate, not a current release blocker. Full 2h Observe and AppCenter delivery remain pending; Consul scale remains an accepted non-goal.
+> **Historical status addendum (2026-09-13, implementation baseline `c986632`):** The SDK-only Nacos startup block and v2 SDK capability notes below describe the prior Nacos 2-era implementation. They are retained as provenance and are superseded for the active target by the 2026-09-14 Nacos 3/kwok plan. Deployment-level Nacos HA/multi-node/TLS/auth/namespace/leaderless checks are outside current Spotter scope; single-Sink Nacos 3 SDK integration remains in scope. Atlas is an optional existing Sink/mock deferred to a future entry gate, not a current release blocker. Full 2h Observe and AppCenter delivery remain pending; Consul scale remains an accepted non-goal.
 > Exported Nacos `NewClient`/`NewSink` now default to SDK and fail closed on the
 > cluster-admin capability gap; raw HTTP is reachable only through explicitly
 > named `NewHTTPCompatClient`/`NewHTTPCompatSink` compatibility constructors and
@@ -100,7 +107,7 @@ negative tests 以及 product transport gate；真实 Nacos 目标版本证据�
 **可以，但分三层：**
 
 1. **离线 loopback E2E：立即可开始。** `make test-e2e` 不依赖企业 etcd、Consul、Atlas 或 Nacos；所有 mock 应绑定 `127.0.0.1` 动态端口。
-2. **真实 Nacos scratch E2E：条件可开始。** 必须有 Nacos 2.1.x image、Docker/Colima、scratch 端口、512MB JVM 预算、健康与写探针；不得使用 demo 的 18848。
+2. **真实 Nacos 3 scratch E2E：条件可开始。** 必须有 `nacos/nacos-server:v3.2.4-slim` ARM64 image、Docker、scratch 端口、512MB JVM 预算、SDK gRPC 健康与写探针；不得使用 demo 的 18848。
 3. **observe 2h：修复 harness 自包含性后开始。** 必须由脚本创建临时 kwok cluster、生成独立 kubeconfig、启动独立 Nacos/Atlas/etcd/spotter child，并在失败时区分 EnvError、ConfigError、InfraError、TestError。
 
 ## 3. 工作包总览与依赖
@@ -448,7 +455,8 @@ Nacos 运行状态机与队列动作：
 - [ ] unit：namespace/group/auth/TLS/timeout/错误分类。
 - [ ] mock：401 token refresh、403 permanent、429 retry、leaderless write 500。
 - [ ] e2e：readiness 200 但 write 500 必须失败启动 gate。
-- [ ] scratch Nacos 2.1：persistent register、unhealthy disabled、catalog prune、重启恢复、TLS/auth（若环境支持）。
+- [ ] scratch Nacos 3.2.4 ARM64：persistent gRPC register、unhealthy/disabled
+      visibility、catalog prune、重启恢复、TLS/auth（若环境支持）。
 - [ ] 新增 `tests/e2e/nacos_real_test.go`（`//go:build nacos_real`）；真实环境命令固定为 `go test -tags=nacos_real ./tests/e2e/... -run TestNacosReal -count=1`，在该文件落地前不得声称真实 Nacos 已验证。
 - [ ] 记录 Nacos 版本、镜像 digest、配置 hash、请求成功率、p50/p99、retry depth、最终 catalog hash。
 
@@ -467,20 +475,20 @@ Nacos 运行状态机与队列动作：
 
 官方 Go SDK v2 支持 naming gRPC proxy；`BatchRegisterInstance` 走 gRPC；SDK 根据 `Ephemeral` 选择 persistent HTTP 或 ephemeral gRPC。当前仓库使用 persistent instance，因此单实例 register 仍由官方 SDK 内部使用其 HTTP transport；这不是仓库的裸 HTTP。当前生产路径已统一通过 SDK facade，真实目标版本协议兼容仍需外部证据。
 
-**执行状态（2026-09-13，B3 SDK-only amendment）：** 工作树已接入 `github.com/nacos-group/nacos-sdk-go/v2` pseudo-pin `v2.3.6-0.20260902123754-002486583df5`（commit `0024865`）。生产 server wiring 默认选择 `sdk`；`http-compat` 只允许显式测试/回滚，并在 `Env=product` 直接拒绝。persistent register/deregister、SelectAll（含 disabled）、service list、subscribe/unsubscribe、catalog/prune 和 readiness read/write canary 通过官方 naming SDK；当前 pinned SDK 没有 cluster Admin health-check update 等价接口，SDK mode typed fail-closed，静态 access token 也 fail-closed。GetAll/prune 每个完整快照复用一个 fresh SDK session，并使用隔离临时 CacheDir；ARM64 scratch single-client reconnect `-race` 已 PASS，但 untagged/HA/TLS/Admin/production 仍 NOT VERIFIED。
+**历史执行状态（2026-09-13，B3 SDK-only amendment）：** 工作树已接入 `github.com/nacos-group/nacos-sdk-go/v2` pseudo-pin `v2.3.6-0.20260902123754-002486583df5`（commit `0024865`）。该段记录保留用于解释 Nacos 2 时代的路由和门禁，不作为当前 Nacos 3 结论；当前 v3 迁移由 2026-09-14 计划承接。
 
 **B3 发布判定：** SDK seam 与离线测试已通过，但生产门禁仍为 **NOT VERIFIED / REMAINING**。`go test -tags=nacos_sdk_eval ...` 与 `go test -tags=nacos_real ...` 在未提供 `NACOS_SERVER` 时只会 SKIP；必须在 scratch/pre-production Nacos 2.x 上补齐 query/list、subscribe、batch（persistent 明确不支持时保留 per-instance 证据）、catalog/prune、namespace/group、TLS/auth、重连/重启、错误恢复和最终集合 hash，才能关闭 `ID-NACOS-SDK-MANDATE`。
 
 本工作包的不可变约束：
 
-1. 生产 Nacos naming 操作（register、deregister、list、query、subscribe、batch）必须通过官方 `nacos-sdk-go/v2` 或其薄 facade。
+1. 生产 Nacos naming 操作（register、deregister、list、query、subscribe、batch）必须通过官方 `nacos-sdk-go/v3` 或其薄 facade。
 2. Admin/Catalog/prune/readiness 等非 naming 操作必须优先使用官方 SDK；当前 catalog/prune/readiness 已由 naming SDK facade 覆盖，cluster health-check update 在目标 SDK 无等价接口时必须 typed fail-closed，并登记 `ID-NACOS-SDK-MANDATE` 例外、负责人、到期时间和删除条件。散落在业务代码中的裸 HTTP 永久禁止。
 3. HTTP adapter 仅允许作为迁移期回滚/对照通道；在没有 SDK 兼容证据和完整测试前，不得把 Nacos Sink 标记为 production PASS。
 
 ### 10.2 实施顺序
 
 1. 新增 `NacosTransport` 内部接口和 `NacosSDKTransport` facade；接口按 operation type 区分 naming、catalog/prune、readiness 和 cluster-admin unsupported，禁止业务层自行拼接 URL。
-2. 新增 `tests/e2e/nacos_sdk_eval_test.go`（`//go:build nacos_sdk_eval`），引入 `nacos-sdk-go/v2`，实现 SDK adapter 及可注入 fake，先不改变默认 wiring。
+2. 新增 `tests/e2e/nacos_sdk_eval_test.go`（`//go:build nacos_sdk_eval`），引入官方 Nacos 3 SDK，验证 gRPC adapter 及可注入 fake，先不改变默认 wiring。
 3. 对同一个 scratch Nacos 做 HTTP vs SDK 对照：register/deregister、service list、query instances、subscribe、batch register、metadata、enabled、namespace/group、TLS/auth、错误/重连和最终 catalog 集合。
 4. 单独验证 SDK batch gRPC 与目标 Nacos 版本的 request type、persistent/ephemeral 生命周期、心跳、leaderless、重启恢复和错误码兼容；不能以 SDK 编译成功作为协议通过。
 5. 验证 catalog/prune/readiness 是否有官方 SDK 等价能力；当前由 `SelectAllInstances` 和 service-list + canary 覆盖。cluster-admin 没有等价接口时必须形成带期限的 typed unsupported 例外，不得偷偷保留散落 HTTP。
@@ -576,10 +584,10 @@ mock 与真实差异必须显式登记：
 | 能力 | mock 证据 | 真实证据要求 | 不能互相替代的原因 |
 |---|---|---|---|
 | K8s informer/watch | fake Robot、unit/e2e 回放 | 临时 kube-apiserver/kwok watch | fake 不证明 resync、ListAndWatch、队列节流和跨 cluster store |
-| Nacos list/catalog | nacosmock 双视图和错误注入 | Nacos 2.1 scratch 的实际 HTTP response/disabled visibility | mock 不证明 Raft、权限、分页实现和 leaderless 行为 |
+| Nacos list/catalog | nacosmock 双视图和错误注入 | Nacos 3.2.4 scratch 的实际 SDK response/disabled visibility | mock 不证明 Raft、权限、分页实现和 leaderless 行为 |
 | Nacos auth/TLS/namespace | mock 参数断言 | 真实证书、token、namespace 的 register/list/prune | mock 只能证明参数被发送 |
 | Atlas codec | discoverymock JSON codec | 真实 Atlas method path、protobuf/JSON codec、TLS、返回码 | JSON bufconn 不证明生产服务端 codec |
-| SDK gRPC | SDK adapter 编译/unit、operation coverage 和裸 HTTP 静态门禁 | Nacos 2.1 目标版本的 grpc port、batch/register/deregister/query/subscribe 回放 | SDK 编译成功不证明 server request type、persistent 生命周期或 reconnect 兼容 |
+| SDK gRPC | SDK adapter 编译/unit、operation coverage 和裸 HTTP 静态门禁 | Nacos 3.2.4 目标版本的 grpc port、persistent register/deregister/query/subscribe 回放 | SDK 编译成功不证明 server request type、persistent 生命周期或 reconnect 兼容 |
 | SDK Admin/Catalog | facade contract、例外清单和回滚测试 | 目标版本 Admin/Maintainer SDK 的 catalog/prune/readiness 回放；若无官方覆盖，必须有带期限的例外证据 | naming SDK 的 service view 不能自动替代 catalog/admin 视图 |
 
 机器可读判定规则：
