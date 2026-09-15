@@ -29,6 +29,23 @@ func stubLedger(entries map[string]ledgerEntry) func(string) (ledgerEntry, bool)
 	}
 }
 
+func TestObserveUnitSpotterProjectionRequiresCompleteCanonicalPayload(t *testing.T) {
+	ins := &instance.Instance{SourceKey: "default/pod-a", SourceCluster: "cluster-a", InstanceId: "pod-a", AppCode: "obs-app-0", Provider: "k8s", EnvType: "test", Ip: "10.0.0.7", Reversion: 42, Status: 1, Enabled: true, State: "running", Label: map[string]string{"team": "payments"}}
+	pod := sourcePod{Name: "pod-a", AppCode: "obs-app-0", Phase: "Running", PodIP: "10.0.0.7", ContainersReady: true, Instance: ins}
+	canonical := []string{instance.CanonicalPayload(ins)}
+	if !spotterProjectionMatches([]sourcePod{pod}, []string{"obs-app-0"}, []*instance.Instance{ins}, canonical) {
+		t.Fatal("matching Spotter projection rejected")
+	}
+	mutated := *ins
+	mutated.Reversion = 43
+	if spotterProjectionMatches([]sourcePod{pod}, []string{"obs-app-0"}, []*instance.Instance{&mutated}, []string{instance.CanonicalPayload(&mutated)}) {
+		t.Fatal("Reversion drift was accepted by Spotter projection matcher")
+	}
+	if spotterProjectionMatches([]sourcePod{pod, pod}, []string{"obs-app-0"}, []*instance.Instance{ins}, canonical) {
+		t.Fatal("duplicate source identity was accepted by Spotter projection matcher")
+	}
+}
+
 func remote(entries ...remoteEntry) []remoteEntry { return entries }
 
 func entry(id string, enabled bool) remoteEntry {

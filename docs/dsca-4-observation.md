@@ -392,3 +392,21 @@ OBS-mini may use `OBS_KUBECONFIG` in external read-only mode. The definitive
 **Artifacts produced by this audit (all outside the repo, per the read-only rule):** `/tmp/ds4-rehearse.py` (the observation script — comparison engine corrected in the review pass, the three P1-3 defects documented in its header), `/tmp/ds4-rehearsal.log` (90 per-tick console lines, original run) and `/tmp/ds4-rehearsal-ticks.jsonl` (90 per-tick JSON records, original run) + `/tmp/ds4-rehearsal-summary.json`, and the review-pass re-run's `/tmp/ds4-rehearsal2.log` (48 per-tick console lines), `/tmp/ds4-rehearsal2-ticks.jsonl` (48 per-tick JSON records), `/tmp/ds4-rehearsal2-summary.json`. The only repo file written is this document.
 Startup state is persisted before cluster creation (commit `6c31290`), with
 CPU/memory/pod capacity validation and retryable residual markers on teardown.
+
+## Current Status Addendum (2026-09-15)
+
+The implementation has since run on the verified Nacos 3 ARM64 image and
+kwokctl 0.8.0. A 10-minute burst rehearsal passed at 200 Pods/5 services, but
+the subsequent 2-hour run was intentionally interrupted after approximately
+66 minutes so the observation method could be strengthened. Its preserved
+result is `docs/evidence/nacos3-kwok-observe-interrupted-2026-09-15.md`.
+
+The corrected method keeps the periodic exact snapshot as the correctness
+gate, and now records a third Spotter plane through the guarded
+`/debug/spotter/k8s` projection (canonical full payload, including Reversion
+and labels). The scale-ladder tier additionally starts an independent
+client-go K8s Watch and an official Nacos SDK Subscribe observer with empty
+service updates enabled. Watch callbacks provide latency boundaries; fresh
+catalog reads remain mandatory because callbacks can coalesce and cannot prove
+absence of a transient mismatch. A renewed long gate is pending this method
+validation.

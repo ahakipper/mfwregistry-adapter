@@ -2,8 +2,11 @@ package internal
 
 import (
 	"context"
+	"encoding/json"
 	stderrors "errors"
 	"fmt"
+	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -12,9 +15,11 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"spotter/internal/composition"
+	domaininstance "spotter/internal/domain/instance"
 	infraconfig "spotter/internal/infra/config"
 	inframetrics "spotter/internal/infra/metrics"
 	"spotter/internal/ports"
+	v2 "spotter/pkg/beehive/service/v2"
 	"spotter/pkg/discoverycenter"
 	"spotter/pkg/k8srobot"
 	"spotter/pkg/nacos"
@@ -209,6 +214,7 @@ func (s *Server) Run() {
 // but uses the infra metrics HTTP server, which reports errors instead of
 // panicking and supports a graceful stop.
 func (s *Server) startMetricsServer() {
+	s.registerObserveDebugEndpoint()
 	stop, err := inframetrics.StartHTTP(s.cfg.MetricsAddr)
 	if err != nil {
 		s.logger.Errorf("metrics server start failed: %s", err)
@@ -217,6 +223,47 @@ func (s *Server) startMetricsServer() {
 	s.Lock()
 	s.stopMetrics = stop
 	s.Unlock()
+}
+
+// registerObserveDebugEndpoint exposes the provider's own converted K8s
+// projection for the watch-based reliability harness. It is disabled by
+// default and only registered in a process explicitly started with
+// SPOTTER_OBSERVE_DEBUG=1, so production deployments do not expose instance
+// metadata on the metrics listener.
+func (s *Server) registerObserveDebugEndpoint() {
+	if os.Getenv("SPOTTER_OBSERVE_DEBUG") != "1" {
+		return
+	}
+	http.HandleFunc("/debug/spotter/k8s", s.handleObserveDebugSnapshot)
+}
+
+func (s *Server) handleObserveDebugSnapshot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	s.Lock()
+	providersSnapshot := append([]providers.Provider(nil), s.Providers...)
+	s.Unlock()
+	instances := make([]*v2.Instance, 0)
+	canonical := make([]string, 0)
+	for _, provider := range providersSnapshot {
+		if provider == nil {
+			continue
+		}
+		for _, instance := range provider.GetAll() {
+			if instance != nil && instance.Provider == providers.ProviderK8s {
+				instances = append(instances, instance)
+				canonical = append(canonical, domaininstance.CanonicalPayload(instance))
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		ObservedAt       string         `json:"observedAt"`
+		Instances        []*v2.Instance `json:"instances"`
+		CanonicalPayload []string       `json:"canonicalPayload"`
+	}{ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), Instances: instances, CanonicalPayload: canonical})
 }
 
 func (s *Server) stopMetricsServer() {

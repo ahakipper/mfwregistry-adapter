@@ -7,14 +7,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	v2 "spotter/pkg/beehive/service/v2"
 )
 
 // The observe stack's throwaway pieces (dsca-4 §4.1): a throwaway nacos
@@ -124,6 +128,7 @@ func (c *spotterChild) start(ctx context.Context) error {
 	c.waitDone = make(chan struct{})
 	c.exitErr = nil
 	c.starts++
+	_ = os.WriteFile(filepath.Join(c.workDir, "spotter-child.pid"), []byte(strconv.Itoa(cmd.Process.Pid)), 0o600)
 	waitDone := c.waitDone
 	go func() {
 		err := cmd.Wait()
@@ -135,6 +140,7 @@ func (c *spotterChild) start(ctx context.Context) error {
 			_ = c.logFile.Close()
 			c.logFile = nil
 		}
+		_ = os.Remove(filepath.Join(c.workDir, "spotter-child.pid"))
 		close(waitDone)
 		c.mu.Unlock()
 	}()
@@ -157,6 +163,7 @@ func (c *spotterChild) kill() error {
 		}
 		return nil
 	}
+	_ = os.Remove(filepath.Join(c.workDir, "spotter-child.pid"))
 	pgid := -cmd.Process.Pid
 	termErr := syscall.Kill(pgid, syscall.SIGTERM)
 	if waitDone == nil {
@@ -262,6 +269,45 @@ func (c *spotterChild) waitForHealthyContext(parent context.Context, bound time.
 		case <-ticker.C:
 		}
 	}
+}
+
+type spotterSnapshot struct {
+	Instances        []*v2.Instance
+	CanonicalPayload []string
+	ObservedAt       time.Time
+}
+
+// debugSnapshot reads the test-only Spotter projection endpoint. It is
+// enabled only when the child inherits SPOTTER_OBSERVE_DEBUG=1 and exposes
+// the provider's informer-derived Instance list, giving the triad observer a
+// third side between K8s and Nacos.
+func (c *spotterChild) debugSnapshot(ctx context.Context) (spotterSnapshot, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d/debug/spotter/k8s", c.metrics)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return spotterSnapshot{}, err
+	}
+	response, err := sharedHTTP.Do(req) //nolint:gosec // fixed loopback URL
+	if err != nil {
+		return spotterSnapshot{}, err
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		return spotterSnapshot{}, fmt.Errorf("spotter debug snapshot answered %d", response.StatusCode)
+	}
+	var payload struct {
+		ObservedAt       string         `json:"observedAt"`
+		Instances        []*v2.Instance `json:"instances"`
+		CanonicalPayload []string       `json:"canonicalPayload"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 16<<20)).Decode(&payload); err != nil {
+		return spotterSnapshot{}, fmt.Errorf("decode spotter debug snapshot: %w", err)
+	}
+	observedAt, _ := time.Parse(time.RFC3339Nano, payload.ObservedAt)
+	return spotterSnapshot{Instances: payload.Instances, CanonicalPayload: payload.CanonicalPayload, ObservedAt: observedAt}, nil
 }
 
 // logSlice extracts the lines naming any of the needles, issued within

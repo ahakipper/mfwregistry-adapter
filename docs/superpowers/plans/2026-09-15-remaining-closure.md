@@ -187,6 +187,23 @@ current evidence contract in
 - [ ] Commit and push a detailed PASS evidence document, or a detailed
       `NOT VERIFIED` blocker document if any criterion fails.
 
+## Stage 3A — Three-plane watch-assisted latency evidence
+
+- [x] Keep the periodic linearized snapshot as the correctness gate: each tick
+      reads authoritative K8s state, the guarded Spotter informer projection,
+      and a fresh official-SDK Nacos catalog, then compares complete Instance
+      payloads.
+- [x] Add an independent client-go K8s Watch with initial List/resourceVersion
+      and reconnect/error reporting.
+- [x] Add an official Nacos SDK Subscribe observer with empty-service updates
+      enabled and safe callback shutdown; supplement callbacks with fresh
+      catalog reads because callbacks can coalesce.
+- [x] Add the scale ladder report for 1/10/100/500/1000 create/delete samples
+      and CrashLoopBackOff/recovery, with API→Nacos and source→Nacos P90/P95/P99.
+- [ ] After the interrupted sampled run is documented, execute the ladder and
+      the renewed long gate; any watcher error or missing callback is a failed
+      evidence condition, not silent success.
+
 ## Stage 4 — Produce the final branch verification matrix
 
 ### Task 4.1: Verify code, documentation, and repository boundaries

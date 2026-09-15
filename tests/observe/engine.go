@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"spotter/internal/domain/instance"
+	"spotter/pkg/providers"
 )
 
 // The comparison engine (dsca-4 §4.3 steps 3-5 / §6.2's corrected
@@ -167,6 +168,113 @@ func sourceMutationFingerprint(pods []sourcePod, appCodes []string) string {
 	sort.Strings(rows)
 	sum := sha256.Sum256([]byte(strings.Join(rows, "\n")))
 	return hex.EncodeToString(sum[:])
+}
+
+// spotterProjectionFingerprint hashes the provider projection exposed by the
+// test-only debug endpoint. It intentionally uses the same canonical payload
+// as the Nacos metadata contract so a label, Reversion, or nested field drift
+// cannot hide behind a count-only comparison.
+func spotterProjectionFingerprint(instances []*instance.Instance, appCodes []string) string {
+	rows := make([]string, 0, len(instances))
+	for _, ins := range instances {
+		if ins == nil || !isObservedAppCode(ins.AppCode, appCodes) || ins.Provider != "k8s" {
+			continue
+		}
+		rows = append(rows, ins.AppCode+"\x00"+ins.InstanceId+"\x00"+instance.CanonicalPayload(ins))
+	}
+	sort.Strings(rows)
+	sum := sha256.Sum256([]byte(strings.Join(rows, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
+// spotterProjectionMatches verifies the provider's informer-derived view
+// against the authoritative live K8s conversion. Pending/non-representable
+// Pods are excluded exactly as buildSourceModel excludes them; every other
+// Instance is compared canonically, including labels and Reversion.
+func spotterProjectionMatches(pods []sourcePod, appCodes []string, got []*instance.Instance, canonical []string) bool {
+	want := map[string]string{}
+	filters := providers.InitInstanceFilters()
+	for _, pod := range pods {
+		if !isObservedAppCode(pod.AppCode, appCodes) || pod.Instance == nil {
+			continue
+		}
+		valid := true
+		for _, filter := range filters {
+			if filter(pod.Instance) != nil {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			continue
+		}
+		key := providers.IdentityKey(pod.Instance)
+		if _, exists := want[key]; exists {
+			return false
+		}
+		want[key] = instance.CanonicalPayload(pod.Instance)
+	}
+	actual := map[string]string{}
+	for _, ins := range got {
+		if ins == nil || !isObservedAppCode(ins.AppCode, appCodes) || ins.Provider != "k8s" {
+			continue
+		}
+		key := providers.IdentityKey(ins)
+		if _, exists := actual[key]; exists {
+			return false
+		}
+		actual[key] = instance.CanonicalPayload(ins)
+	}
+	// The endpoint returns canonical payloads separately because SourceKey and
+	// SourceCluster are intentionally omitted from ordinary Instance JSON.
+	if len(canonical) > 0 {
+		actual = map[string]string{}
+		for _, payload := range canonical {
+			decoded, err := instance.DecodeCanonicalPayload(payload)
+			if err != nil || decoded == nil || !isObservedAppCode(decoded.AppCode, appCodes) || decoded.Provider != "k8s" {
+				return false
+			}
+			key := providers.IdentityKey(decoded)
+			if _, exists := actual[key]; exists {
+				return false
+			}
+			actual[key] = payload
+		}
+	}
+	if len(want) != len(actual) {
+		return false
+	}
+	for key, payload := range want {
+		if actual[key] != payload {
+			return false
+		}
+	}
+	return true
+}
+
+func spotterSideCount(instances []*instance.Instance, appCodes []string) sideCount {
+	seenServices := map[string]bool{}
+	seenIDs := map[string]bool{}
+	result := sideCount{}
+	for _, ins := range instances {
+		if ins == nil || ins.Provider != "k8s" || !isObservedAppCode(ins.AppCode, appCodes) {
+			continue
+		}
+		key := ins.AppCode + "\x00" + ins.InstanceId
+		if seenIDs[key] {
+			continue
+		}
+		seenIDs[key] = true
+		result.Count++
+		seenServices[ins.AppCode] = true
+		if ins.Enabled {
+			result.Online++
+		} else {
+			result.Unhealthy++
+		}
+	}
+	result.Services = len(seenServices)
+	return result
 }
 
 // remoteViewFingerprint is the audit hash for the complete Nacos view read at

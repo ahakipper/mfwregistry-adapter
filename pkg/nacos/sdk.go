@@ -314,6 +314,7 @@ func newSDKNamingFacade(cfg ClientConfig) (*sdkNamingFacade, error) {
 		Username:            cfg.Username,
 		Password:            cfg.Password,
 		NotLoadCacheAtStart: true,
+		UpdateCacheWhenEmpty: cfg.UpdateCacheWhenEmpty,
 		DisableUseSnapShot:  true,
 		CacheDir:            cacheDir,
 		TLSCfg:              constant.TLSConfig{Appointed: true, Enable: servers[0].Scheme == "https", TrustAll: cfg.InsecureSkipVerify, CaFile: cfg.CAFile, ServerNameOverride: cfg.ServerName},

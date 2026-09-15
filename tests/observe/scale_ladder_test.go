@@ -27,6 +27,9 @@ type ladderSample struct {
 	Operation        string  `json:"operation"`
 	LatencySec       float64 `json:"latencySec"`
 	SourceToNacosSec float64 `json:"sourceToNacosSec"`
+	SourceWatch      bool    `json:"sourceWatchObserved"`
+	SpotterObserved  bool    `json:"spotterObserved"`
+	NacosWatch       bool    `json:"nacosWatchObserved"`
 	Polls            int     `json:"consistencyPolls"`
 	MismatchPolls    int     `json:"mismatchPolls"`
 }
@@ -54,22 +57,26 @@ type crashTransition struct {
 }
 
 type scaleLadderReport struct {
-	Stamp      string            `json:"stamp"`
-	Target     string            `json:"target"`
-	Scales     []int             `json:"scales"`
-	Aggregates []ladderAggregate `json:"aggregates"`
-	Samples    []ladderSample    `json:"samples"`
-	Crash      []crashTransition `json:"crashTransitions"`
-	Pass       bool              `json:"pass"`
-	Failures   []string          `json:"failures,omitempty"`
+	Stamp       string            `json:"stamp"`
+	Target      string            `json:"target"`
+	Scales      []int             `json:"scales"`
+	Aggregates  []ladderAggregate `json:"aggregates"`
+	Samples     []ladderSample    `json:"samples"`
+	Crash       []crashTransition `json:"crashTransitions"`
+	WatchErrors []string          `json:"watchErrors,omitempty"`
+	Pass        bool              `json:"pass"`
+	Failures    []string          `json:"failures,omitempty"`
 }
 
 type ladderWaitResult struct {
-	Latency       time.Duration
-	SourceToNacos time.Duration
-	SourceSeen    time.Time
-	Polls         int
-	Mismatches    int
+	Latency         time.Duration
+	SourceToNacos   time.Duration
+	SourceSeen      time.Time
+	SourceWatchSeen time.Time
+	SpotterSeen     time.Time
+	NacosWatchSeen  time.Time
+	Polls           int
+	Mismatches      int
 }
 
 // TestObserveScaleLadder measures single-Pod, 10-Pod, 100-Pod, 500-Pod and
@@ -83,6 +90,7 @@ type ladderWaitResult struct {
 // runner starts it with scripts/observe-up.sh and tears the owned kwok stack
 // down with scripts/observe-down.sh.
 func TestObserveScaleLadder(t *testing.T) {
+	t.Setenv("SPOTTER_OBSERVE_DEBUG", "1")
 	cfg, err := loadObserveConfig()
 	if err != nil {
 		t.Fatalf("observe config: %v", err)
@@ -143,6 +151,17 @@ func TestObserveScaleLadder(t *testing.T) {
 	if err := child.waitForHealthy(120 * time.Second); err != nil {
 		t.Fatalf("spotter child health: %v", err)
 	}
+	watchCtx, watchCancel := context.WithCancel(context.Background())
+	t.Cleanup(watchCancel)
+	k8sEvents, err := startK8sPodWatch(watchCtx, cfg.Kubeconfig, "app-code="+appCode)
+	if err != nil {
+		t.Fatalf("start independent K8s watch: %v", err)
+	}
+	nacosEvents, err := startNacosServiceWatch(watchCtx, cfg.NacosAddr, appCode)
+	if err != nil {
+		t.Fatalf("start independent Nacos Subscribe watch: %v", err)
+	}
+	timeline := newWatchTimeline(k8sEvents, nacosEvents.Events())
 
 	stamp := time.Now().Format("20060102-150405")
 	report := scaleLadderReport{Stamp: stamp, Target: "Nacos 3 ARM64 + KWork", Scales: []int{1, 10, 100, 500, 1000}}
@@ -155,22 +174,22 @@ func TestObserveScaleLadder(t *testing.T) {
 				report.Failures = append(report.Failures, fmt.Sprintf("create scale %d sample %d: %v", scale, i+1, err))
 				continue
 			}
-			wait, err := waitLadderExact(t, driver, view, appCode, names, issued, true, 2*time.Minute)
+			wait, err := waitLadderExact(t, driver, view, child, timeline, appCode, names, issued, true, 2*time.Minute)
 			if err != nil {
 				report.Failures = append(report.Failures, fmt.Sprintf("create scale %d sample %d: %v", scale, i+1, err))
 			} else {
-				report.Samples = append(report.Samples, ladderSample{Scale: scale, Operation: "create", LatencySec: wait.Latency.Seconds(), SourceToNacosSec: wait.SourceToNacos.Seconds(), Polls: wait.Polls, MismatchPolls: wait.Mismatches})
+				report.Samples = append(report.Samples, ladderSample{Scale: scale, Operation: "create", LatencySec: wait.Latency.Seconds(), SourceToNacosSec: wait.SourceToNacos.Seconds(), SourceWatch: !wait.SourceWatchSeen.IsZero(), SpotterObserved: !wait.SpotterSeen.IsZero(), NacosWatch: !wait.NacosWatchSeen.IsZero(), Polls: wait.Polls, MismatchPolls: wait.Mismatches})
 			}
 			deletedAt := time.Now()
 			if err := driver.deletePods(names, deletedAt); err != nil {
 				report.Failures = append(report.Failures, fmt.Sprintf("delete scale %d sample %d: %v", scale, i+1, err))
 				continue
 			}
-			wait, err = waitLadderExact(t, driver, view, appCode, names, deletedAt, false, 2*time.Minute)
+			wait, err = waitLadderExact(t, driver, view, child, timeline, appCode, names, deletedAt, false, 2*time.Minute)
 			if err != nil {
 				report.Failures = append(report.Failures, fmt.Sprintf("delete scale %d sample %d: %v", scale, i+1, err))
 			} else {
-				report.Samples = append(report.Samples, ladderSample{Scale: scale, Operation: "delete", LatencySec: wait.Latency.Seconds(), SourceToNacosSec: wait.SourceToNacos.Seconds(), Polls: wait.Polls, MismatchPolls: wait.Mismatches})
+				report.Samples = append(report.Samples, ladderSample{Scale: scale, Operation: "delete", LatencySec: wait.Latency.Seconds(), SourceToNacosSec: wait.SourceToNacos.Seconds(), SourceWatch: !wait.SourceWatchSeen.IsZero(), SpotterObserved: !wait.SpotterSeen.IsZero(), NacosWatch: !wait.NacosWatchSeen.IsZero(), Polls: wait.Polls, MismatchPolls: wait.Mismatches})
 			}
 		}
 	}
@@ -183,13 +202,13 @@ func TestObserveScaleLadder(t *testing.T) {
 	if err != nil {
 		report.Failures = append(report.Failures, fmt.Sprintf("crash setup create: %v", err))
 	} else {
-		if _, err := waitLadderExact(t, driver, view, appCode, names, issued, true, 2*time.Minute); err != nil {
+		if _, err := waitLadderExact(t, driver, view, child, timeline, appCode, names, issued, true, 2*time.Minute); err != nil {
 			report.Failures = append(report.Failures, fmt.Sprintf("crash setup convergence: %v", err))
 		} else {
 			crashAt := time.Now()
 			if err := driver.patchCrash(names[0], crashAt); err != nil {
 				report.Failures = append(report.Failures, fmt.Sprintf("CrashLoopBackOff patch: %v", err))
-			} else if wait, err := waitLadderExact(t, driver, view, appCode, names, crashAt, true, 2*time.Minute); err != nil {
+			} else if wait, err := waitLadderExact(t, driver, view, child, timeline, appCode, names, crashAt, true, 2*time.Minute); err != nil {
 				report.Failures = append(report.Failures, fmt.Sprintf("crash convergence: %v", err))
 			} else {
 				report.Crash = append(report.Crash, crashTransition{Operation: "crash", LatencySec: wait.Latency.Seconds(), Polls: wait.Polls, Mismatches: wait.Mismatches})
@@ -197,7 +216,7 @@ func TestObserveScaleLadder(t *testing.T) {
 			recoverAt := time.Now()
 			if err := driver.patchRecovered(names[0], recoverAt); err != nil {
 				report.Failures = append(report.Failures, fmt.Sprintf("crash recovery patch: %v", err))
-			} else if wait, err := waitLadderExact(t, driver, view, appCode, names, recoverAt, true, 2*time.Minute); err != nil {
+			} else if wait, err := waitLadderExact(t, driver, view, child, timeline, appCode, names, recoverAt, true, 2*time.Minute); err != nil {
 				report.Failures = append(report.Failures, fmt.Sprintf("crash recovery convergence: %v", err))
 			} else {
 				report.Crash = append(report.Crash, crashTransition{Operation: "recover", LatencySec: wait.Latency.Seconds(), Polls: wait.Polls, Mismatches: wait.Mismatches})
@@ -205,12 +224,16 @@ func TestObserveScaleLadder(t *testing.T) {
 		}
 		if err := driver.deletePods(names, time.Now()); err != nil {
 			report.Failures = append(report.Failures, fmt.Sprintf("crash cleanup delete: %v", err))
-		} else if _, err := waitLadderExact(t, driver, view, appCode, names, time.Now(), false, 2*time.Minute); err != nil {
+		} else if _, err := waitLadderExact(t, driver, view, child, timeline, appCode, names, time.Now(), false, 2*time.Minute); err != nil {
 			report.Failures = append(report.Failures, fmt.Sprintf("crash cleanup convergence: %v", err))
 		}
 	}
 
 	report.Aggregates = aggregateLadder(report.Samples)
+	report.WatchErrors = timeline.errorsSnapshot()
+	if len(report.WatchErrors) > 0 {
+		report.Failures = append(report.Failures, report.WatchErrors...)
+	}
 	report.Pass = len(report.Failures) == 0 && len(report.Crash) == 2 && len(report.Aggregates) == len(report.Scales)*2
 	if err := writeScaleLadderReport(cfg.ResultsDir, report); err != nil {
 		t.Fatalf("write scale ladder report: %v", err)
@@ -231,7 +254,7 @@ func ladderRepetitions(scale int) int {
 	}
 }
 
-func waitLadderExact(t *testing.T, driver *churnDriver, view *nacosView, appCode string, names []string, issuedAt time.Time, present bool, timeout time.Duration) (ladderWaitResult, error) {
+func waitLadderExact(t *testing.T, driver *churnDriver, view *nacosView, child *spotterChild, timeline *watchTimeline, appCode string, names []string, issuedAt time.Time, present bool, timeout time.Duration) (ladderWaitResult, error) {
 	t.Helper()
 	started := time.Now()
 	result := ladderWaitResult{}
@@ -248,6 +271,21 @@ func waitLadderExact(t *testing.T, driver *churnDriver, view *nacosView, appCode
 		if result.SourceSeen.IsZero() && ladderSourceReady(model, appCode, names, present) {
 			result.SourceSeen = now
 		}
+		spotterOK := true
+		if child != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			snapshot, snapshotErr := child.debugSnapshot(ctx)
+			cancel()
+			if snapshotErr != nil {
+				result.Mismatches++
+				time.Sleep(time.Second)
+				continue
+			}
+			spotterOK = spotterProjectionMatches(pods, []string{appCode}, snapshot.Instances, snapshot.CanonicalPayload)
+			if spotterOK && result.SpotterSeen.IsZero() && !snapshot.ObservedAt.IsZero() && !snapshot.ObservedAt.Before(issuedAt) {
+				result.SpotterSeen = snapshot.ObservedAt
+			}
+		}
 		fresh, err := view.freshSDKView()
 		if err != nil {
 			result.Mismatches++
@@ -262,10 +300,18 @@ func waitLadderExact(t *testing.T, driver *churnDriver, view *nacosView, appCode
 			continue
 		}
 		diff := compareService(appCode, model, remote["k8s"], driver.ledgerLookup, time.Minute, now)
-		if len(diff.Divergences) == 0 && diff.InFlightCount == 0 && ladderIDsPresent(model, remote["k8s"], names, present) {
+		watchSourceReady := timeline == nil || allWatchReady(timeline, names, present, issuedAt, true)
+		watchNacosReady := timeline == nil || allWatchReady(timeline, names, present, issuedAt, false)
+		if len(diff.Divergences) == 0 && diff.InFlightCount == 0 && spotterOK && ladderIDsPresent(model, remote["k8s"], names, present) && watchSourceReady && watchNacosReady {
 			result.Latency = now.Sub(issuedAt)
 			if !result.SourceSeen.IsZero() {
 				result.SourceToNacos = now.Sub(result.SourceSeen)
+			}
+			if watchSourceReady {
+				result.SourceWatchSeen = now
+			}
+			if watchNacosReady {
+				result.NacosWatchSeen = now
 			}
 			return result, nil
 		}
@@ -273,6 +319,19 @@ func waitLadderExact(t *testing.T, driver *churnDriver, view *nacosView, appCode
 		time.Sleep(time.Second)
 	}
 	return result, fmt.Errorf("strict equality did not converge within %s (polls=%d mismatches=%d)", timeout, result.Polls, result.Mismatches)
+}
+
+func allWatchReady(timeline *watchTimeline, names []string, present bool, issuedAt time.Time, source bool) bool {
+	for _, name := range names {
+		if source {
+			if !timeline.sourceReady(name, present, issuedAt) {
+				return false
+			}
+		} else if !timeline.nacosReady(name, present, issuedAt) {
+			return false
+		}
+	}
+	return true
 }
 
 func ladderSourceReady(model *sourceModel, appCode string, names []string, present bool) bool {
@@ -378,6 +437,12 @@ func writeScaleLadderReport(dir string, report scaleLadderReport) error {
 	b.WriteString("\n## Crash consistency\n\n| Transition | Latency (s) | Polls | Mismatch polls |\n|---|---:|---:|---:|\n")
 	for _, transition := range report.Crash {
 		fmt.Fprintf(&b, "| %s | %.3f | %d | %d |\n", transition.Operation, transition.LatencySec, transition.Polls, transition.Mismatches)
+	}
+	if len(report.WatchErrors) > 0 {
+		b.WriteString("\n## Watch errors\n\n")
+		for _, watchErr := range report.WatchErrors {
+			fmt.Fprintf(&b, "- %s\n", watchErr)
+		}
 	}
 	b.WriteString("\n## Verdict\n\n")
 	if report.Pass {

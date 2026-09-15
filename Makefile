@@ -127,6 +127,7 @@ OBS_SERVICES ?= 20
 OBS_TICK ?= 10s
 OBS_CHURN_EVERY ?= 20s
 OBS_CHURN_RATE ?= 5
+OBS_BURSTS ?= false
 
 test-observe:
 	@if [ -n "$(OBS_KUBECONFIG)" ]; then echo 'OBS_KUBECONFIG external mode: running read-only unit gates'; go test -race -tags=observe -run '^TestObserveUnit' -v ./tests/observe/...; exit $$?; fi; \
@@ -136,6 +137,7 @@ test-observe:
 	if [ $$status -ne 0 ]; then exit $$status; fi; \
 	OBS_DURATION=$(OBS_DURATION) OBS_SCALE=$(OBS_SCALE) OBS_SERVICES=$(OBS_SERVICES) \
 	OBS_TICK=$(OBS_TICK) OBS_CHURN_EVERY=$(OBS_CHURN_EVERY) OBS_CHURN_RATE=$(OBS_CHURN_RATE) \
+	OBS_BURSTS=$(OBS_BURSTS) \
 	SPOTTER_BIN=build/observe/spotter \
 		go test -tags=observe -run '^TestObserveConsistency$$|^TestObserveUnit' -timeout $(OBS_TIMEOUT) -v ./tests/observe/... || status=$$?; \
 	./scripts/observe-down.sh; \

@@ -38,6 +38,7 @@ import (
 // The demo stack is never addressed: every port is a scratch port; the
 // kwok cluster is the harness's own vehicle.
 func TestObserveConsistency(t *testing.T) {
+	t.Setenv("SPOTTER_OBSERVE_DEBUG", "1")
 	cfg, err := loadObserveConfig()
 	if err != nil {
 		t.Fatalf("observe config: %v", err)
@@ -289,22 +290,24 @@ type observeRun struct {
 	// that mismatch becomes stale.
 	lastTransitional bool
 
-	tickCount         int
-	consistent        int
-	divergent         int
-	obsErr            int
-	sourceGEBase      int
-	minSource         int
-	maxInFlight       int
-	maxRetryDepth     int
-	maxRobotDepth     int
-	droppedTotal      float64
-	obsErrStreak      int
-	maxObsErrStreak   int
-	exactEqualTicks   int
-	transitionalTicks int
-	steadyTicks       int
-	steadyExactTicks  int
+	tickCount            int
+	consistent           int
+	divergent            int
+	obsErr               int
+	sourceGEBase         int
+	minSource            int
+	maxInFlight          int
+	maxRetryDepth        int
+	maxRobotDepth        int
+	droppedTotal         float64
+	obsErrStreak         int
+	maxObsErrStreak      int
+	exactEqualTicks      int
+	transitionalTicks    int
+	steadyTicks          int
+	steadyExactTicks     int
+	spotterEqualTicks    int
+	spotterMismatchTicks int
 
 	// Latency percentiles (the last scrape's histogram — cumulative).
 	latency *histogramSnapshot
@@ -678,6 +681,13 @@ func (r *observeRun) recordTick(t *testing.T, record tickRecord) {
 	} else if tickIsTransitional(record) {
 		r.transitionalTicks++
 	}
+	if record.SpotterObserved {
+		if record.SpotterEqual {
+			r.spotterEqualTicks++
+		} else {
+			r.spotterMismatchTicks++
+		}
+	}
 	if record.Verdict != string(verdictObsErr) && !record.MutationObserved {
 		r.steadyTicks++
 		if record.ExactEqual {
@@ -796,34 +806,36 @@ func (r *observeRun) drainCheck(t *testing.T) {
 func (r *observeRun) evaluate(t *testing.T, stamp string, windowElapsed time.Duration) runSummary {
 	churnCreates, churnDeletes, churnErrors := r.churnStats()
 	summary := runSummary{
-		Stamp:             stamp,
-		Duration:          windowElapsed.Round(time.Second).String(),
-		Scale:             r.cfg.BaseInstances,
-		Services:          r.cfg.Services,
-		ChurnRate:         r.cfg.ChurnRatePctPerMin,
-		ObsBound:          r.cfg.obsBound().String(),
-		PushIntervalSecs:  PushIntervalSecs,
-		ReconcileSource:   "nacos",
-		Ticks:             r.tickCount,
-		Consistent:        r.consistent,
-		Divergent:         r.divergent,
-		ObsErr:            r.obsErr,
-		TicksSourceGEBase: r.sourceGEBase,
-		MinSourceCount:    r.minSource,
-		MaxInFlight:       r.maxInFlight,
-		MaxRetryDepth:     r.maxRetryDepth,
-		MaxRobotDepth:     r.maxRobotDepth,
-		DroppedTotal:      r.droppedTotal,
-		ExactEqualTicks:   r.exactEqualTicks,
-		TransitionalTicks: r.transitionalTicks,
-		SteadyTicks:       r.steadyTicks,
-		SteadyExactTicks:  r.steadyExactTicks,
-		DrainedAtEnd:      r.lastDrainZero && !r.drainBreach,
-		MaxHeal:           r.tracker.maxHeal().Round(time.Millisecond).String(),
-		EnvWindows:        r.envWindows,
-		ChurnCreates:      churnCreates,
-		ChurnDeletes:      churnDeletes,
-		ChurnErrors:       churnErrors,
+		Stamp:                stamp,
+		Duration:             windowElapsed.Round(time.Second).String(),
+		Scale:                r.cfg.BaseInstances,
+		Services:             r.cfg.Services,
+		ChurnRate:            r.cfg.ChurnRatePctPerMin,
+		ObsBound:             r.cfg.obsBound().String(),
+		PushIntervalSecs:     PushIntervalSecs,
+		ReconcileSource:      "nacos",
+		Ticks:                r.tickCount,
+		Consistent:           r.consistent,
+		Divergent:            r.divergent,
+		ObsErr:               r.obsErr,
+		TicksSourceGEBase:    r.sourceGEBase,
+		MinSourceCount:       r.minSource,
+		MaxInFlight:          r.maxInFlight,
+		MaxRetryDepth:        r.maxRetryDepth,
+		MaxRobotDepth:        r.maxRobotDepth,
+		DroppedTotal:         r.droppedTotal,
+		ExactEqualTicks:      r.exactEqualTicks,
+		TransitionalTicks:    r.transitionalTicks,
+		SteadyTicks:          r.steadyTicks,
+		SteadyExactTicks:     r.steadyExactTicks,
+		SpotterEqualTicks:    r.spotterEqualTicks,
+		SpotterMismatchTicks: r.spotterMismatchTicks,
+		DrainedAtEnd:         r.lastDrainZero && !r.drainBreach,
+		MaxHeal:              r.tracker.maxHeal().Round(time.Millisecond).String(),
+		EnvWindows:           r.envWindows,
+		ChurnCreates:         churnCreates,
+		ChurnDeletes:         churnDeletes,
+		ChurnErrors:          churnErrors,
 	}
 	// The burst events' measured records (§4.2 OBS_BURSTS): both legs'
 	// convergence times, judged against OBS_BOUND by the acceptance below.
@@ -935,6 +947,9 @@ func (r *observeRun) evaluateAcceptance(s runSummary) (bool, []string) {
 	// The core requirement: zero product-divergent ticks.
 	if s.ProductDivergentTicks > 0 {
 		fails = append(fails, fmt.Sprintf("consistency: %d product-divergent ticks (requirement: zero; see the forensics)", s.ProductDivergentTicks))
+	}
+	if s.SpotterMismatchTicks > 0 {
+		fails = append(fails, fmt.Sprintf("spotter projection: %d ticks differed from the authoritative K8s projection", s.SpotterMismatchTicks))
 	}
 	if s.SteadyTicks == 0 {
 		fails = append(fails, "strict consistency: no completed steady ticks were observed")
@@ -1077,6 +1092,31 @@ func runTickRaw(t *testing.T, cfg observeConfig, driver *churnDriver, view *naco
 	}
 	record.ExpectedCount = record.Source.Online + record.Source.Unhealthy
 
+	// 1.5. SPOTTER: when enabled, read the provider's own informer-derived
+	// projection through the guarded debug endpoint. This third side catches a
+	// source-to-provider conversion/cache lag that a source↔Nacos comparison
+	// alone could miss. A failed read is OBSERR, never a false equality.
+	record.SpotterEqual = true
+	if child != nil {
+		record.SpotterObserved = true
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		spotterSnapshot, err := child.debugSnapshot(ctx)
+		cancel()
+		if err != nil {
+			record.Verdict = string(verdictObsErr)
+			record.Env = envState{Class: "read-error", Detail: fmt.Sprintf("spotter projection: %v", err)}
+			finalizeTick(&record, tickStart, nil)
+			record.MutationSequence, record.MutationObserved = finishTickMutationState(driver, previousMutationSequence, mutationAtStart, mutationActiveAtStart)
+			if emit {
+				writeTickRecord(t, records, log, record)
+			}
+			return record
+		}
+		record.Spotter = spotterSideCount(spotterSnapshot.Instances, driver.appCodes)
+		record.SpotterFingerprint = spotterProjectionFingerprint(spotterSnapshot.Instances, driver.appCodes)
+		record.SpotterEqual = spotterProjectionMatches(pods, driver.appCodes, spotterSnapshot.Instances, spotterSnapshot.CanonicalPayload)
+	}
+
 	// 2. REMOTE: per service, the list ∪ catalog union; any read failure
 	// is OBSERR. Real SDK runs use one fresh session for this tick so the
 	// official client's local subscription cache cannot lag a successful
@@ -1175,10 +1215,13 @@ func runTickRaw(t *testing.T, cfg observeConfig, driver *churnDriver, view *naco
 	// 5. VERDICT.
 	diffResult := diffResult{Divergences: divergences, InFlightCount: inFlight}
 	record.Divergence = divergences
-	record.ExactEqual = len(divergences) == 0 && record.ExpectedCount == record.Remote.Count
+	record.ExactEqual = len(divergences) == 0 && record.ExpectedCount == record.Remote.Count && record.SpotterEqual
 	record.MutationSequence, record.MutationObserved = finishTickMutationState(driver, previousMutationSequence, mutationAtStart, mutationActiveAtStart)
 	record.MutationObserved = record.MutationObserved || (previousSourceFingerprint != "" && record.SourceFingerprint != previousSourceFingerprint)
 	record.Verdict = string(strictTickVerdict(diffResult, record.MutationObserved || previousTransitional))
+	if !record.SpotterEqual {
+		record.Verdict = string(verdictDivergent)
+	}
 
 	// 6. The queue state rides the record (metrics scrape failure leaves
 	// the queue unobserved but never fails the tick — the drain criterion

@@ -18,25 +18,29 @@ import (
 // the divergences with details, the environment snapshot, the queue
 // depths, and the tick's own duration.
 type tickRecord struct {
-	Tick              int          `json:"tick"`
-	TS                string       `json:"ts"`
-	ElapsedMS         int64        `json:"elapsedMs"`
-	Verdict           string       `json:"verdict"`
-	Source            sideCount    `json:"source"`
-	ExpectedCount     int          `json:"expectedCount"`
-	Remote            sideCount    `json:"remote"`
-	InFlight          int          `json:"inFlight"`
-	ExactEqual        bool         `json:"exactEqual"`
-	MutationObserved  bool         `json:"mutationObserved"`
-	MutationSequence  uint64       `json:"mutationSequence"`
-	SourceFingerprint string       `json:"sourceFingerprint"`
-	RemoteFingerprint string       `json:"remoteFingerprint"`
-	SnapshotAttempts  int          `json:"snapshotAttempts"`
-	SnapshotWaitMS    int64        `json:"snapshotWaitMs"`
-	Divergence        []divergence `json:"divergences"`
-	Env               envState     `json:"env"`
-	Queue             queueState   `json:"queue"`
-	TickMS            int64        `json:"tickMs"`
+	Tick               int          `json:"tick"`
+	TS                 string       `json:"ts"`
+	ElapsedMS          int64        `json:"elapsedMs"`
+	Verdict            string       `json:"verdict"`
+	Source             sideCount    `json:"source"`
+	ExpectedCount      int          `json:"expectedCount"`
+	Remote             sideCount    `json:"remote"`
+	Spotter            sideCount    `json:"spotter"`
+	SpotterObserved    bool         `json:"spotterObserved"`
+	SpotterEqual       bool         `json:"spotterEqual"`
+	InFlight           int          `json:"inFlight"`
+	ExactEqual         bool         `json:"exactEqual"`
+	MutationObserved   bool         `json:"mutationObserved"`
+	MutationSequence   uint64       `json:"mutationSequence"`
+	SourceFingerprint  string       `json:"sourceFingerprint"`
+	RemoteFingerprint  string       `json:"remoteFingerprint"`
+	SpotterFingerprint string       `json:"spotterFingerprint"`
+	SnapshotAttempts   int          `json:"snapshotAttempts"`
+	SnapshotWaitMS     int64        `json:"snapshotWaitMs"`
+	Divergence         []divergence `json:"divergences"`
+	Env                envState     `json:"env"`
+	Queue              queueState   `json:"queue"`
+	TickMS             int64        `json:"tickMs"`
 }
 
 // sideCount is one side's observation (bidirectionality: both sides'
@@ -132,17 +136,19 @@ type runSummary struct {
 	ReconcileSource  string  `json:"reconcileSource"`
 
 	// Ticks
-	Ticks             int     `json:"ticks"`
-	Consistent        int     `json:"consistent"`
-	Divergent         int     `json:"divergent"`
-	ObsErr            int     `json:"obserr"`
-	ConsistencyRatio  float64 `json:"consistencyRatio"`
-	ExactEqualTicks   int     `json:"exactEqualTicks"`
-	TransitionalTicks int     `json:"transitionalTicks"`
-	SteadyTicks       int     `json:"steadyTicks"`
-	SteadyExactTicks  int     `json:"steadyExactTicks"`
-	ObsErrRatio       float64 `json:"obserrRatio"`
-	MaxObsErrStreak   int     `json:"maxObserrStreak"`
+	Ticks                int     `json:"ticks"`
+	Consistent           int     `json:"consistent"`
+	Divergent            int     `json:"divergent"`
+	ObsErr               int     `json:"obserr"`
+	ConsistencyRatio     float64 `json:"consistencyRatio"`
+	ExactEqualTicks      int     `json:"exactEqualTicks"`
+	TransitionalTicks    int     `json:"transitionalTicks"`
+	SteadyTicks          int     `json:"steadyTicks"`
+	SteadyExactTicks     int     `json:"steadyExactTicks"`
+	SpotterEqualTicks    int     `json:"spotterEqualTicks"`
+	SpotterMismatchTicks int     `json:"spotterMismatchTicks"`
+	ObsErrRatio          float64 `json:"obserrRatio"`
+	MaxObsErrStreak      int     `json:"maxObserrStreak"`
 
 	// Scale criterion
 	TicksSourceGEBase      int     `json:"ticksSourceGeBase"`
@@ -248,6 +254,7 @@ func renderSummaryMarkdown(s runSummary) string {
 		s.Ticks, s.Consistent, s.Divergent, s.ObsErr, s.ObsErrRatio, s.MaxObsErrStreak))
 	b.WriteString(fmt.Sprintf("Consistency ratio: %.4f\n", s.ConsistencyRatio))
 	b.WriteString(fmt.Sprintf("Exact-equal ticks: %d; transitional ticks: %d\n", s.ExactEqualTicks, s.TransitionalTicks))
+	b.WriteString(fmt.Sprintf("Spotter projection exact ticks: %d; mismatches: %d (test-only informer projection read)\n", s.SpotterEqualTicks, s.SpotterMismatchTicks))
 	b.WriteString(fmt.Sprintf("Steady exact-equal ticks: %d/%d\n", s.SteadyExactTicks, s.SteadyTicks))
 	b.WriteString(fmt.Sprintf("Scale: source >= %d on %d/%d ticks (%.4f); min source count %d\n",
 		s.Scale, s.TicksSourceGEBase, s.Ticks, s.TicksSourceGEBaseRatio, s.MinSourceCount))

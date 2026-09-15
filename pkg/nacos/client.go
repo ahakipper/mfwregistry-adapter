@@ -191,6 +191,10 @@ type ClientConfig struct {
 	ServerName          string
 	InsecureSkipVerify  bool
 	CacheDir            string
+	// UpdateCacheWhenEmpty preserves SDK Subscribe callbacks when a service
+	// transitions to zero instances. Watch-based observers need that empty
+	// snapshot to measure DELETE convergence rather than miss the final event.
+	UpdateCacheWhenEmpty bool
 	Timeout             time.Duration
 	MaxConnsPerHost     int
 	ClusterAdmin        NacosClusterAdmin
