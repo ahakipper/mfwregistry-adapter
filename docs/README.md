@@ -18,6 +18,8 @@ the discovery center ("Atlas") over gRPC.
 | [remediation-execution-status-2026-09-13.md](remediation-execution-status-2026-09-13.md) | Current implementation, test evidence, release blockers, and external verification boundary. |
 | [superpowers/plans/2026-09-14-nacos3-kwok-global-cleanup.md](superpowers/plans/2026-09-14-nacos3-kwok-global-cleanup.md) | Active Nacos 3, real kwok scale, health-policy, batching, and legacy-global removal plan. |
 | [evidence/nacos3-kwok-target-2026-09-14.md](evidence/nacos3-kwok-target-2026-09-14.md) | Current Nacos 3 SDK provenance, ARM64 target, kwok acceptance schema, and evidence status. |
+| [evidence/nacos3-kwok-complete-instance-equality-2026-09-15.md](evidence/nacos3-kwok-complete-instance-equality-2026-09-15.md) | Fresh one-hour 1000-Pod/20-application evidence for complete Instance, labels, Reversion, and exact per-tick source/Nacos equality. |
+| [superpowers/plans/2026-09-15-remaining-closure.md](superpowers/plans/2026-09-15-remaining-closure.md) | Remaining in-scope closure plan: legacy deletion, two-hour burst gate, status reconciliation, and safe historical commit-message rewrite. |
 
 Start with [architecture.md](architecture.md) for the big picture; see the
 [project README](../README.md) for build and usage basics.

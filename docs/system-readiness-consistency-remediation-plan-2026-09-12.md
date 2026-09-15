@@ -14,6 +14,16 @@
 > that path require an Atlas endpoint. Removing the dependency needs a separate
 > Atlas-optional wiring change.
 
+> **Authoritative current addendum (2026-09-15):** The successor Nacos3/kwok
+> plan has delivered complete Instance metadata round-trip, all-label and
+> `Reversion` equality, fresh SDK snapshots, and linearized one-hour evidence
+> at 1000 Pods/20 applications. Remaining in-scope work is tracked in
+> [remaining-closure.md](superpowers/plans/2026-09-15-remaining-closure.md):
+> legacy tree deletion, the two-hour burst gate, status reconciliation, and
+> the safely backed-up 175-commit message rewrite. AppCenter delivery,
+> deployment-owned Nacos operations, Atlas wire compatibility, and Consul
+> scale are excluded by decision.
+
 > **执行说明：** 本计划以 [system-readiness-consistency-audit-2026-09-12.md](system-readiness-consistency-audit-2026-09-12.md) 为输入，按工作包和提交批次执行。每个批次必须先补测试、再改实现、再跑门禁；任何 P0/P1/P2 未关闭时不得宣布批次完成。
 
 **目标：** 修复 Spotter 的实例身份、事件顺序、全量对账、Nacos Sink 通信闭环和生产配置边界，并形成可重复的测试与 E2E 证据链。

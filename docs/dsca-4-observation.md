@@ -1,5 +1,12 @@
 # DSCA Track 4 — Sustained Large-Scale Consistency Observation
 
+> **Authoritative current addendum (2026-09-15):** The active Observe target
+> is Nacos 3.2.4 ARM64 with the official SDK and kwokctl. A fresh one-hour
+> complete-Instance run passed 361/361 linearized ticks at 1000 Pods across 20
+> applications, including labels and `Reversion`; the evidence is in
+> [nacos3-kwok-complete-instance-equality-2026-09-15.md](evidence/nacos3-kwok-complete-instance-equality-2026-09-15.md).
+> The separate two-hour burst-augmented gate remains `NOT VERIFIED`.
+
 **Auditor:** DS-4 (sustained large-scale consistency observation — the core-requirement track)
 **Repo:** `spotter`, branch `refactor/all` — HEAD `69b0105` when the audit ran; the review-pass re-run (§6.2) executed at HEAD `0ff71f7`, code-identical (the commits between are docs-only)
 **Method:** full code reading of every file in `tests/soak/` (soak_test.go, scenarios.go, assert.go, drivers.go, child.go, config.go, metrics.go, atlas.go, summary.go, ioutil.go, signals.go, doc.go, batch4_test.go — 3,944 lines total), the soak stack scripts (`scripts/soak-up.sh`, `soak-down.sh`, `soak-stack.yml`), the Makefile soak tier, the flakiness history (`tests/soak/results/20260908-*.md`, `20260909-0000-local.md` + its root-cause analysis), and the reconcile path the observation judges (`pkg/providers/k8s/*`, `pkg/providers/consul/*`, `pkg/nacos/nacos.go`, `pkg/worker/*`, `pkg/k8srobot/k8srobot.go`). Executed: the soak unit tier (`go test -tags=soak -run TestSoakUnit` — 8/8 PASS), and a **15-minute live rehearsal observation against the running demo stack** (read-only: `kubectl get` + nacos/consul GETs; a scratch script in `/tmp`, zero repo modification). The demo stack was never touched; no reserved port was bound; `make test-soak` was NOT run. Review pass: the rehearsal script's comparison engine was found defective in three ways (P1-3), the engine was fixed, its detections validated offline against synthetic views, and a short corrected-engine re-run executed against the same demo stack (§6.2).

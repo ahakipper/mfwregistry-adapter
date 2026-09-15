@@ -1,5 +1,14 @@
 # Multi-Sink Plan: Nacos as the Second InstanceSink
 
+> **Authoritative current addendum (2026-09-15):** The active target is Nacos
+> 3.2.4-slim ARM64 through the official Go SDK gRPC naming facade. Persistent
+> operations use application-scoped logical batches (maximum 100) made of
+> official SDK `PersistentInstanceRequest` calls; Nacos protocol-level
+> persistent batch is not assumed. Complete `Instance` metadata, labels, and
+> `Reversion` round-trip is covered by the one-hour kwok evidence. Nacos
+> deployment operations and Atlas real wire compatibility are out of scope;
+> the old v2/cluster-admin text below is historical provenance.
+
 > Current scope: Atlas remains an optional existing Sink/mock deferred from the
 > current release; this plan's release gate covers the Nacos single-Sink SDK.
 > The server currently wires Atlas by default, so this deferral does not make

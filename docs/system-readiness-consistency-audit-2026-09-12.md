@@ -8,6 +8,16 @@
 > `healthChecker=NONE` is deployment-owned service/cluster configuration, not
 > a naming-SDK startup prerequisite.
 
+> **Authoritative current addendum (2026-09-15):** The Nacos3 ARM64 SDK path,
+> complete `Instance` payload (including all labels and `Reversion`), and
+> linearized Observe reader are implemented. The fresh 1000-Pod/20-application
+> one-hour run passed 361/361 exact ticks with zero field divergence, drops, or
+> cleanup residuals; see
+> [complete Instance evidence](evidence/nacos3-kwok-complete-instance-equality-2026-09-15.md).
+> The two-hour burst gate and legacy package deletion remain open. AppCenter
+> delivery, deployment-level Nacos operations, Atlas wire compatibility, and
+> Consul scale are intentionally excluded from the current Spotter scope.
+
 **审计日期：** 2026-09-12（当前状态增量更新至 2026-09-13）
 
 > Current scope: Atlas is an existing Sink/mock integration point deferred

@@ -4,6 +4,22 @@ This document is the current execution ledger for the remediation plan. It
 supersedes stale HEAD labels in historical audit sections; historical findings
 remain unchanged and are not promoted to current PASS evidence.
 
+## Authoritative current addendum — 2026-09-15
+
+- Current branch: `refactor/all`; evidence baseline `436a4af`.
+- Nacos target: `nacos/nacos-server:v3.2.4-slim` on `linux/arm64`, official
+  Go SDK gRPC naming path, application-scoped batches capped at 100.
+- Complete Instance equality is verified by the fresh one-hour run in
+  [nacos3-kwok-complete-instance-equality-2026-09-15.md](evidence/nacos3-kwok-complete-instance-equality-2026-09-15.md):
+  361/361 emitted ticks exact, 1000 Pods across 20 applications, zero field
+  divergences, zero drops, and drained cleanup.
+- The two-hour burst run, legacy compatibility-tree deletion, final status
+  reconciliation, and the separately authorized 175-commit history rewrite
+  remain in scope and open.
+- AppCenter delivery, Nacos deployment HA/TLS/auth/namespace/leaderless work,
+  Atlas real wire compatibility, and Consul scale observation are explicitly
+  excluded by the current user decision.
+
 ## Current baseline
 
 - Branch: `refactor/all`
