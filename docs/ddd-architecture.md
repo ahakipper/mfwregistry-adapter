@@ -855,3 +855,19 @@ Each phase ends with a green build and a green `pkg/providers/k8s` test run
 
 *End of document. Every file:line citation above was verified against the
 working tree at commit `945ce51` on branch `refactor/all`.*
+
+## Current Status Addendum (2026-09-15)
+
+The historical compatibility bridge described above was removed in commit
+`1c9912a`. The active graph and all repository tests now use explicit
+`infra/config.Config` values and injected `ports.Logger`/`ports.Notifier`
+collaborators. The former package-global config, logger, notice, and provider
+wrapper packages no longer exist; `internal/infra/logging` and the explicit
+`internal/infra/notice` HTTP/fail-closed adapters are the supported seams.
+
+The Nacos 3 ARM64 one-hour KWork evidence proves strict full-Instance equality,
+including labels, metadata, and Reversion, while the bounded application batch
+test proves 201 persistent registrations converge as `100 + 100 + 1`. The
+remaining in-scope reliability gate is the two-hour burst run. AppCenter real
+delivery, deployment-level Nacos operations, and real Atlas protobuf wire
+compatibility remain deliberately excluded by the current scope decision.

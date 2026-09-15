@@ -525,9 +525,11 @@ binary into `/usr/bin` and uses `/usr/bin/spotter` as the entrypoint.
    that accepts these structs (e.g. a JSON codec registered via
    `grpc.WithDefaultCallOption(grpc.ForceCodec(...))`). This is stated in the
    package header of `v2.go`.
-2. **`pkg/notice/appcenternotice` is a local no-op logger.** Notices are log
-   lines only; no alert is actually delivered to the internal appcenter-notice
-   service.
+2. **Historical notice shim (removed 2026-09-15).** The former
+   `pkg/notice/appcenternotice` local no-op logger and package-global notice
+   API were deleted. The supported runtime uses the explicit
+   `internal/infra/notice` HTTP adapter when a deployment contract is supplied,
+   otherwise it remains fail-closed and log-only.
 3. **`pkg/providers/aggregate/controller.go` is an unfinished refactor.** All
    methods are commented out; the intent was to deduplicate `CompareAndFlush`
    across providers, but each provider still carries its own copy.
@@ -561,6 +563,21 @@ binary into `/usr/bin` and uses `/usr/bin/spotter` as the entrypoint.
    remains only for explicit test/rollback mode, which product wiring rejects.
    Real Nacos SDK/TLS/auth/reconnect evidence is still required before a
    production PASS.
+
+## Current Status Addendum (2026-09-15)
+
+The package map and wiring descriptions above contain historical pre-migration
+references. Commit `1c9912a` removed `config`, `pkg/log`, `pkg/notice`,
+`internal/infra/legacycompat`, and the provider/election compatibility
+constructors. The composition root now owns instance logging and fail-closed
+notice construction through explicit dependencies.
+
+For the current Spotter scope, the Nacos 3 ARM64 target has passed the strict
+one-hour KWork equality run and the 201-entry persistent application-batch
+test. The remaining gate is the two-hour burst run. Nacos deployment auth/TLS,
+non-public namespaces, HA/leaderless recovery, AppCenter delivery, and real
+Atlas protobuf wire compatibility are intentionally deployment/deferred scope,
+not open Spotter implementation defects.
 
 ## References
 

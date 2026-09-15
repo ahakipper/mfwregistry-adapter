@@ -509,12 +509,10 @@ Supporting work (not tests, prerequisite): fix
 - **`tools/cache` vet failure** is resolved in `eb6bf0c`; keep the package in
   coverage expansion reviews rather than hiding future diagnostics behind an
   allowlist.
-- **Legacy globals**: the consul and k8s providers log through `pkg/log` and
-  notify through `pkg/notice` globals; tests that run `Run()` or
-  `CompareAndFlush` must either initialize the globals in setup
-  (`notice.InitNoticeClient`, `log.LoggerInit` with a temp log dir) or run in
-  a temporary working directory — otherwise `app.log` and `logfiles/` appear
-  in the repository (one already has).
+- **Legacy globals (historical, removed 2026-09-15)**: the consul and k8s
+  providers now receive explicit logger/notifier dependencies. Tests must use
+  the fakes or `ports.NopLogger`; no global initialization or temporary
+  `app.log` workaround is permitted.
 - **Real-time waits**: `UnsyncedService.Sync` (5 s ticker),
   `ProcessIntervalFullPush` (interval configurable, so tests can pass 1–2 s)
   and the etcd member-list probe (5 s) are the only slow paths; tests must
@@ -546,6 +544,16 @@ The owned lifecycle writes state before creation and uses an EXIT cleanup trap;
 state hashes and residual markers permit safe retry after partial failure.
 When `OBS_KUBECONFIG` is set, `make test-observe` runs only read-only
 `TestObserveUnit` cases and exits before any apply/delete driver operation.
+
+## Current Status Addendum (2026-09-15)
+
+Commit `1c9912a` completed the legacy dependency removal and tightened
+`scripts/check_no_legacy_globals.sh` to scan production and test Go files
+without compatibility exemptions. The full unit suite, focused race suite,
+E2E compile gate, static boundary check, and `go vet ./...` pass on the current
+tree. The remaining in-scope runtime test is the two-hour KWork burst with
+per-tick full-Instance equality; it is intentionally kept separate from the
+completed one-hour evidence.
 ### Nacos 3 SDK and persistent application batches
 
 Nacos 2.1.0 records in this document are historical compatibility evidence;
