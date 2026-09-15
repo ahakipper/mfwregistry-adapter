@@ -147,10 +147,26 @@ func formatInstanceWithDeps(obj *k8srobot.QueueObject, pod *v1.Pod, pushAppCodes
 	return
 }
 
+// ConvertPod exposes the provider's explicit conversion boundary to
+// observation and integration tooling. It deliberately delegates to the same
+// implementation used by the informer path so tests compare Nacos against the
+// production Instance projection rather than a second hand-written model.
+func ConvertPod(obj *k8srobot.QueueObject, pod *v1.Pod, pushAppCodes []string, logger internalports.Logger) *sv.Instance {
+	return formatInstanceWithDeps(obj, pod, pushAppCodes, logger)
+}
+
 // format lable info
 func formatLableInfo(pod *v1.Pod, originLables map[string]string, envs map[string]string) (lablel map[string]string) {
 	if lablel == nil {
 		lablel = make(map[string]string)
+	}
+	// Preserve the complete source label set in the domain Instance. The
+	// compatibility labels below are derived/normalized views used by legacy
+	// consumers, but dropping arbitrary source labels makes a full
+	// Instance-to-Nacos round-trip impossible and hides label drift from
+	// reconciliation.
+	for key, value := range originLables {
+		lablel[key] = value
 	}
 	// for Java SDK
 	if envs != nil && len(envs) > 0 {

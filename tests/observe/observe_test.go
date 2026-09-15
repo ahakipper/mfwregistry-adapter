@@ -1079,6 +1079,7 @@ func runTick(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosVi
 		writeTickRecord(t, records, log, record)
 		return record
 	}
+	record.RemoteFingerprint = remoteViewFingerprint(remoteAll)
 	remoteCount, remoteOnline, remoteDisabled, remoteServices := 0, 0, 0, 0
 	for _, entries := range remoteAll {
 		if len(entries) > 0 {

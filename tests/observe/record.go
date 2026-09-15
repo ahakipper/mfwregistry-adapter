@@ -30,6 +30,7 @@ type tickRecord struct {
 	MutationObserved  bool         `json:"mutationObserved"`
 	MutationSequence  uint64       `json:"mutationSequence"`
 	SourceFingerprint string       `json:"sourceFingerprint"`
+	RemoteFingerprint string       `json:"remoteFingerprint"`
 	Divergence        []divergence `json:"divergences"`
 	Env               envState     `json:"env"`
 	Queue             queueState   `json:"queue"`

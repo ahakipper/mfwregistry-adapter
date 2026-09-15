@@ -1,10 +1,41 @@
 package nacos
 
 import (
+	"encoding/json"
 	"testing"
 
 	"spotter/internal/domain/instance"
 )
+
+func TestNacosMetadataRoundTripsLabelsAndReversion(t *testing.T) {
+	original := &instance.Instance{
+		SourceKey: "cluster-a/uid-42", SourceCluster: "cluster-a", InstanceId: "pod-a",
+		Level: "gold", Ports: []*instance.PortInfo{{Name: "http", Protocol: "http", Port: 8080, ServicePort: 18080}},
+		Ip: "10.0.0.1", EnvCode: "test#blue", EnvType: "test", EnvGroup: "blue", Cluster: "edge",
+		Version: "v7", Enabled: true, State: "running", HealthState: "ready", AppCode: "pay-user",
+		Provider: "k8s", Label: map[string]string{"app": "pay-user", "custom": "kept", "deploy-id": "d-1"},
+		Hostname: "pod-a", Cpu: 2.5, Memory: 256, Disk: 10, Os: "linux",
+		Image: map[string]string{"application": "repo/app:v7"}, Idc: "idc-a", Reversion: 42, Status: 1,
+	}
+	metadata := metadataOf(original)
+	if metadata["spotter.instance"] == "" {
+		t.Fatal("metadata missing complete spotter.instance payload")
+	}
+	encodedMetadata, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatalf("json.Marshal(metadata) error = %v", err)
+	}
+	if len(encodedMetadata) >= 1024 {
+		t.Fatalf("serialized metadata length=%d, want less than Nacos 1024-byte limit", len(encodedMetadata))
+	}
+	got := reconstruct(original.AppCode, Host{IP: original.Ip, Port: 8080, ClusterName: "k8s", Enabled: true, Metadata: metadata})
+	if got.Reversion != original.Reversion || got.Label["custom"] != "kept" || got.Ports[0].ServicePort != 18080 || got.Image["application"] != "repo/app:v7" {
+		t.Fatalf("full metadata round-trip lost fields: got=%#v want=%#v", got, original)
+	}
+	if got.SourceKey != original.SourceKey || got.SourceCluster != original.SourceCluster || got.EnvCode != original.EnvCode || got.Cluster != original.Cluster || got.HealthState != original.HealthState || got.Disk != original.Disk || got.Os != original.Os {
+		t.Fatalf("full metadata round-trip lost identity/resource fields: got=%#v want=%#v", got, original)
+	}
+}
 
 func TestNacosMetadataSourceIdentityRoundTrip(t *testing.T) {
 	original := &instance.Instance{

@@ -54,19 +54,26 @@ Definitions are fixed for the gate:
   `expected_count` (online plus representable unhealthy Pods) and `nacos_count`.
   Pending Pods remain in `source_count` but are intentionally excluded from
   `expected_count` until they become representable.
-- The exact Spotter-owned field projection is membership/app scope, IP, first
-  port 7096, cluster/service/composite ID, enabled, persistent
-  `Ephemeral=false`, and metadata `spotterOwner`, `instanceId`, `status`.
-  Nacos `healthy` is recorded but excluded from Spotter equality because
+- The exact Spotter-owned field projection is the complete `Instance` domain
+  model: identity/source fields, all ports, endpoint, env/cluster/provider
+  fields, enabled/state/status, resource fields, images, every converted
+  source label, IDC, and `reversion`. New writes carry this projection in the
+  versioned compressed `spotter.instance` metadata value; scalar keys remain
+  only for legacy fallback. The serialized metadata remains below Nacos's
+  1024-byte parameter limit for the controlled fixture shape.
+- Nacos `healthy` is recorded but excluded from Spotter equality because
   persistent-instance health is maintained by Nacos's server-side checker;
   disabling that checker requires an Admin/Maintainer control API not exposed
-  by the official Go Naming SDK. Other domain metadata is outside this
-  controlled snapshot and is recorded as unchecked.
+  by the official Go Naming SDK.
 
 The 2-hour result is `PASS` only when every tick satisfies these rules and the
 final cleanup reports no residual kwok cluster, Pod, container, temporary
 state, or Nacos registration. Any missing prerequisite or incomplete window is
 recorded as `NOT VERIFIED`, never as a partial PASS.
+
+The 2026-09-15 one-hour result that predates the complete-payload change is
+historical subset evidence only; it is not proof of full Instance/label/
+reversion equality. A fresh one-hour run is required after this implementation.
 
 ## Scratch limitations
 

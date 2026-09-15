@@ -6,14 +6,23 @@ package observe
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	v1 "k8s.io/api/core/v1"
+
+	"spotter/internal/domain/instance"
+	"spotter/internal/ports"
+	"spotter/pkg/k8srobot"
+	k8sprovider "spotter/pkg/providers/k8s"
 )
 
 const observeCommandTimeout = 30 * time.Second
@@ -318,26 +327,6 @@ func (d *churnDriver) finishMutation() {
 	d.mu.Unlock()
 }
 
-// podJSONReport is the shape of one row of `kubectl get pods -o json`.
-type podJSONReport struct {
-	Metadata struct {
-		Name              string            `json:"name"`
-		CreationTimestamp string            `json:"creationTimestamp"`
-		Labels            map[string]string `json:"labels"`
-	} `json:"metadata"`
-	Status struct {
-		Phase      string `json:"phase"`
-		PodIP      string `json:"podIP"`
-		Conditions []struct {
-			Type   string `json:"type"`
-			Status string `json:"status"`
-		} `json:"conditions"`
-		ContainerStatuses []struct {
-			Ready bool `json:"ready"`
-		} `json:"containerStatuses"`
-	} `json:"status"`
-}
-
 // sourcePod is one live pod in the converter's terms.
 type sourcePod struct {
 	Name            string
@@ -346,6 +335,7 @@ type sourcePod struct {
 	Phase           string
 	PodIP           string
 	ContainersReady bool
+	Instance        *instance.Instance
 }
 
 // liveSourcePods reads the kwok cluster's pods in ONE kubectl call (the
@@ -362,7 +352,7 @@ func (d *churnDriver) liveSourcePods(labelSelector string) ([]sourcePod, error) 
 		return nil, err
 	}
 	var list struct {
-		Items []podJSONReport `json:"items"`
+		Items []v1.Pod `json:"items"`
 	}
 	if err := jsonUnmarshalString(out, &list); err != nil {
 		return nil, fmt.Errorf("decode kubectl get pods: %w", err)
@@ -371,28 +361,48 @@ func (d *churnDriver) liveSourcePods(labelSelector string) ([]sourcePod, error) 
 	// pod (none expected — the kwok cluster is dedicated) would surface as
 	// an unexpected app-code, recorded in the tick.
 	pods := make([]sourcePod, 0, len(list.Items))
-	for _, item := range list.Items {
+	clusterID := d.sourceClusterID()
+	for i := range list.Items {
+		item := &list.Items[i]
+		obj := &k8srobot.QueueObject{
+			RType: k8srobot.Pods, Key: item.Namespace + "/" + item.Name,
+			ClusterID: clusterID, UID: string(item.UID),
+		}
+		converted := k8sprovider.ConvertPod(obj, item, nil, ports.NopLogger{})
+		appCode := item.Labels["app-code"]
+		if converted != nil && converted.AppCode != "" {
+			appCode = converted.AppCode
+		}
 		pods = append(pods, sourcePod{
-			Name:            item.Metadata.Name,
-			AppCode:         item.Metadata.Labels["app-code"],
-			CreatedAt:       parseK8sTimestamp(item.Metadata.CreationTimestamp),
-			Phase:           item.Status.Phase,
-			PodIP:           item.Status.PodIP,
-			ContainersReady: containersReadyOf(item),
+			Name: item.Name, AppCode: appCode, CreatedAt: item.CreationTimestamp.Time,
+			Phase: string(item.Status.Phase), PodIP: item.Status.PodIP,
+			ContainersReady: containersReadyOf(item), Instance: converted,
 		})
 	}
 	sort.Slice(pods, func(i, j int) bool { return pods[i].Name < pods[j].Name })
 	return pods, nil
 }
 
+// sourceClusterID mirrors k8srobot's deterministic identity for a configured
+// cluster. The Observe source must use the same value in sourceKey/sourceCluster
+// labels that the production informer conversion writes.
+func (d *churnDriver) sourceClusterID() string {
+	path, err := filepath.Abs(d.kubeconfig)
+	if err != nil {
+		path = filepath.Clean(d.kubeconfig)
+	}
+	sum := sha256.Sum256([]byte(path))
+	return fmt.Sprintf("config-%x", sum[:8])
+}
+
 // containersReadyOf derives the converter's containersReady predicate
 // (every container ready AND a non-empty ContainerStatuses report).
-func containersReadyOf(item podJSONReport) bool {
-	if len(item.Status.ContainerStatuses) == 0 {
+func containersReadyOf(item *v1.Pod) bool {
+	if item == nil || len(item.Status.ContainerStatuses) == 0 {
 		return false
 	}
 	for _, c := range item.Status.ContainerStatuses {
-		if !c.Ready {
+		if !c.Ready || c.State.Running == nil {
 			return false
 		}
 	}

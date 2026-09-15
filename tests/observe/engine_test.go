@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"spotter/internal/domain/instance"
 )
 
 // The engine unit tier (the corrected-engine semantics the §6.2 review
@@ -95,6 +97,53 @@ func TestObserveUnitNacosOwnedHealthDriftDoesNotBreakSpotterEquality(t *testing.
 	}
 	if diff := compareService("obs-app-0", model, []remoteEntry{got}, stubLedger(nil), time.Minute, now); len(diff.Divergences) != 0 {
 		t.Fatalf("Nacos-owned healthy drift = %+v, want no Spotter data divergence", diff.Divergences)
+	}
+}
+
+func TestObserveUnitFullPayloadDetectsReversionAndLabelDrift(t *testing.T) {
+	now := time.Now()
+	source := &instance.Instance{
+		InstanceId: "pod-a", AppCode: "obs-app-0", Provider: "k8s", Ip: "10.0.0.7",
+		Ports: []*instance.PortInfo{{Port: 7096}}, Enabled: true, State: "running",
+		EnvType: "test", EnvGroup: "blue", Label: map[string]string{"app": "pay-user", "custom": "kept"},
+		Image: map[string]string{"application": "repo/app:v7"}, Reversion: 42, Status: 1,
+	}
+	model := buildSourceModel([]sourcePod{{Name: "pod-a", AppCode: "obs-app-0", Phase: "Running", PodIP: source.Ip, ContainersReady: true, CreatedAt: now, Instance: source}}, []string{"obs-app-0"})
+	expected := model.Entries["obs-app-0"]["pod-a"]
+	remoteFor := func(payload string) []remoteEntry {
+		metadata := copyStringMap(expected.Metadata)
+		metadata["spotter.instance"] = payload
+		return []remoteEntry{{ID: expected.ID, IP: expected.IP, Port: expected.Port, ClusterName: expected.ClusterName, ServiceName: expected.ServiceName, Enabled: expected.Enabled, Ephemeral: false, Metadata: metadata, CompositeID: expected.CompositeID}}
+	}
+	if diff := compareService("obs-app-0", model, remoteFor(expected.Metadata["spotter.instance"]), stubLedger(nil), time.Minute, now); len(diff.Divergences) != 0 {
+		t.Fatalf("matching full payload diff = %+v, want none", diff.Divergences)
+	}
+	mutated, err := instance.DecodeCompressedCanonicalPayload(expected.Metadata["spotter.instance"])
+	if err != nil {
+		t.Fatalf("DecodeCanonicalPayload() error = %v", err)
+	}
+	mutated.Reversion++
+	if diff := compareService("obs-app-0", model, remoteFor(instance.CompressedCanonicalPayload(mutated)), stubLedger(nil), time.Minute, now); len(diff.Divergences) != 1 || diff.Divergences[0].Kind != divField {
+		t.Fatalf("reversion drift diff = %+v, want one field divergence", diff.Divergences)
+	}
+	mutated.Reversion = source.Reversion
+	mutated.Label["custom"] = "changed"
+	if diff := compareService("obs-app-0", model, remoteFor(instance.CompressedCanonicalPayload(mutated)), stubLedger(nil), time.Minute, now); len(diff.Divergences) != 1 || diff.Divergences[0].Kind != divField {
+		t.Fatalf("label drift diff = %+v, want one field divergence", diff.Divergences)
+	}
+}
+
+func TestObserveUnitRemoteFingerprintIncludesMetadataAndWireFields(t *testing.T) {
+	base := map[string][]remoteEntry{"obs-app-0": {{ID: "pod-a", IP: "10.0.0.7", Port: 7096, ClusterName: "k8s", ServiceName: "obs-app-0", Healthy: true, Enabled: true, Ephemeral: false, Metadata: map[string]string{"spotter.instance": "payload-a"}}}}
+	first := remoteViewFingerprint(base)
+	base["obs-app-0"][0].Metadata["spotter.instance"] = "payload-b"
+	if second := remoteViewFingerprint(base); first == second {
+		t.Fatal("remote fingerprint did not change when canonical metadata changed")
+	}
+	base["obs-app-0"][0].Metadata["spotter.instance"] = "payload-a"
+	base["obs-app-0"][0].Healthy = false
+	if third := remoteViewFingerprint(base); first == third {
+		t.Fatal("remote fingerprint did not retain Nacos-owned healthy observation")
 	}
 }
 

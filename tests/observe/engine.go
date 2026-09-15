@@ -8,8 +8,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"spotter/internal/domain/instance"
 )
 
 // The comparison engine (dsca-4 §4.3 steps 3-5 / §6.2's corrected
@@ -76,10 +79,10 @@ type sourceModel struct {
 	Count int
 }
 
-// sourceEntry contains the fields that the K8s converter deterministically
-// projects into the Nacos registration. The Observe comparison intentionally
-// checks only this stable projection; source fields such as resourceVersion
-// and sourceKey are unavailable in the one-call Pod snapshot.
+// sourceEntry contains the complete Instance projection that the K8s
+// converter and Nacos sink exchange. The canonical metadata value carries all
+// domain properties; the explicit scalar fields keep identity and wire scope
+// failures easy to diagnose in a tick record.
 type sourceEntry struct {
 	ID          string
 	IP          string
@@ -155,7 +158,37 @@ func sourceMutationFingerprint(pods []sourcePod, appCodes []string) string {
 		if !isObservedAppCode(pod.AppCode, appCodes) {
 			continue
 		}
-		rows = append(rows, fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%t", pod.Name, pod.AppCode, pod.Phase, pod.PodIP, pod.ContainersReady))
+		payload := ""
+		if pod.Instance != nil {
+			payload = instance.CanonicalPayload(pod.Instance)
+		}
+		rows = append(rows, fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%t\x00%s", pod.Name, pod.AppCode, pod.Phase, pod.PodIP, pod.ContainersReady, payload))
+	}
+	sort.Strings(rows)
+	sum := sha256.Sum256([]byte(strings.Join(rows, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
+// remoteViewFingerprint is the audit hash for the complete Nacos view read at
+// one tick. It includes every wire field and the full metadata map (including
+// the compressed canonical Instance payload), while retaining the Nacos-owned
+// healthy bit for observability even though that bit is not a Spotter equality
+// failure.
+func remoteViewFingerprint(remote map[string][]remoteEntry) string {
+	rows := make([]string, 0)
+	for appCode, entries := range remote {
+		for _, entry := range entries {
+			keys := make([]string, 0, len(entry.Metadata))
+			for key := range entry.Metadata {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			metadata := make([]string, 0, len(keys))
+			for _, key := range keys {
+				metadata = append(metadata, key+"\x00"+entry.Metadata[key])
+			}
+			rows = append(rows, fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%s\x00%s\x00%s\x00%t\x00%t\x00%t\x00%s", appCode, entry.ID, entry.IP, entry.Port, entry.ClusterName, entry.ServiceName, entry.CompositeID, entry.Healthy, entry.Enabled, entry.Ephemeral, strings.Join(metadata, "\x01")))
+		}
 	}
 	sort.Strings(rows)
 	sum := sha256.Sum256([]byte(strings.Join(rows, "\n")))
@@ -166,12 +199,45 @@ func expectedSourceEntry(pod sourcePod, enabled bool, status string) sourceEntry
 	const port = 7096 // formatAppPort places the compatibility port first.
 	const cluster = "k8s"
 	const group = "DEFAULT_GROUP"
+	if pod.Instance != nil {
+		ins := pod.Instance
+		wirePort := port
+		if len(ins.Ports) > 0 && ins.Ports[0] != nil && ins.Ports[0].Port != 0 {
+			wirePort = int(ins.Ports[0].Port)
+		}
+		return sourceEntry{
+			ID: ins.InstanceId, IP: ins.Ip, Port: wirePort, ClusterName: ins.Provider,
+			ServiceName: ins.AppCode,
+			CompositeID: fmt.Sprintf("%s#%d#%s#%s@@%s", ins.Ip, wirePort, ins.Provider, group, ins.AppCode),
+			Enabled:     ins.Enabled, Healthy: ins.Enabled, Ephemeral: false,
+			Status: strconv.FormatInt(int64(ins.Status), 10), Metadata: expectedMetadata(ins),
+		}
+	}
 	return sourceEntry{
 		ID: pod.Name, IP: pod.PodIP, Port: port, ClusterName: cluster,
 		ServiceName: pod.AppCode,
 		CompositeID: fmt.Sprintf("%s#%d#%s#%s@@%s", pod.PodIP, port, cluster, group, pod.AppCode),
 		Enabled:     enabled, Healthy: enabled, Ephemeral: false, Status: status,
 		Metadata: map[string]string{"spotterOwner": "spotter", "instanceId": pod.Name, "status": status},
+	}
+}
+
+func expectedMetadata(ins *instance.Instance) map[string]string {
+	return map[string]string{
+		"spotterOwner":     "spotter",
+		"sourceKey":        ins.SourceKey,
+		"sourceCluster":    ins.SourceCluster,
+		"instanceId":       ins.InstanceId,
+		"envType":          ins.EnvType,
+		"envGroup":         ins.EnvGroup,
+		"reversion":        strconv.FormatInt(ins.Reversion, 10),
+		"status":           strconv.FormatInt(int64(ins.Status), 10),
+		"state":            ins.State,
+		"idc":              ins.Idc,
+		"cpu":              strconv.FormatFloat(float64(ins.Cpu), 'f', -1, 32),
+		"version":          ins.Version,
+		"schemaVersion":    "1",
+		"spotter.instance": instance.CompressedCanonicalPayload(ins),
 	}
 }
 

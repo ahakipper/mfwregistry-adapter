@@ -974,12 +974,10 @@ func TestBlackboxSinkGetAllReconstructsInstances(t *testing.T) {
 	if got.Provider != "k8s" {
 		t.Fatalf("reconstructed provider = %q, want k8s (clusterName lands in Provider)", got.Provider)
 	}
-	// The dsca-3 §3.2 fidelity correction (DS-3-4/DS-5-3): Cluster stays
-	// EMPTY — the metadata never carried it, and synthesizing it from
-	// clusterName would false-positive the consul compare every cycle.
-	// This is the assertion flip the §3.5 test contract pins.
-	if got.Cluster != "" {
-		t.Fatalf("reconstructed cluster = %q, want \"\" (never synthesized from clusterName)", got.Cluster)
+	// The complete canonical payload now round-trips the domain Cluster field;
+	// it is no longer synthesized from the Nacos clusterName wire scope.
+	if got.Cluster != "k8s" {
+		t.Fatalf("reconstructed cluster = %q, want k8s from the canonical payload", got.Cluster)
 	}
 	if got.EnvType != "test" || got.EnvGroup != "7" {
 		t.Fatalf("reconstructed env = %s/%s, want test/7", got.EnvType, got.EnvGroup)

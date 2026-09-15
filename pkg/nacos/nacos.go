@@ -853,6 +853,13 @@ func metadataOf(ins *instance.Instance) map[string]string {
 		"version":       ins.Version,
 		"schemaVersion": metadataSchemaVersion,
 	}
+	// Keep the historical scalar keys for compatibility with existing Nacos
+	// entries, and add one compact versioned canonical payload carrying every
+	// domain property (including labels, all ports, images and reversion). The
+	// payload is the authoritative equality vehicle for new writes; legacy
+	// readers can continue using the scalar fallback below. It is compressed
+	// because Nacos limits the serialized metadata parameter to 1024 bytes.
+	metadata["spotter.instance"] = instance.CompressedCanonicalPayload(ins)
 	return metadata
 }
 
@@ -860,13 +867,10 @@ func metadataOf(ins *instance.Instance) map[string]string {
 // comes from the metadata with the enabled→online/else→unhealthy fallback
 // (plan §7.3), so unmetadataed state still classifies.
 //
-// Cluster is deliberately left EMPTY (dsca-3 §3.2, the DS-3-4/DS-5-3
-// fidelity correction): the metadata never carried it — both providers'
-// conversions write Cluster "" (k8s's formatCluster reads a label/env the
-// pods do not set; consul hardcodes "") — while clusterName already lands
-// in Provider (the scoping key the wire round-trips exactly). Synthesizing
-// Cluster from clusterName here would false-positive every consul compare
-// every cycle.
+// New writes restore Cluster from the canonical payload; the Nacos
+// clusterName remains the Provider/scoping key from the wire. Legacy entries
+// without the payload continue through the scalar fallback below, where
+// Cluster remains empty because it was never persisted by those writers.
 //
 // A mismatched or missing schemaVersion (dsca-5 §4.2-1) is a degraded
 // writer, not an error: the reconstruction still participates in the diff,
@@ -875,6 +879,28 @@ func metadataOf(ins *instance.Instance) map[string]string {
 // gate) fires once and the re-push rewrites the full metadata at the
 // current schema. One-shot, self-healing, never a loop.
 func reconstruct(service string, host Host) *instance.Instance {
+	if host.Metadata["schemaVersion"] == metadataSchemaVersion {
+		if decoded, err := instance.DecodeCompressedCanonicalPayload(host.Metadata["spotter.instance"]); err == nil {
+			// Nacos owns the wire location and enabled bit. Preserve those
+			// values from the authoritative host response while retaining all
+			// Spotter domain properties from the canonical metadata payload.
+			decoded.AppCode = service
+			decoded.Ip = host.IP
+			if len(decoded.Ports) == 0 {
+				decoded.Ports = []*instance.PortInfo{{Port: int32(host.Port)}}
+			} else if decoded.Ports[0] == nil {
+				decoded.Ports[0] = &instance.PortInfo{Port: int32(host.Port)}
+			} else {
+				decoded.Ports[0].Port = int32(host.Port)
+			}
+			decoded.Provider = host.ClusterName
+			decoded.Enabled = host.Enabled
+			if decoded.InstanceId == "" {
+				decoded.InstanceId = host.Metadata["instanceId"]
+			}
+			return decoded
+		}
+	}
 	cluster := host.ClusterName
 	status := parseStatus(host.Metadata["status"], host.Enabled)
 	reversion := parseInt64(host.Metadata["reversion"])

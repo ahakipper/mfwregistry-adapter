@@ -328,6 +328,43 @@ Docker, Cobra, zap, Prometheus, Go test/race/vet, and the existing testkit.
       commit a detailed `NOT VERIFIED` evidence record with the exact blocker
       and keep the stage open.
 
+### Task 4.3: Close the complete Instance equality gap
+
+**Files:**
+
+- Modify: `internal/domain/instance/metadata.go`
+- Modify: `pkg/providers/k8s/conversion.go`
+- Modify: `pkg/nacos/nacos.go`
+- Modify: `tests/observe/churn.go`
+- Modify: `tests/observe/engine.go`
+- Add: focused metadata, label, reversion, and payload-size tests
+
+**Steps:**
+
+- [x] Define a versioned canonical payload containing every `Instance`
+      property, including `reversion`, all labels, all ports, images,
+      resources, environment fields, state, and source identity.
+- [x] Preserve all source labels in the production K8s conversion instead of
+      dropping arbitrary labels before the sink boundary.
+- [x] Store the canonical payload in compressed Nacos metadata so the full
+      projection remains under Nacos's 1024-byte metadata limit; retain scalar
+      keys only for legacy fallback.
+- [x] Decode the payload in Nacos `GetAll` while keeping the host's actual
+      wire location and enabled bit authoritative.
+- [x] Build the Observe source model through the same production K8s
+      conversion boundary; do not maintain a second reduced field model.
+- [x] Make every tick compare the canonical payload byte-for-byte in addition
+      to cardinality, identity, endpoint, scope, enabled, and lifecycle.
+- [x] Add RED tests for label/reversion drift, complete round-trip, payload
+      compression, and the Nacos metadata-size boundary.
+- [x] Run package, race, vet, real Nacos 3 batch, and 100-Pod Observe smoke
+      gates before starting a new definitive one-hour/scale run.
+- [x] Treat all prior Observe runs as subset evidence until this task's fresh
+      one-hour run passes.
+- [ ] Have an independent reviewer recompute the full-field equality scope
+      and inspect Nacos metadata compatibility.
+- [ ] Commit and push Stage 4.3.
+
 ## Stage 5 — Delete the legacy globals and compatibility packages
 
 ### Task 5.1: Migrate all repository callers and tests
