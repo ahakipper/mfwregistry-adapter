@@ -86,10 +86,8 @@ func (k *k8s) ensureDeps() {
 // (one mutex-guarded map-length read) to run forever.
 const queueDepthReportInterval = 5 * time.Second
 
-// NewK8SProvider Init k8s provider
 // NewK8SProviderWithDeps constructs the provider from explicit runtime
-// collaborators. The legacy constructor above remains only as a compatibility
-// wrapper for callers that still initialize pkg/log and pkg/notice globals.
+// collaborators.
 func NewK8SProviderWithDeps(ctx context.Context, worker worker.Worker, pushInterval int, configPath []string, logger ports.Logger, notifier ports.Notifier, pushAppCodes []string) (provider providers.Provider, err error) {
 	if logger == nil {
 		logger = ports.NopLogger{}
@@ -142,15 +140,14 @@ func NewK8SProviderWithDeps(ctx context.Context, worker worker.Worker, pushInter
 // QueueDepthReporter is the wiring seam of the queueDepth gauge: the
 // exported interface internal/server.go asserts the constructed k8s
 // provider against, so the provider's concrete (unexported) type never has
-// to be exported for one setter. NewK8SProvider's returned value satisfies
+// to be exported for one setter. The provider constructor's returned value satisfies
 // it (the *k8s receiver implements SetQueueDepthReporter).
 type QueueDepthReporter interface {
 	SetQueueDepthReporter(metrics ports.MetricsRecorder)
 }
 
-// MetricsReporter is the explicit metrics wiring seam. The compatibility
-// constructor leaves it nil and retains the historical package collector;
-// production composition installs the injected recorder.
+// MetricsReporter is the explicit metrics wiring seam; production composition
+// installs the injected recorder.
 type MetricsReporter interface {
 	SetMetricsRecorder(ports.MetricsRecorder)
 }
@@ -164,7 +161,7 @@ func (k *k8s) SetMetricsRecorder(recorder ports.MetricsRecorder) {
 // SetQueueDepthReporter installs the recorder the provider publishes the
 // robot's coalescing-queue depth on (the k8s_queue_depth gauge, dsca-1
 // DS-1-1 fix item 1). The provider package stays free of a metrics
-// dependency at construction: NewK8SProvider's signature (the providers'
+// dependency at construction: the provider constructor's signature (the providers'
 // shared seam, internal/server.go's InitializeProviders) is unchanged, and
 // the wiring that owns the recorder (internal/server.go, which already
 // closes over it for the drop observer) calls this setter after
@@ -254,7 +251,7 @@ func (k *k8s) shutdown() {
 // the resolved config designates the nacos sink as the reconcile source
 // (--reconcile-source nacos), before Run. The switch exists so the
 // provider's compare semantics can follow the read routing without
-// changing NewK8SProvider's shared signature.
+// changing the provider constructor's shared signature.
 type NacosReconcileSwitch interface {
 	SetNacosReconcileSource(enabled bool)
 }

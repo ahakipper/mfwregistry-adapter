@@ -14,7 +14,7 @@ import (
 
 // TestE2EConsulPipeline drives the composition-less discovery pipeline:
 //
-//	consulmock (loopback HTTP) -> NewConsulProvider -> DefaultWorker -> DiscoveryCenter
+//	consulmock (loopback HTTP) -> explicit consul provider -> DefaultWorker -> DiscoveryCenter
 //	                                                                    |
 //	discoverymock (bufconn gRPC) <------- assert SynInstance calls <-----+
 //

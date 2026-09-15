@@ -4,32 +4,14 @@ import (
 	"reflect"
 	"testing"
 
-	legacyconfig "spotter/config"
 	infraconfig "spotter/internal/infra/config"
-	"spotter/internal/infra/legacycompat"
 	"spotter/internal/testkit/fakes"
 )
 
-// TestCompositionBuildsIndependentRuntimesWithoutGlobalMutation protects the
-// composition boundary from hidden process state. Building one runtime must
-// not overwrite package globals or make a second runtime observe the first
-// runtime's environment and collaborators.
-func TestCompositionBuildsIndependentRuntimesWithoutGlobalMutation(t *testing.T) {
-	oldEndpoints := append([]string(nil), legacyconfig.EtcdEndpoints...)
-	oldCampaign := legacyconfig.LockCampaignKey
-	oldPushAppCodes := append([]string(nil), legacyconfig.PushAppCodes...)
-	t.Cleanup(func() {
-		legacyconfig.EtcdEndpoints = oldEndpoints
-		legacyconfig.LockCampaignKey = oldCampaign
-		legacyconfig.PushAppCodes = oldPushAppCodes
-	})
-	legacyconfig.EtcdEndpoints = []string{"legacy:2379"}
-	legacyconfig.LockCampaignKey = "/legacy/sentinel"
-	legacyconfig.PushAppCodes = []string{"legacy-app"}
-
-	legacycompat.ResetAccessCounts()
-	t.Cleanup(legacycompat.ResetAccessCounts)
-
+// TestCompositionBuildsIndependentRuntimes protects the composition boundary
+// from hidden process state. Building one runtime must not make a second
+// runtime observe the first runtime's configuration or collaborators.
+func TestCompositionBuildsIndependentRuntimes(t *testing.T) {
 	firstLogger := &fakes.FakeLogger{}
 	firstNotifier := &fakes.FakeNotifier{}
 	firstConfig := infraconfig.Config{Env: "test", Providers: []string{"k8s"}}
@@ -57,18 +39,5 @@ func TestCompositionBuildsIndependentRuntimesWithoutGlobalMutation(t *testing.T)
 	}
 	if first.Notifier != firstNotifier || second.Notifier != secondNotifier || first.Notifier == second.Notifier {
 		t.Fatal("runtime notifiers are not independent injected collaborators")
-	}
-
-	if !reflect.DeepEqual(legacyconfig.EtcdEndpoints, []string{"legacy:2379"}) {
-		t.Fatalf("legacy EtcdEndpoints mutated: %v", legacyconfig.EtcdEndpoints)
-	}
-	if legacyconfig.LockCampaignKey != "/legacy/sentinel" {
-		t.Fatalf("legacy LockCampaignKey mutated: %q", legacyconfig.LockCampaignKey)
-	}
-	if !reflect.DeepEqual(legacyconfig.PushAppCodes, []string{"legacy-app"}) {
-		t.Fatalf("legacy PushAppCodes mutated: %v", legacyconfig.PushAppCodes)
-	}
-	if counts := legacycompat.AccessCountsSnapshot(); counts.Reads != 0 || counts.Writes != 0 {
-		t.Fatalf("composition.Build touched legacy compatibility boundary: %+v", counts)
 	}
 }

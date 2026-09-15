@@ -97,15 +97,14 @@ func (c *consul) ensureDeps() {
 // provider against it and calls SetNacosReconcileSource(true) exactly when
 // the resolved config designates the nacos sink as the reconcile source
 // (--reconcile-source nacos), before Run. The switch exists so the compare
-// semantics can follow the read routing without changing
-// NewConsulProvider's shared signature.
+// semantics can follow the read routing without changing the provider
+// constructor's shared signature.
 type NacosReconcileSwitch interface {
 	SetNacosReconcileSource(enabled bool)
 }
 
-// MetricsReporter is the explicit metrics wiring seam. The compatibility
-// constructor leaves it nil and retains package collectors; production
-// composition installs the injected recorder before Run.
+// MetricsReporter is the explicit metrics wiring seam. Production composition
+// installs the injected recorder before Run.
 type MetricsReporter interface {
 	SetMetricsRecorder(ports.MetricsRecorder)
 }
@@ -125,10 +124,8 @@ func (c *consul) SetNacosReconcileSource(enabled bool) {
 	c.Unlock()
 }
 
-// NewConsulProvider creates consul provider
 // NewConsulProviderWithDeps constructs a provider from explicit runtime
-// collaborators. The legacy constructor above is retained only as a
-// compatibility wrapper for old global-based callers.
+// collaborators.
 func NewConsulProviderWithDeps(ctx context.Context, worker worker.Worker, pushInterval int, addrs []string, logger ports.Logger, notifier ports.Notifier) (provider providers.Provider, err error) {
 	if ctx == nil || len(addrs) == 0 || worker == nil {
 		err = errors.New("params invalid")
@@ -155,7 +152,7 @@ func NewConsulProviderWithDeps(ctx context.Context, worker worker.Worker, pushIn
 		worker:        worker,
 		clientFactory: cf,
 		// interval honors --push-interval for the ecs leg exactly like the
-		// k8s provider does (NewK8SProvider assigns the same field): it
+		// k8s provider does (the provider constructor assigns the same field): it
 		// bounds the periodic CompareAndFlush + SyncAll cadence. The field
 		// was declared but never assigned here, so the periodic path fell
 		// back to the 21600s default and ignored the flag.

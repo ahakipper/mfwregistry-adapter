@@ -5,18 +5,14 @@ package e2e
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
-	"spotter/config"
 	"spotter/internal/testkit/discoverymock"
 	"spotter/internal/testkit/nacosmock"
 	v2 "spotter/pkg/beehive/service/v2"
 	"spotter/pkg/discoverycenter"
-	"spotter/pkg/log"
 	"spotter/pkg/nacos"
-	"spotter/pkg/notice"
 	"spotter/pkg/worker"
 )
 
@@ -41,15 +37,6 @@ import (
 // The nacos catalog replaces the in-memory remembered memory as the
 // boot-time ownership record (the 416e62a residual, closed).
 func TestE2ENacosReconcileSourceBootHeal(t *testing.T) {
-	// The k8s provider's conversion logs through the legacy pkg/log global.
-	legacyDir := t.TempDir()
-	config.LogFilePath = legacyDir + string(os.PathSeparator)
-	config.LogToStd = false
-	if err := log.LoggerInit(); err != nil {
-		t.Fatalf("log.LoggerInit() error = %v", err)
-	}
-	notice.InitNoticeClient("test")
-
 	// --- Atlas side: the in-memory gRPC server over bufconn (the primary
 	// PUSH target; its GetAll view is empty and irrelevant — the compare
 	// no longer reads it).

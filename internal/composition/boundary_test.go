@@ -12,9 +12,8 @@ import (
 
 // TestActiveGraphDoesNotImportLegacyGlobals runs the repository-wide checker
 // rather than duplicating a partial package allowlist in this test. The test
-// is deliberately RED until command startup and every active provider have
-// migrated to injected collaborators; compatibility readers remain confined
-// to internal/infra/legacycompat and the explicitly exempt legacy packages.
+// keeps the repository-wide checker honest after the legacy bridge is removed:
+// all production and test code must use explicit dependencies.
 func TestActiveGraphDoesNotImportLegacyGlobals(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -35,9 +34,7 @@ func TestActiveGraphDoesNotImportLegacyGlobals(t *testing.T) {
 }
 
 // TestProductionCompositionHasNoLegacyGlobalImports guards the C2 boundary:
-// the server/composition path must use injected ports. Legacy globals remain
-// available only through explicitly named compatibility wrappers in cmd or
-// provider constructors, never through the production composition root.
+// the server/composition path must use injected ports and the resolved config.
 func TestProductionCompositionHasNoLegacyGlobalImports(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -51,7 +48,7 @@ func TestProductionCompositionHasNoLegacyGlobalImports(t *testing.T) {
 			t.Fatalf("read %s: %v", rel, err)
 		}
 		text := string(data)
-		for _, forbidden := range []string{`"spotter/pkg/log"`, `"spotter/pkg/notice"`, `"spotter/config"`, `"spotter/pkg/providers/aggregate"`} {
+		for _, forbidden := range []string{`"spotter/pkg/log"`, `"spotter/pkg/notice"`, `"spotter/config"`, `"spotter/internal/infra/legacycompat"`, `"spotter/pkg/providers/aggregate"`} {
 			if strings.Contains(text, forbidden) {
 				t.Errorf("%s imports legacy production dependency %s", rel, forbidden)
 			}

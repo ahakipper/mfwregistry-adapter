@@ -5,20 +5,17 @@ package e2e
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/consul/api"
 
-	"spotter/config"
 	"spotter/internal/testkit/consulmock"
 	"spotter/internal/testkit/discoverymock"
+	"spotter/internal/testkit/fakes"
 	"spotter/internal/testkit/nacosmock"
 	"spotter/pkg/discoverycenter"
-	"spotter/pkg/log"
 	"spotter/pkg/nacos"
-	"spotter/pkg/notice"
 	"spotter/pkg/providers/consul"
 	"spotter/pkg/worker"
 )
@@ -26,7 +23,7 @@ import (
 // TestE2EConsulFanoutPipelineRealTick drives the F5 multi-sink pipeline end
 // to end on the REAL interval tick (AUDIT-D-2/E2E-3):
 //
-//	consulmock -> NewConsulProvider (1s push interval) -> ProcessIntervalFullPush tick
+//	consulmock -> explicit consul provider (1s push interval) -> ProcessIntervalFullPush tick
 //	                                          |-> CompareAndFlush + emitSyncAll (SyncAll event)
 //	                                          v
 //	          DefaultWorker -> FanoutSink
@@ -47,17 +44,6 @@ import (
 // It is bounded, fully offline and race-safe — the e2e-shaped proof of the
 // §6.5 wiring (the same graph internal/server.go builds under --nacos-addr).
 func TestE2EConsulFanoutPipelineRealTick(t *testing.T) {
-	// The consul provider logs through the legacy pkg/log global; point the
-	// log directory at a per-test temporary directory (the same guard the
-	// other e2e suites use).
-	legacyDir := t.TempDir()
-	config.LogFilePath = legacyDir + string(os.PathSeparator)
-	config.LogToStd = false
-	if err := log.LoggerInit(); err != nil {
-		t.Fatalf("log.LoggerInit() error = %v", err)
-	}
-	notice.InitNoticeClient("test")
-
 	// --- Consul side: one microservice endpoint.
 	consulServer := consulmock.Start()
 	defer consulServer.Close()
@@ -124,12 +110,12 @@ func TestE2EConsulFanoutPipelineRealTick(t *testing.T) {
 	// (AUDIT-D-2/E2E-3): ProcessIntervalFullPush's ticker fires CompareAndFlush
 	// and emitSyncAll, the SyncAll event flows through worker.Handle ->
 	// FanoutSink.PushAll -> the Nacos prune sweep, all on its own cadence —
-	// nothing is hand-fed through w.Handle. NewConsulProvider assigns the
+	// nothing is hand-fed through w.Handle. The provider constructor assigns the
 	// interval argument to the provider's interval field (consul.go, since
 	// b3578b6), so the tick runs at 1s inside the bounded test.
-	provider, err := consul.NewConsulProvider(ctx, w, 1, []string{consulServer.Address()})
+	provider, err := consul.NewConsulProviderWithDeps(ctx, w, 1, []string{consulServer.Address()}, &fakes.FakeLogger{}, &fakes.FakeNotifier{})
 	if err != nil {
-		t.Fatalf("consul.NewConsulProvider() error = %v", err)
+		t.Fatalf("consul provider constructor error = %v", err)
 	}
 
 	providerDone := make(chan error, 1)

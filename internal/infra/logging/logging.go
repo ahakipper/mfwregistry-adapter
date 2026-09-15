@@ -108,7 +108,7 @@ func New(opts Options) (ports.Logger, io.Closer, error) {
 		return nil, nil, err
 	}
 
-	// make sure the path exists, exactly like pkg/log.LoggerInit.
+	// make sure the path exists before constructing the instance logger.
 	if err := os.MkdirAll(opts.FilePath, 0755); err != nil {
 		return nil, nil, fmt.Errorf("create log directory %s: %w", opts.FilePath, err)
 	}
@@ -127,7 +127,7 @@ func New(opts Options) (ports.Logger, io.Closer, error) {
 	writeSyncer := zapcore.NewMultiWriteSyncer(syncers...)
 
 	core := zapcore.NewCore(encoder, writeSyncer, zapcore.Level(int8(opts.Level)))
-	// the func call stack, exactly like pkg/log.LoggerInit.
+	// preserve caller information in the structured logger.
 	base := zap.New(core, zap.AddCaller())
 	sugar := base.Sugar()
 

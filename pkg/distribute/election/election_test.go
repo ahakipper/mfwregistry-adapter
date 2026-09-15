@@ -9,7 +9,6 @@ import (
 
 	"go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
-	legacycompat "spotter/internal/infra/legacycompat"
 	"spotter/internal/ports"
 	"spotter/internal/testkit/fakes"
 )
@@ -67,28 +66,21 @@ func findLogEntry(logger *fakes.FakeLogger, level, substring string) bool {
 
 // --- constructor contracts -------------------------------------------------
 
-// TestNewCandidateGrantFailureSurfacesError locks the NewCandidate contract
+// TestNewCandidateGrantFailureSurfacesError locks the explicit constructor contract
 // the elector relies on: a failing initial Grant must surface an error to
 // the caller instead of returning a half-built candidate. NewCandidate
-// (the back-compat constructor) must keep working with its legacy
-// signature and nil-out default dependencies.
+// dependencies are supplied explicitly by the composition root.
 func TestNewCandidateGrantFailureSurfacesError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := NewCandidate(ctx, newRefusedEndpointClient(t), "/spotter-test/newcandidate-failure"); err == nil {
-		t.Fatal("NewCandidate() error = nil, want error when the initial Grant fails")
+	if _, err := NewCandidateWithDeps(ctx, newRefusedEndpointClient(t), "/spotter-test/newcandidate-failure", nil, nil, nil); err == nil {
+		t.Fatal("NewCandidateWithDeps() error = nil, want error when the initial Grant fails")
 	}
 }
 
-// TestNewCandidateNilClientSurfacesError locks the input guard for all
-// three constructor variants.
+// TestNewCandidateNilClientSurfacesError locks the input guard for the
+// explicit constructor.
 func TestNewCandidateNilClientSurfacesError(t *testing.T) {
-	if _, err := NewCandidate(context.Background(), nil, "/spotter-test/nil-client"); err == nil {
-		t.Fatal("NewCandidate() error = nil, want error for nil etcd client")
-	}
-	if _, err := NewCandidateWithClock(context.Background(), nil, "/spotter-test/nil-client", nil); err == nil {
-		t.Fatal("NewCandidateWithClock() error = nil, want error for nil etcd client")
-	}
 	if _, err := NewCandidateWithDeps(context.Background(), nil, "/spotter-test/nil-client", nil, nil, nil); err == nil {
 		t.Fatal("NewCandidateWithDeps() error = nil, want error for nil etcd client")
 	}
@@ -96,7 +88,7 @@ func TestNewCandidateNilClientSurfacesError(t *testing.T) {
 
 // TestNewCandidateWithDepsDefaultsApplied verifies the nil-dependency
 // defaults: a nil clock/logger/notifier must become realClock/nop/nop so
-// the candidate never nil-derefs. NewCandidate cannot complete offline
+// the candidate never nil-derefs. The constructor cannot complete offline
 // (the initial Grant needs a live etcd), so this drives the constructor
 // with an already-canceled context: dependency wiring happens before the
 // Grant, and the error surfaces from the RPC layer — a panic or nil-deref
@@ -128,32 +120,6 @@ func TestNewCandidateWithDepsInjectedDepsReachRPC(t *testing.T) {
 
 	if _, err := NewCandidateWithDeps(ctx, cl, "/spotter-test/injected", clock, logger, notifier); err == nil {
 		t.Fatal("NewCandidateWithDeps() error = nil, want Grant error for injected deps")
-	}
-}
-
-// TestNewCandidateEmptyCampaignKeyFallsBackToGlobal documents the
-// intentionally-kept config.LockCampaignKey fallback (E3: documented, not
-// removed; production passes the key explicitly, the legacy NewElector
-// wrapper still relies on the fallback).
-func TestNewCandidateEmptyCampaignKeyFallsBackToGlobal(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	// The fallback key is empty by default in tests; either way the
-	// constructor must fail at the Grant (canceled ctx) rather than at the
-	// campaign-key resolution, proving the fallback branch ran.
-	if _, err := NewCandidate(ctx, newRefusedEndpointClient(t), ""); err == nil {
-		t.Fatal("NewCandidate() error = nil, want Grant failure after the campaign-key fallback")
-	}
-}
-
-func TestNewCandidateWithDepsDoesNotReadLegacyGlobals(t *testing.T) {
-	legacycompat.ResetAccessCounts()
-	defer legacycompat.ResetAccessCounts()
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_, _ = NewCandidateWithDeps(ctx, newRefusedEndpointClient(t), "", nil, nil, nil)
-	if got := legacycompat.AccessCountsSnapshot().Reads; got != 0 {
-		t.Fatalf("NewCandidateWithDeps read legacy globals %d times", got)
 	}
 }
 

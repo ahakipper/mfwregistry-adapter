@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"go.etcd.io/etcd/client/v3"
-	legacycompat "spotter/internal/infra/legacycompat"
 	"spotter/internal/ports"
 	"spotter/internal/testkit/etcdmock"
 	"spotter/pkg/distribute/election"
@@ -18,7 +17,6 @@ import (
 type depsTestLogger struct{ ports.NopLogger }
 
 func TestElectorWithDepsDoesNotReadLegacyGlobals(t *testing.T) {
-	legacycompat.ResetAccessCounts()
 	logger := depsTestLogger{}
 	e, err := NewElectorWithCandidate(context.Background(), &fakeCandidate{}, make(chan bool, 1), logger)
 	if err != nil {
@@ -26,9 +24,6 @@ func TestElectorWithDepsDoesNotReadLegacyGlobals(t *testing.T) {
 	}
 	if got := e.(*ElectWorker).logger; got != logger {
 		t.Fatalf("explicit logger not retained")
-	}
-	if got := legacycompat.AccessCountsSnapshot().Reads; got != 0 {
-		t.Fatalf("legacy reads=%d", got)
 	}
 }
 

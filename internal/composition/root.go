@@ -20,9 +20,7 @@ import (
 	"spotter/pkg/nacos"
 )
 
-// Legacy notice identifiers copied from pkg/notice/notice.go
-// (InitNoticeClient). They are kept here so the composition root does not
-// depend on the legacy global wiring.
+// Notice identifiers for the deployment-owned default AppCenter contract.
 const (
 	noticeAppCode = "spotter-mtech"
 	noticeKey     = "KZ60vWUzdM65ibQCGn03sPF9c1trlIfA"

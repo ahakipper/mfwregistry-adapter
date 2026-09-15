@@ -3,7 +3,6 @@ package consul
 import (
 	"context"
 	"errors"
-	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,36 +11,12 @@ import (
 	"github.com/hashicorp/consul/api"
 	"github.com/panjf2000/ants/v2"
 
-	"spotter/config"
 	"spotter/internal/testkit/consulmock"
 	"spotter/internal/testkit/fakes"
 	sv "spotter/pkg/beehive/service/v2"
-	"spotter/pkg/log"
-	"spotter/pkg/notice"
 	"spotter/pkg/providers"
 	"spotter/pkg/worker"
 )
-
-// TestMain isolates the legacy package globals the consul provider depends
-// on (docs/testing.md section 7, "legacy globals"): pkg/log writes app.log
-// into config.LogFilePath and pkg/notice delivers through log.Logger. Point
-// both at a per-test-run temporary directory so no artifacts land in the
-// repository (the same guard the k8s whitebox suite uses).
-func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "consul-blackbox-")
-	if err != nil {
-		panic(err)
-	}
-	config.LogFilePath = dir + string(os.PathSeparator)
-	config.LogToStd = false
-	if err := log.LoggerInit(); err != nil {
-		panic(err)
-	}
-	notice.InitNoticeClient("test")
-	code := m.Run()
-	os.RemoveAll(dir)
-	os.Exit(code)
-}
 
 func TestBuildAndSendEventRequeuesLatestAfterPoolSaturation(t *testing.T) {
 	block := make(chan struct{})
@@ -441,9 +416,9 @@ func (w *fakeWorker) syncAllEvents() []*worker.Event {
 // server, the fake worker and the given push interval (seconds).
 func newBlackboxConsulProvider(t *testing.T, server *consulmock.Server, w worker.Worker, interval int, ctx context.Context) *consul {
 	t.Helper()
-	provider, err := NewConsulProvider(ctx, w, interval, []string{server.Address()})
+	provider, err := NewConsulProviderWithDeps(ctx, w, interval, []string{server.Address()}, &fakes.FakeLogger{}, &fakes.FakeNotifier{})
 	if err != nil {
-		t.Fatalf("NewConsulProvider() error = %v", err)
+		t.Fatalf("provider constructor error = %v", err)
 	}
 	return provider.(*consul)
 }
@@ -481,7 +456,7 @@ func TestBlackboxConsulIntervalFullPushEmitsSyncAll(t *testing.T) {
 	w := &fakeWorker{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// interval 1 comes from the CONSTRUCTOR argument (NewConsulProvider
+	// interval 1 comes from the constructor argument
 	// assigns it — the b3578b6 behavior): no post-construction overwrite, so
 	// the tick cadence under test is exactly the production wiring.
 	c := newBlackboxConsulProvider(t, server, w, 1, ctx)
@@ -596,14 +571,14 @@ func TestBlackboxConsulProviderConstructorAssignsInterval(t *testing.T) {
 
 	c := newBlackboxConsulProvider(t, server, w, 7, ctx)
 	if c.interval != 7 {
-		t.Fatalf("NewConsulProvider(7) interval = %d, want 7 (the constructor must assign the push-interval argument)", c.interval)
+		t.Fatalf("provider constructor interval = %d, want 7 (the constructor must assign the push-interval argument)", c.interval)
 	}
 
 	// Zero is passed through verbatim too: ProcessIntervalFullPush falls back
 	// to the 21600s default only when the field is 0, so 0 must stay 0.
 	zero := newBlackboxConsulProvider(t, server, w, 0, ctx)
 	if zero.interval != 0 {
-		t.Fatalf("NewConsulProvider(0) interval = %d, want 0 (zero keeps the default-interval fallback)", zero.interval)
+		t.Fatalf("provider constructor interval = %d, want 0 (zero keeps the default-interval fallback)", zero.interval)
 	}
 }
 
@@ -980,9 +955,9 @@ func (m *staticMonitor) AppendInstanceHandler(InstanceHandler) {}
 // given entries verbatim (the local-shape injection seam).
 func newStaticConsulProvider(t *testing.T, w worker.Worker, entries map[string][]*api.ServiceEntry) *consul {
 	t.Helper()
-	provider, err := NewConsulProvider(context.Background(), w, 0, []string{"127.0.0.1:1"})
+	provider, err := NewConsulProviderWithDeps(context.Background(), w, 0, []string{"127.0.0.1:1"}, &fakes.FakeLogger{}, &fakes.FakeNotifier{})
 	if err != nil {
-		t.Fatalf("NewConsulProvider() error = %v", err)
+		t.Fatalf("provider constructor error = %v", err)
 	}
 	c := provider.(*consul)
 	c.monitor = &staticMonitor{entries: entries}

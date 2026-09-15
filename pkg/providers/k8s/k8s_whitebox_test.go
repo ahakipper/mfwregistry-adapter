@@ -16,39 +16,15 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"spotter/config"
+	"spotter/internal/ports"
 	"spotter/internal/testkit/fakes"
 	"spotter/internal/testkit/nacosmock"
 	sv "spotter/pkg/beehive/service/v2"
 	"spotter/pkg/k8srobot"
-	"spotter/pkg/log"
 	"spotter/pkg/nacos"
-	"spotter/pkg/notice"
 	"spotter/pkg/providers"
 	"spotter/pkg/worker"
 )
-
-// TestMain isolates the legacy package globals the k8s provider depends on
-// (docs/testing.md section 7, "legacy globals"): pkg/log writes app.log into
-// config.LogFilePath and pkg/notice delivers through log.Logger. Point both at
-// a per-test-run temporary directory so no artifacts land in the repository.
-func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "k8s-whitebox-")
-	if err != nil {
-		panic(err)
-	}
-	config.LogFilePath = dir + string(os.PathSeparator) // trailing separator, like the e2e suite (pkg/log concatenates the file name)
-	config.LogToStd = false
-	if err := log.LoggerInit(); err != nil {
-		panic(err)
-	}
-	notice.InitNoticeClient("test")
-	code := m.Run()
-	// Remove the temporary directory (app.log included) before exiting:
-	// os.Exit skips deferred calls, so the cleanup cannot be a defer.
-	os.RemoveAll(dir)
-	os.Exit(code)
-}
 
 // -----------------------------------------------------------------------------
 // Test doubles (same-package fakes, docs/testing.md 4.4 / backlog item 1)
@@ -352,7 +328,7 @@ func (w *fakeWorker) waitForHandleInterval(t *testing.T, n, interval int) []*wor
 	return nil
 }
 
-// newTestProvider builds the provider the way NewK8SProvider does, minus the
+// newTestProvider builds the provider the way the explicit constructor does, minus the
 // real robot: same filters, cache, pool and worker seams.
 func newTestProvider(robot k8srobot.Robot, w worker.Worker) *k8s {
 	pool, _ := ants.NewPool(providers.PoolBenchSize, withExpiryDuration(time.Second*providers.PoolExpireTime))
@@ -404,7 +380,7 @@ func newValidPod(namespace, name string) *corev1.Pod {
 // GetAll) and returns the instance.
 func instanceFromPod(t *testing.T, pod *corev1.Pod) *sv.Instance {
 	t.Helper()
-	ins := formatInstance(nil, pod)
+	ins := formatInstanceForTest(nil, pod)
 	if ins == nil {
 		t.Fatalf("formatInstance(pod %s) = nil, want an instance", pod.Name)
 	}
@@ -1286,10 +1262,6 @@ func TestCompareAndFlushPushAppCodesFiltersRemoteList(t *testing.T) {
 	remoteOther := remoteInstance("pod-other", providers.InstanceStatusOnline, 5)
 	remoteOther.AppCode = "somebody-else"
 
-	savedPushAppCodes := config.PushAppCodes
-	config.PushAppCodes = []string{"pay-user"}
-	defer func() { config.PushAppCodes = savedPushAppCodes }()
-
 	robot := newFakeRobot(nil, []interface{}{pod}, false)
 	w := &fakeWorker{getAllResponse: &sv.InstanceList{Instance: []*sv.Instance{remoteAllowed, remoteOther}}}
 	k := newTestProvider(robot, w)
@@ -1324,10 +1296,7 @@ func TestCompareAndFlushPushAppCodesFiltersRemoteList(t *testing.T) {
 
 func TestFormatInstanceAllowsAnyConfiguredAppCode(t *testing.T) {
 	pod := newValidPod("msp", "pod-a")
-	saved := config.PushAppCodes
-	config.PushAppCodes = []string{"other-app", "pay-user"}
-	defer func() { config.PushAppCodes = saved }()
-	if got := formatInstance(nil, pod); got == nil || got.AppCode != "pay-user" {
+	if got := formatInstanceWithDeps(nil, pod, []string{"other-app", "pay-user"}, ports.NopLogger{}); got == nil || got.AppCode != "pay-user" {
 		t.Fatalf("formatInstance with multi-appcode allow-list = %#v, want pay-user instance (membership, not first-item equality)", got)
 	}
 }
@@ -2222,7 +2191,7 @@ func TestFormatInstanceRunningEmptyStatusesFlowsThrough(t *testing.T) {
 	pod.Status.ContainerStatuses = nil
 	pod.Status.PodIP = "10.0.0.5"
 
-	ins := formatInstance(nil, pod)
+	ins := formatInstanceForTest(nil, pod)
 	if ins == nil {
 		t.Fatal("formatInstance(early running pod) = nil, want an instance")
 	}
@@ -2462,7 +2431,7 @@ func TestQueueDepthLoopPublishesOnTickerAndStops(t *testing.T) {
 }
 
 // TestNewK8SProviderSatisfiesQueueDepthReporter pins the wiring seam:
-// the provider NewK8SProvider returns satisfies the exported
+// the provider constructor returns satisfies the exported
 // QueueDepthReporter interface internal/server.go asserts against — the
 // minimal-plumbing decision (no constructor signature change; the wiring
 // calls the setter after construction). The construction needs a readable
@@ -2474,13 +2443,13 @@ func TestNewK8SProviderSatisfiesQueueDepthReporter(t *testing.T) {
 		"apiVersion: v1\nkind: Config\nclusters:\n- name: test\n  cluster:\n    server: http://127.0.0.1:1\ncontexts:\n- name: test\n  context:\n    cluster: test\n    user: test\ncurrent-context: test\nusers:\n- name: test\n  user: {}\n"), 0o600); err != nil {
 		t.Fatalf("write kubeconfig: %v", err)
 	}
-	provider, err := NewK8SProvider(context.Background(), &fakeWorker{}, 0, []string{kubeconfig})
+	provider, err := NewK8SProviderWithDeps(context.Background(), &fakeWorker{}, 0, []string{kubeconfig}, ports.NopLogger{}, &fakes.FakeNotifier{}, nil)
 	if err != nil {
-		t.Fatalf("NewK8SProvider() error = %v, want nil (construction never dials)", err)
+		t.Fatalf("provider constructor error = %v, want nil (construction never dials)", err)
 	}
 	reporter, ok := provider.(QueueDepthReporter)
 	if !ok {
-		t.Fatalf("NewK8SProvider() = %T, want a QueueDepthReporter (the internal/server.go wiring seam)", provider)
+		t.Fatalf("provider constructor = %T, want a QueueDepthReporter (the internal/server.go wiring seam)", provider)
 	}
 	// The setter is callable through the seam (the gauge wiring itself is
 	// pinned above on the concrete provider).

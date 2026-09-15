@@ -475,7 +475,7 @@ func (s *Server) startProviders() error {
 	// observable of the same item): the k8s provider publishes the robot's
 	// coalescing-queue depth on k8s_queue_depth from its own 5s ticker
 	// (SetQueueDepthReporter + the robot's read-only QueueDepth — the
-	// minimal plumbing that keeps NewK8SProvider's shared signature
+	// minimal plumbing that keeps the provider constructor's shared signature
 	// unchanged). The recorder is the same one the drop observer closes
 	// over, so both series of the queue's health land on one recorder.
 	for _, provider := range prs {

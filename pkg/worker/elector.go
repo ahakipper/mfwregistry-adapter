@@ -98,14 +98,10 @@ func (infoOnlyLogger) Error(...interface{})          {}
 func (infoOnlyLogger) Errorf(string, ...interface{}) {}
 
 // NewElectorWithDeps creates an elector from explicit etcd endpoints, TLS
-// file paths, the campaign key, a logger and a notifier, instead of reading
-// the config/log/notice package globals. It mirrors NewElector.
+// file paths, the campaign key, a logger and a notifier.
 //
-// A nil logger defaults to a nop logger so Stop never depends on the pkg/log
-// global being initialized — the same contract NewElectorWithCandidate
-// documents (AUDIT-A-4: the nil logger previously flowed straight into
-// ElectWorker, whose logStop fell back to the nil pkg/log global and
-// nil-deref'd on Stop).
+// A nil logger defaults to a nop logger so Stop is safe before logger setup
+// (AUDIT-A-4: the former implementation could nil-deref during Stop).
 //
 // The notifier receives campaign-failure pages (EMERGENCY level, unchanged
 // from the legacy notice.Notice behavior); nil means the candidate falls

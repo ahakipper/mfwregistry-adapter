@@ -113,27 +113,16 @@ func isNilCandidateDeps(value interface{}) bool {
 	return value == nil
 }
 
-// NewCandidate new a Candidate
-//
-// campaignKey is the etcd prefix key used for the leader campaign (the
-// legacy value came from the config.LockCampaignKey global). Pass an empty
-// campaignKey to fall back to that global, which keeps older callers
-// working unchanged.
-// NewCandidateWithClock builds a candidate with an injected clock that
-// drives the Wait poll cadence (default realClock when nil — the legacy
-// 2s behavior). Logger and notifier default to nops.
-// NewCandidateWithDeps is the full-dependency constructor: clock drives the
+// NewCandidateWithDeps builds a candidate from explicit dependencies: clock drives the
 // Wait poll cadence, logger receives operational logs, notifier receives
 // campaign failure notices. Nil arguments select the defaults (realClock,
-// nop logger, nop notifier), so callers migrate incrementally.
+// nop logger, nop notifier).
 func NewCandidateWithDeps(ctx context.Context, etcdclient *clientv3.Client, campaignKey string, clock ports.Clock, logger ports.Logger, notifier ports.Notifier) (can Candidate, err error) {
 	if etcdclient == nil {
 		return nil, errors.New("invalid etcd client")
 	}
-	// WithDeps is the active dependency-injection path. An empty campaign key
-	// is preserved as supplied so this constructor never reads compatibility
-	// globals; deprecated wrappers resolve their legacy default before calling
-	// into this function.
+	// An empty campaign key is preserved as supplied; callers must resolve any
+	// deployment default before constructing the candidate.
 	if isNilCandidateDeps(clock) {
 		clock = realClock{}
 	}

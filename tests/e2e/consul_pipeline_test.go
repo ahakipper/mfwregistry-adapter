@@ -5,21 +5,18 @@ package e2e
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/consul/api"
 	"google.golang.org/grpc"
 
-	"spotter/config"
 	"spotter/internal/domain/instance"
 	"spotter/internal/testkit/consulmock"
 	"spotter/internal/testkit/discoverymock"
+	"spotter/internal/testkit/fakes"
 	v2 "spotter/pkg/beehive/service/v2"
 	"spotter/pkg/discoverycenter"
-	"spotter/pkg/log"
-	"spotter/pkg/notice"
 	"spotter/pkg/providers/consul"
 	"spotter/pkg/worker"
 )
@@ -58,7 +55,7 @@ func (c *serviceClient) GetAllInstance(ctx context.Context, request *v2.GetAllIn
 
 // testE2EConsulPipeline assembles the full pipeline from exported API only:
 //
-//	consulmock (loopback HTTP) -> NewConsulProvider (real monitor, real
+//	consulmock (loopback HTTP) -> explicit consul provider (real monitor, real
 //	conversion, real filters) -> DefaultWorker -> DiscoveryCenter ->
 //	discoverymock (bufconn gRPC)
 //
@@ -69,20 +66,6 @@ func (c *serviceClient) GetAllInstance(ctx context.Context, request *v2.GetAllIn
 // payload received by the discovery mock.
 func testE2EConsulPipeline(t *testing.T) {
 	t.Helper()
-
-	// The consul provider (and the notice bridge it uses) log through the
-	// legacy pkg/log global and notify through the pkg/notice global. Both
-	// globals must be initialized before Run() is called, and the legacy
-	// logger writes app.log into its configured directory, so point that
-	// directory at a per-test temporary directory to keep the repository
-	// clean (docs/testing.md section 7, "legacy globals").
-	legacyDir := t.TempDir()
-	config.LogFilePath = legacyDir + string(os.PathSeparator)
-	config.LogToStd = false
-	if err := log.LoggerInit(); err != nil {
-		t.Fatalf("log.LoggerInit() error = %v", err)
-	}
-	notice.InitNoticeClient("test")
 
 	// --- Consul side: catalog with one microservice and one healthy endpoint.
 	consulServer := consulmock.Start()
@@ -125,9 +108,9 @@ func testE2EConsulPipeline(t *testing.T) {
 	}
 
 	// --- Provider: the real consul provider, pointed at the consul mock.
-	provider, err := consul.NewConsulProvider(ctx, w, 0, []string{consulServer.Address()})
+	provider, err := consul.NewConsulProviderWithDeps(ctx, w, 0, []string{consulServer.Address()}, &fakes.FakeLogger{}, &fakes.FakeNotifier{})
 	if err != nil {
-		t.Fatalf("consul.NewConsulProvider() error = %v", err)
+		t.Fatalf("consul provider constructor error = %v", err)
 	}
 
 	// Run the provider in the background; Run blocks on the monitor loop,

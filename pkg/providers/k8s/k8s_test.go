@@ -3,10 +3,20 @@ package k8s
 import (
 	"fmt"
 	v1 "k8s.io/api/core/v1"
+
+	"spotter/internal/ports"
+	sv "spotter/pkg/beehive/service/v2"
 	k8srobot "spotter/pkg/k8srobot"
 	"spotter/pkg/providers"
 	"testing"
 )
+
+// formatInstanceForTest provides a test-only helper while routing every
+// call through the explicit conversion boundary. Production code has no
+// package-global formatter or push-app-code configuration.
+func formatInstanceForTest(obj *k8srobot.QueueObject, pod *v1.Pod) *sv.Instance {
+	return formatInstanceWithDeps(obj, pod, nil, ports.NopLogger{})
+}
 
 func TestFormatInstance(t *testing.T) {
 	// test for env test in New FengXiao
@@ -53,7 +63,7 @@ func TestFormatInstance(t *testing.T) {
 			},
 		},
 	}
-	instance := formatInstance(obj, pod)
+	instance := formatInstanceForTest(obj, pod)
 	if instance.EnvType != providers.EnvTest {
 		t.Error(fmt.Sprintf("The value of the instance env typ does not meet expectations, appcode: %s", instance.AppCode))
 		t.FailNow()
@@ -145,7 +155,7 @@ func TestFormatInstance(t *testing.T) {
 			},
 		},
 	}
-	instance = formatInstance(obj, pod)
+	instance = formatInstanceForTest(obj, pod)
 	if instance.EnvType != "beta" {
 		t.Error(fmt.Sprintf("The value of the instance env typ does not meet expectations, appcode: %s", instance.AppCode))
 		t.FailNow()
@@ -207,7 +217,7 @@ func TestFormatInstance(t *testing.T) {
 			},
 		},
 	}
-	instance = formatInstance(obj, pod)
+	instance = formatInstanceForTest(obj, pod)
 	if instance.EnvType != providers.EnvDev {
 		t.Error(fmt.Sprintf("The value of the instance env typ does not meet expectations, appcode: %s", instance.AppCode))
 		t.FailNow()
@@ -312,7 +322,7 @@ func TestFormatInstance(t *testing.T) {
 			},
 		},
 	}
-	instance = formatInstance(obj, pod)
+	instance = formatInstanceForTest(obj, pod)
 	if instance.EnvType != providers.EnvProduct {
 		t.Error(fmt.Sprintf("The value of the instance env typ does not meet expectations, appcode: %s", instance.AppCode))
 		t.FailNow()
@@ -397,7 +407,7 @@ func TestFormatInstance(t *testing.T) {
 			},
 		},
 	}
-	instance = formatInstance(obj, pod)
+	instance = formatInstanceForTest(obj, pod)
 	if instance.EnvType != providers.EnvProduct {
 		t.Error(fmt.Sprintf("The value of the instance env typ does not meet expectations, appcode: %s", instance.AppCode))
 		t.FailNow()
@@ -504,7 +514,7 @@ func TestFormatInstance(t *testing.T) {
 			},
 		},
 	}
-	instance = formatInstance(obj, pod)
+	instance = formatInstanceForTest(obj, pod)
 	if instance.EnvType != providers.EnvStaging {
 		t.Error(fmt.Sprintf("The value of the instance env typ does not meet expectations, appcode: %s", instance.AppCode))
 		t.FailNow()
@@ -589,7 +599,7 @@ func TestFormatInstance(t *testing.T) {
 			},
 		},
 	}
-	instance = formatInstance(obj, pod)
+	instance = formatInstanceForTest(obj, pod)
 	if instance.EnvType != providers.EnvStaging {
 		t.Error(fmt.Sprintf("The value of the instance env typ does not meet expectations, appcode: %s", instance.AppCode))
 		t.FailNow()
