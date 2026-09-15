@@ -468,6 +468,16 @@ func tickIsTransitional(record tickRecord) bool {
 		record.InFlight == len(record.Divergence)
 }
 
+// snapshotRetryable identifies a complete but non-exact read that can be
+// safely retried inside the same tick. Every mismatch must be attributed to a
+// source mutation and remain inside the bounded in-flight set; an unexplained
+// or expired mismatch is emitted immediately as a product divergence.
+func snapshotRetryable(record tickRecord) bool {
+	return record.Verdict == string(verdictConsistent) &&
+		!record.ExactEqual && record.MutationObserved &&
+		len(record.Divergence) > 0 && record.InFlight == len(record.Divergence)
+}
+
 // continuityKey keys a divergence across ticks (the §4.3 step-7 ledger:
 // firstSeenTick pins the true age — DS-4-3's fix).
 func continuityKey(d divergence) string {

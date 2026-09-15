@@ -1006,12 +1006,44 @@ func (r *observeRun) evaluateAcceptance(s runSummary) (bool, []string) {
 	return len(fails) == 0, fails
 }
 
-// runTick executes ONE full §4.3 loop pass (source read, remote read,
-// ledger, diff, verdict, record) and returns the tick record. Shared by
-// the cold-attach wait and the window loop.
+// runTick executes one linearizable observation boundary. A complete but
+// mutation-attributed in-flight mismatch is re-read inside the same tick so
+// the emitted record represents one stable source/Nacos instant whenever the
+// bound permits. Unexplained, expired, or unobservable mismatches are emitted
+// immediately and remain failures.
 func runTick(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosView,
 	metrics *metricsView, child *spotterChild, records *recordWriter, log *harnessLog,
 	tickNo int, windowStart time.Time, previousMutationSequence uint64, previousSourceFingerprint string, previousTransitional bool) tickRecord {
+	started := time.Now()
+	deadline := started.Add(cfg.obsBound())
+	attempts := 0
+	var record tickRecord
+	for {
+		attempts++
+		record = runTickRaw(t, cfg, driver, view, metrics, child, records, log,
+			tickNo, windowStart, previousMutationSequence, previousSourceFingerprint, previousTransitional, false)
+		if !snapshotRetryable(record) || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	record.SnapshotAttempts = attempts
+	record.SnapshotWaitMS = time.Since(started).Milliseconds()
+	if snapshotRetryable(record) && time.Now().After(deadline) {
+		// The bounded retry window expired with a complete but non-exact
+		// result. Do not report this as a successful transitional tick.
+		record.Verdict = string(verdictDivergent)
+	}
+	writeTickRecord(t, records, log, record)
+	return record
+}
+
+// runTickRaw executes ONE full §4.3 loop pass (source read, remote read,
+// ledger, diff, verdict, record). emit controls whether the pass is written;
+// the outer runTick writes exactly one final record after any bounded retries.
+func runTickRaw(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosView,
+	metrics *metricsView, child *spotterChild, records *recordWriter, log *harnessLog,
+	tickNo int, windowStart time.Time, previousMutationSequence uint64, previousSourceFingerprint string, previousTransitional bool, emit bool) tickRecord {
 
 	tickStart := time.Now()
 	mutationAtStart, mutationActiveAtStart := driver.mutationState()
@@ -1028,7 +1060,9 @@ func runTick(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosVi
 		record.Env = envState{Class: "read-error", Detail: fmt.Sprintf("source: %v", srcErr)}
 		finalizeTick(&record, tickStart, nil)
 		record.MutationSequence, record.MutationObserved = finishTickMutationState(driver, previousMutationSequence, mutationAtStart, mutationActiveAtStart)
-		writeTickRecord(t, records, log, record)
+		if emit {
+			writeTickRecord(t, records, log, record)
+		}
 		return record
 	}
 	model := buildSourceModel(pods, driver.appCodes)
@@ -1054,7 +1088,9 @@ func runTick(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosVi
 			record.Env = envState{Class: "read-error", Detail: fmt.Sprintf("fresh nacos sdk snapshot: %v", err)}
 			finalizeTick(&record, tickStart, nil)
 			record.MutationSequence, record.MutationObserved = finishTickMutationState(driver, previousMutationSequence, mutationAtStart, mutationActiveAtStart)
-			writeTickRecord(t, records, log, record)
+			if emit {
+				writeTickRecord(t, records, log, record)
+			}
 			return record
 		}
 		remoteView = fresh
@@ -1092,7 +1128,9 @@ func runTick(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosVi
 		finalizeTick(&record, tickStart, nil)
 		record.MutationSequence, record.MutationObserved = finishTickMutationState(driver, previousMutationSequence, mutationAtStart, mutationActiveAtStart)
 		record.MutationObserved = record.MutationObserved || (previousSourceFingerprint != "" && record.SourceFingerprint != previousSourceFingerprint)
-		writeTickRecord(t, records, log, record)
+		if emit {
+			writeTickRecord(t, records, log, record)
+		}
 		return record
 	}
 	record.RemoteFingerprint = remoteViewFingerprint(remoteAll)
@@ -1154,7 +1192,9 @@ func runTick(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosVi
 	record.Env = envState{Class: "healthy"}
 
 	finalizeTick(&record, tickStart, divergences)
-	writeTickRecord(t, records, log, record)
+	if emit {
+		writeTickRecord(t, records, log, record)
+	}
 	return record
 }
 

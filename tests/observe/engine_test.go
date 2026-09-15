@@ -147,6 +147,18 @@ func TestObserveUnitRemoteFingerprintIncludesMetadataAndWireFields(t *testing.T)
 	}
 }
 
+func TestObserveUnitSnapshotRetryRequiresBoundedMutationEvidence(t *testing.T) {
+	if !snapshotRetryable(tickRecord{Verdict: string(verdictConsistent), ExactEqual: false, MutationObserved: true, InFlight: 1, Divergence: []divergence{{Kind: divMissing, InFlight: true}}}) {
+		t.Fatal("mutation-backed in-flight mismatch should request a fresh snapshot")
+	}
+	if snapshotRetryable(tickRecord{Verdict: string(verdictConsistent), ExactEqual: false, MutationObserved: false, InFlight: 1, Divergence: []divergence{{Kind: divMissing, InFlight: true}}}) {
+		t.Fatal("unattributed mismatch must not be retried as a harmless snapshot race")
+	}
+	if snapshotRetryable(tickRecord{Verdict: string(verdictObsErr), ExactEqual: false, MutationObserved: true, InFlight: 1, Divergence: []divergence{{Kind: divMissing, InFlight: true}}}) {
+		t.Fatal("observation errors must not be hidden by snapshot retries")
+	}
+}
+
 // TestObserveUnitInFlightTolerance pins the §3.4 tolerance: a missing
 // expected entry whose source changed at c(e) is tolerated ONLY while
 // t − c(e) ≤ OBS_BOUND; at c(e)+B it is DIVERGENT (tolerance, not
