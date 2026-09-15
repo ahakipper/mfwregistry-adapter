@@ -65,6 +65,11 @@ Definitions are fixed for the gate:
   persistent-instance health is maintained by Nacos's server-side checker;
   disabling that checker requires an Admin/Maintainer control API not exposed
   by the official Go Naming SDK.
+- Each live Observe tick uses one fresh official SDK session for all service
+  reads. This is deliberate: the SDK's `SelectAllInstances` method reads a
+  local subscription cache after the first subscribe, so a long-lived observer
+  can otherwise lag a successful register even when Nacos already has the
+  instance. The session is closed after the tick; no raw HTTP is introduced.
 
 The 2-hour result is `PASS` only when every tick satisfies these rules and the
 final cleanup reports no residual kwok cluster, Pod, container, temporary

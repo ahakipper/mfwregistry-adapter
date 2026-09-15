@@ -355,6 +355,9 @@ Docker, Cobra, zap, Prometheus, Go test/race/vet, and the existing testkit.
       conversion boundary; do not maintain a second reduced field model.
 - [x] Make every tick compare the canonical payload byte-for-byte in addition
       to cardinality, identity, endpoint, scope, enabled, and lifecycle.
+- [x] Use one fresh official SDK session per tick so the observer does not
+      mistake the SDK's local subscription cache for the server's current
+      Nacos view.
 - [x] Add RED tests for label/reversion drift, complete round-trip, payload
       compression, and the Nacos metadata-size boundary.
 - [x] Run package, race, vet, real Nacos 3 batch, and 100-Pod Observe smoke

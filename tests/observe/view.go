@@ -62,6 +62,28 @@ func (v *nacosView) close() {
 	}
 }
 
+// freshSDKView creates one short-lived official SDK session for a complete
+// observation boundary. The Nacos Go SDK's SelectAllInstances reads a local
+// service-info cache after its first Subscribe; retaining that client across
+// ticks can hide a successful register until the asynchronous cache refresh.
+// A single fresh session per tick keeps all 20 service reads efficient while
+// making the sampled view a server-backed snapshot like the production
+// reconcile path.
+func (v *nacosView) freshSDKView() (*nacosView, error) {
+	if v == nil || v.sdk == nil {
+		return v, nil // HTTP fixture views intentionally keep their old path.
+	}
+	addr := strings.TrimPrefix(v.addr, "http://")
+	client, err := spotternacos.NewClientWithConfig(spotternacos.ClientConfig{
+		ServerURL: addr, TransportMode: spotternacos.TransportSDK,
+		NamespaceID: nacosNamespace, GroupName: nacosGroup, Timeout: 10 * time.Second,
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &nacosView{addr: v.addr, sdk: client}, nil
+}
+
 // waitForNacosSDKReadiness retries the authoritative SDK read/write canary
 // after the transport listener becomes reachable. Nacos 3 can accept TCP
 // before its naming RPC handlers finish starting, so one immediate canary

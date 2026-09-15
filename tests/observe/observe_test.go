@@ -1043,12 +1043,28 @@ func runTick(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosVi
 	record.ExpectedCount = record.Source.Online + record.Source.Unhealthy
 
 	// 2. REMOTE: per service, the list ∪ catalog union; any read failure
-	// is OBSERR.
+	// is OBSERR. Real SDK runs use one fresh session for this tick so the
+	// official client's local subscription cache cannot lag a successful
+	// register across observation boundaries.
+	remoteView := view
+	if view != nil && view.sdk != nil {
+		fresh, err := view.freshSDKView()
+		if err != nil {
+			record.Verdict = string(verdictObsErr)
+			record.Env = envState{Class: "read-error", Detail: fmt.Sprintf("fresh nacos sdk snapshot: %v", err)}
+			finalizeTick(&record, tickStart, nil)
+			record.MutationSequence, record.MutationObserved = finishTickMutationState(driver, previousMutationSequence, mutationAtStart, mutationActiveAtStart)
+			writeTickRecord(t, records, log, record)
+			return record
+		}
+		remoteView = fresh
+		defer remoteView.close()
+	}
 	remoteAll := map[string][]remoteEntry{}
 	var remoteErrs []string
 	leaderless := false
 	for _, appCode := range driver.appCodes {
-		serviceView, err := view.fullServiceView(serviceNameOf(appCode))
+		serviceView, err := remoteView.fullServiceView(serviceNameOf(appCode))
 		if err != nil {
 			remoteErrs = append(remoteErrs, err.Error())
 			if isLeaderlessErr(err) {
