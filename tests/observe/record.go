@@ -164,6 +164,7 @@ type runSummary struct {
 	// Latency (nacos/ok e2e percentiles, seconds)
 	Latency struct {
 		P50   float64 `json:"p50"`
+		P90   float64 `json:"p90"`
 		P95   float64 `json:"p95"`
 		P99   float64 `json:"p99"`
 		Count uint64  `json:"count"`
@@ -254,7 +255,7 @@ func renderSummaryMarkdown(s runSummary) string {
 	b.WriteString(fmt.Sprintf("Max retry-queue depth %d; max robot queue depth %d; dropped events %.0f; drained at end: %v\n",
 		s.MaxRetryDepth, s.MaxRobotDepth, s.DroppedTotal, s.DrainedAtEnd))
 	b.WriteString("\n## Latency (event_to_store_e2e, nacos/ok)\n\n")
-	b.WriteString(fmt.Sprintf("p50 %.3fs, p95 %.3fs, p99 %.3fs over %d observations\n", s.Latency.P50, s.Latency.P95, s.Latency.P99, s.Latency.Count))
+	b.WriteString(fmt.Sprintf("p50 %.3fs, p90 %.3fs, p95 %.3fs, p99 %.3fs over %d observations\n", s.Latency.P50, s.Latency.P90, s.Latency.P95, s.Latency.P99, s.Latency.Count))
 	b.WriteString("\n## Divergences\n\n")
 	b.WriteString(fmt.Sprintf("Product-divergent ticks: %d; max heal %s; max in-flight %d\n", s.ProductDivergentTicks, s.MaxHeal, s.MaxInFlight))
 	if len(s.Bursts) > 0 {

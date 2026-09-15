@@ -57,10 +57,45 @@ type churnDriver struct {
 
 // ledgerEntry is one mutation's record (the in-flight clock source).
 type ledgerEntry struct {
-	Op       string // "create" | "delete"
+	Op       string // "create" | "delete" | "crash" | "recover"
 	PodName  string
 	AppCode  string
 	IssuedAt time.Time
+}
+
+// patchCrash marks a running pod as CrashLoopBackOff through the Kubernetes
+// status subresource. The mutation is recorded before the API call so an
+// overlapping observation tick has the same bounded in-flight clock as
+// create/delete operations. Kwok preserves the rest of the pod status while
+// replacing the container readiness/state fields used by conversion.go.
+func (d *churnDriver) patchCrash(name string, issuedAt time.Time) error {
+	return d.patchStatus(name, issuedAt, "crash", `{"status":{"phase":"Running","containerStatuses":[{"name":"application","ready":false,"state":{"waiting":{"reason":"CrashLoopBackOff"}}}]}}`)
+}
+
+// patchRecovered restores a pod to a ready Running container after a crash
+// transition, again publishing the mutation clock before the status request.
+func (d *churnDriver) patchRecovered(name string, issuedAt time.Time) error {
+	return d.patchStatus(name, issuedAt, "recover", `{"status":{"phase":"Running","containerStatuses":[{"name":"application","ready":true,"state":{"running":{}}}]}}`)
+}
+
+func (d *churnDriver) patchStatus(name string, issuedAt time.Time, op, patch string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("patch %s requires a pod name", op)
+	}
+	d.mu.Lock()
+	entry := d.ledger[name]
+	if entry.AppCode == "" {
+		entry.AppCode = d.appCodeOf(0)
+	}
+	d.ledger[name] = ledgerEntry{Op: op, PodName: name, AppCode: entry.AppCode, IssuedAt: issuedAt}
+	d.mutationSeq++
+	d.mutationActive++
+	d.mu.Unlock()
+	defer d.finishMutation()
+	if _, err := d.kubectlStdin(patch, "patch", "pod", name, "--subresource=status", "--type=merge", "-p", patch); err != nil {
+		return fmt.Errorf("patch pod %s status (%s): %w", name, op, err)
+	}
+	return nil
 }
 
 // newChurnDriver builds the driver. appCodes is the observed service set;

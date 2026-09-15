@@ -143,6 +143,27 @@ test-observe:
 
 .PHONY: test-observe
 
+# Scale-ladder tier for the KWork reliability report. This is intentionally
+# separate from the sustained two-hour gate so P90/P95/P99 can be attributed
+# to exact create/delete batch sizes and the CrashLoopBackOff transition.
+# The target owns the same throwaway kwok/Nacos stack and writes a dedicated
+# tests/observe/results/<stamp>-scale-ladder-summary.{json,md} report.
+OBS_LADDER_TIMEOUT ?= 90m
+
+test-observe-ladder:
+	@if [ -n "$(OBS_KUBECONFIG)" ]; then echo 'OBS_KUBECONFIG external mode is read-only; scale ladder requires an owned writable stack'; exit 2; fi; \
+	status=0; trap './scripts/observe-down.sh' 0 2 15; \
+	./scripts/observe-up.sh || status=$$?; \
+	if [ $$status -eq 0 ]; then mkdir -p build/observe && go build -o build/observe/spotter . || status=$$?; fi; \
+	if [ $$status -eq 0 ]; then \
+		OBS_NODE_POD_CAPACITY=$${OBS_NODE_POD_CAPACITY:-1200} SPOTTER_BIN=build/observe/spotter \
+			go test -tags=observe -run '^TestObserveScaleLadder$$' -timeout $(OBS_LADDER_TIMEOUT) -v ./tests/observe/... || status=$$?; \
+	fi; \
+	./scripts/observe-down.sh; \
+	exit $$status
+
+.PHONY: test-observe-ladder
+
 # Aggregate: everything, in tier order. Budget ~3 min on a dev machine.
 test-all: test-unit test-blackbox test-smoke test-e2e
 

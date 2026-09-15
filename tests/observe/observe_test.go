@@ -855,6 +855,7 @@ func (r *observeRun) evaluate(t *testing.T, stamp string, windowElapsed time.Dur
 	// histogram of the whole window).
 	if m, err := r.metrics.observe(); err == nil && m.Latency != nil {
 		summary.Latency.P50 = m.Latency.Percentile(0.50)
+		summary.Latency.P90 = m.Latency.Percentile(0.90)
 		summary.Latency.P95 = m.Latency.Percentile(0.95)
 		summary.Latency.P99 = m.Latency.Percentile(0.99)
 		summary.Latency.Count = m.Latency.Count
