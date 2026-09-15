@@ -23,7 +23,7 @@ high-level SDK rejects persistent items on that method.
 | ARM64 image | SCRATCH PASS | `nacos/nacos-server:v3.2.4-slim`, pulled with `--platform linux/arm64`, digest `sha256:2a6d445d567b04c81404a3569309b07bfaf077216dbc3a92c0f56c9113034fb5`, inspected as `linux/arm64` |
 | Persistent gRPC lifecycle | SCRATCH PASS | Nacos 3.2.4 `TestNacosReal` register, deregister, complete read, service list, subscribe, and cleanup; logs show `PersistentInstanceRequest` and `Ephemeral=false` |
 | Application batch | SCRATCH PASS | Fresh production-shaped exact-barrier run verified 201 persistent entries with logical `100 + 100 + 1` scheduling, injected retry, exact identity/field convergence, and cleanup |
-| Kwok scale | NOT VERIFIED | Real `kwokctl`, at least 1000 Pods across 20 application/service scopes, at least two hours, and complete JSONL tick record |
+| Kwok scale | ONE-HOUR STRICT PASS / TWO-HOUR NOT VERIFIED | Real `kwokctl`, 1000 Pods across 20 application/service scopes, 361/361 exact emitted ticks, complete JSONL, zero drops and drained cleanup; the separate two-hour gate has not been run |
 | Health policy | DEPLOYMENT PREREQUISITE | Nacos service/cluster `healthChecker=NONE` is provisioned outside Spotter or verified by an approved Admin/Maintainer preflight; naming runtime does not require cluster-admin |
 
 ## Required per-tick record
@@ -76,9 +76,15 @@ final cleanup reports no residual kwok cluster, Pod, container, temporary
 state, or Nacos registration. Any missing prerequisite or incomplete window is
 recorded as `NOT VERIFIED`, never as a partial PASS.
 
-The 2026-09-15 one-hour result that predates the complete-payload change is
+The first 2026-09-15 one-hour result (before the complete-payload change) is
 historical subset evidence only; it is not proof of full Instance/label/
-reversion equality. A fresh one-hour run is required after this implementation.
+reversion equality. The required fresh run is documented below.
+
+That fresh complete-payload run is now recorded in
+`docs/evidence/nacos3-kwok-complete-instance-equality-2026-09-15.md`:
+`20260915-1720` completed 361/361 exact-equal ticks at 1000 Pods across 20
+applications, with zero field divergences, zero dropped events, and successful
+drain/cleanup. The two-hour burst-augmented plan gate remains `NOT VERIFIED`.
 
 ## Scratch limitations
 

@@ -362,11 +362,13 @@ Docker, Cobra, zap, Prometheus, Go test/race/vet, and the existing testkit.
       compression, and the Nacos metadata-size boundary.
 - [x] Run package, race, vet, real Nacos 3 batch, and 100-Pod Observe smoke
       gates before starting a new definitive one-hour/scale run.
+- [x] Run the definitive one-hour strict window with 1000 Pods and 20
+      applications after the complete-payload and linearized-read fixes.
 - [x] Treat all prior Observe runs as subset evidence until this task's fresh
       one-hour run passes.
-- [ ] Have an independent reviewer recompute the full-field equality scope
+- [x] Have an independent reviewer recompute the full-field equality scope
       and inspect Nacos metadata compatibility.
-- [ ] Commit and push Stage 4.3.
+- [x] Commit and push Stage 4.3.
 
 ## Stage 5 — Delete the legacy globals and compatibility packages
 
