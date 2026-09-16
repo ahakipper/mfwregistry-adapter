@@ -103,7 +103,7 @@ func TestObserveScaleLadder(t *testing.T) {
 	}
 
 	const appCode = "ladder-app"
-	driver := newChurnDriver(cfg.Kubeconfig, []string{appCode}, "ladder")
+	driver := newChurnDriver(cfg.Kubeconfig, []string{appCode}, "ladder-app")
 	if _, err := driver.kubectlStdin("", "get", "nodes"); err != nil {
 		t.Skipf("NOT VERIFIED: EnvError kwok preflight: %v", err)
 	}
