@@ -1,0 +1,143 @@
+{
+  "stamp": "20260915-2243",
+  "duration": "2m1s",
+  "scale": 50,
+  "services": 5,
+  "churnRatePctPerMin": 5,
+  "obsBound": "1m0s",
+  "pushIntervalSecs": 60,
+  "reconcileSource": "nacos",
+  "ticks": 13,
+  "consistent": 11,
+  "divergent": 2,
+  "obserr": 0,
+  "consistencyRatio": 0.8461538461538461,
+  "exactEqualTicks": 11,
+  "transitionalTicks": 0,
+  "steadyTicks": 4,
+  "steadyExactTicks": 4,
+  "spotterEqualTicks": 11,
+  "spotterMismatchTicks": 2,
+  "obserrRatio": 0,
+  "maxObserrStreak": 0,
+  "ticksSourceGeBase": 13,
+  "ticksSourceGeBaseRatio": 1,
+  "minSourceCount": 50,
+  "productDivergentTicks": 2,
+  "maxHeal": "10.437s",
+  "forensics": [
+    {
+      "key": "obs-app-0/k8s/obs-pod-76/extra",
+      "appCode": "obs-app-0",
+      "cluster": "k8s",
+      "podUid": "obs-pod-76",
+      "podName": "obs-pod-76",
+      "instanceId": "10.0.0.76#7096#k8s#DEFAULT_GROUP@@obs-app-0",
+      "kind": "extra",
+      "firstSeen": "2026-09-15T22:45:41+08:00",
+      "resolved": "2026-09-15T22:45:50+08:00",
+      "ageMs": 9710,
+      "ledgerOp": "delete",
+      "ledgerAt": "2026-09-15T22:45:27+08:00",
+      "logSlice": [
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-15T22:45:40.578+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"get changes from k8s robot client, resource type: pods, key: default/obs-pod-76, event: update\"}",
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-15T22:45:40.578+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"rsyncing instance: [{\\\"InstanceId\\\":\\\"obs-pod-76\\\",\\\"Level\\\":\\\"\\\",\\\"Ports\\\":[{\\\"Name\\\":\\\"dubbo-7096\\\",\\\"Protocol\\\":\\\"dubbo\\\",\\\"Port\\\":7096,\\\"ServicePort\\\":0},{\\\"Name\\\":\\\"http\\\",\\\"Protocol\\\":\\\"http\\\",\\\"Port\\\":8080,\\\"ServicePort\\\":0}],\\\"Ip\\\":\\\"10.0.0.76\\\",\\\"EnvCode\\\":\\\"test#\\\",\\\"EnvType\\\":\\\"test\\\",\\\"EnvGroup\\\":\\\"\\\",\\\"Cluster\\\":\\\"\\\",\\\"Version\\\":\\\"\\\",\\\"Enabled\\\":false,\\\"State\\\":\\\"terminated\\\",\\\"HealthState\\\":\\\"\\\",\\\"AppCode\\\":\\\"obs-app-0\\\",\\\"Provider\\\":\\\"k8s\\\",\\\"Label\\\":{\\\"K8S_CLUSTER_TYPE\\\":\\\"test\\\",\\\"app\\\":\\\"obs-app-0\\\",\\\"app-code\\\":\\\"obs-app-0\\\",\\\"compatibility:aos_app\\\":\\\"obs-app-0\\\",\\\"compatibility:aos_dr_host\\\":\\\"obs-app-0\\\",\\\"compatibility:aos_namespace\\\":\\\"default\\\",\\\"sourceCluster\\\":\\\"config-963696fa7997aed4\\\",\\\"sourceKey\\\":\\\"config-963696fa7997aed4/e1ec822e-c521-46bf-b00a-0579bcf7934f\\\"},\\\"Hostname\\\":\\\"obs-pod-76\\\",\\\"Cpu\\\":0.1,\\\"Memory\\\":128,\\\"Disk\\\":0,\\\"Os\\\":\\\"\\\",\\\"Image\\\":{\\\"application\\\":\\\"obs/fake-app:latest\\\"},\\\"Idc\\\":\\\"\\\",\\\"Reversion\\\":1256,\\\"Status\\\":3}]\"}",
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-15T22:45:40.579+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"synced instance to the discovery center successfully, instance ids: obs-pod-76\"}",
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-15T22:45:40.591+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"get changes from k8s robot client, resource type: pods, key: default/obs-pod-76, event: update\"}",
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-15T22:45:40.594+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"get changes from k8s robot client, resource type: pods, key: default/obs-pod-76, event: delete\"}",
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-15T22:45:40.594+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"delete event, instanceid: obs-pod-76\"}"
+      ]
+    },
+    {
+      "key": "obs-app-2/k8s/obs-pod-153/extra",
+      "appCode": "obs-app-2",
+      "cluster": "k8s",
+      "podUid": "obs-pod-153",
+      "podName": "obs-pod-153",
+      "instanceId": "10.0.0.119#7096#k8s#DEFAULT_GROUP@@obs-app-2",
+      "kind": "extra",
+      "firstSeen": "2026-09-15T22:45:30+08:00",
+      "resolved": "2026-09-15T22:45:41+08:00",
+      "ageMs": 10437,
+      "ledgerOp": "create",
+      "ledgerAt": "2026-09-15T22:45:30+08:00",
+      "logSlice": [
+        "2026-09-15T22:45:30.455+0800\t\u001b[35mDEBUG\u001b[0m\trpc/grpc_connection.go:76\t1789483427879_172.17.0.1_46120 grpc request nacos server success (proto path), request=metadata:{type:\"PersistentInstanceRequest\" clientIp:\"10.112.12.130\"} body:{value:\"{\\\"requestId\\\":\\\"\\\",\\\"namespace\\\":\\\"\\\",\\\"serviceName\\\":\\\"obs-app-2\\\",\\\"groupName\\\":\\\"DEFAULT_GROUP\\\",\\\"type\\\":\\\"registerInstance\\\",\\\"instance\\\":{\\\"instanceId\\\":\\\"10.0.0.119#7096#k8s#DEFAULT_GROUP@@obs-app-2\\\",\\\"ip\\\":\\\"10.0.0.119\\\",\\\"port\\\":7096,\\\"weight\\\":1,\\\"healthy\\\":true,\\\"enabled\\\":true,\\\"ephemeral\\\":false,\\\"clusterName\\\":\\\"k8s\\\",\\\"serviceName\\\":\\\"obs-app-2\\\",\\\"metadata\\\":{\\\"cpu\\\":\\\"0.1\\\",\\\"envGroup\\\":\\\"\\\",\\\"envType\\\":\\\"test\\\",\\\"idc\\\":\\\"\\\",\\\"instanceId\\\":\\\"obs-pod-153\\\",\\\"reversion\\\":\\\"1089\\\",\\\"schemaVersion\\\":\\\"1\\\",\\\"sourceCluster\\\":\\\"config-963696fa7997aed4\\\",\\\"sourceKey\\\":\\\"config-963696fa7997aed4/e4aececf-287a-4745-b676-2ca75cd69960\\\",\\\"spotter.instance\\\":\\\"eJysU92K2zwUfJf5buVdO5v1j26X5aNsKUuTFkop4Vg6SURsS0hyIIS8e1G8SWlDKYXiC8P4zJzxaHREUFvu6TP7YOwAWQgEO3rFL3yAhLLD2myypnwom3JNVdNUxHp-z3NixWqdzeqKsnk1f8zasiqzmaLqUemyacocF6mnbgyR_e_lIGCGEGlQ_E5DwrYhc1ZnxeMDBDrecwcJCDjrY4D8esQH6hkSemxbm1V5U0Lg1dtole0ueIKsj5Dpu8CC_d4onqD8JK4i2xjdz_QLch6t8zq_YX8TMA4SRX6XnqJoIMDD_snq5CtyiP9NyPLgLsgE_O_tmKgQUNdkILC_nEH6Ux6o7VhDRj-yQIgUk4ofh8EMGwhsmbq4XbzhECDn3pan-Mi5bJYS83Zv9HnFrg4pTWpTmke81IvV0_tPi-Xzx9Xyy-vzD4_k3C8q6a1uxZXtHUXTms7EgyQbVrfU2xntV1sb4h_nBuo5OFJpq-Y1jV38q0r9sx6fBJLh5OemnMqNkPldIdBzb_0BspjVAtqEHWQuYMN0OqanDafYybnOKIrn25bE7te04xSD7OhckpOA0Wqieb62osjrZirCGCCL0_cBABuGKus\\\",\\\"spotterOwner\\\":\\\"spotter\\\",\\\"state\\\":\\\"running\\\",\\\"status\\\":\\\"1\\\",\\\"version\\\":\\\"\\\"}}}\"}",
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-15T22:45:30.442+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"get changes from k8s robot client, resource type: pods, key: default/obs-pod-153, event: add\"}",
+        "{\"level\":\"WARN\",\"ts\":\"2026-09-15T22:45:30.442+0800\",\"caller\":\"logging/logging.go:203\",\"msg\":\"invalid instance, instanceid: obs-pod-153, reason: instance has nil ip when it on heal check status and pending state\"}",
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-15T22:45:30.446+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"get changes from k8s robot client, resource type: pods, key: default/obs-pod-153, event: update\"}",
+        "{\"level\":\"WARN\",\"ts\":\"2026-09-15T22:45:30.447+0800\",\"caller\":\"logging/logging.go:203\",\"msg\":\"invalid instance, instanceid: obs-pod-153, reason: instance has nil ip when it on heal check status and pending state\"}",
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-15T22:45:30.452+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"get changes from k8s robot client, resource type: pods, key: default/obs-pod-153, event: update\"}",
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-15T22:45:30.452+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"rsyncing instance: [{\\\"InstanceId\\\":\\\"obs-pod-153\\\",\\\"Level\\\":\\\"\\\",\\\"Ports\\\":[{\\\"Name\\\":\\\"dubbo-7096\\\",\\\"Protocol\\\":\\\"dubbo\\\",\\\"Port\\\":7096,\\\"ServicePort\\\":0},{\\\"Name\\\":\\\"http\\\",\\\"Protocol\\\":\\\"http\\\",\\\"Port\\\":8080,\\\"ServicePort\\\":0}],\\\"Ip\\\":\\\"10.0.0.119\\\",\\\"EnvCode\\\":\\\"test#\\\",\\\"EnvType\\\":\\\"test\\\",\\\"EnvGroup\\\":\\\"\\\",\\\"Cluster\\\":\\\"\\\",\\\"Version\\\":\\\"\\\",\\\"Enabled\\\":true,\\\"State\\\":\\\"running\\\",\\\"HealthState\\\":\\\"\\\",\\\"AppCode\\\":\\\"obs-app-2\\\",\\\"Provider\\\":\\\"k8s\\\",\\\"Label\\\":{\\\"K8S_CLUSTER_TYPE\\\":\\\"test\\\",\\\"app\\\":\\\"obs-app-2\\\",\\\"app-code\\\":\\\"obs-app-2\\\",\\\"compatibility:aos_app\\\":\\\"obs-app-2\\\",\\\"compatibility:aos_dr_host\\\":\\\"obs-app-2\\\",\\\"compatibility:aos_namespace\\\":\\\"default\\\",\\\"sourceCluster\\\":\\\"config-963696fa7997aed4\\\",\\\"sourceKey\\\":\\\"config-963696fa7997aed4/e4aececf-287a-4745-b676-2ca75cd69960\\\"},\\\"Hostname\\\":\\\"obs-pod-153\\\",\\\"Cpu\\\":0.1,\\\"Memory\\\":128,\\\"Disk\\\":0,\\\"Os\\\":\\\"\\\",\\\"Image\\\":{\\\"application\\\":\\\"obs/fake-app:latest\\\"},\\\"Idc\\\":\\\"\\\",\\\"Reversion\\\":1089,\\\"Status\\\":1}]\"}",
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-15T22:45:30.453+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"synced instance to the discovery center successfully, instance ids: obs-pod-153\"}"
+      ]
+    },
+    {
+      "key": "obs-app-3/k8s/obs-pod-124/extra",
+      "appCode": "obs-app-3",
+      "cluster": "k8s",
+      "podUid": "obs-pod-124",
+      "podName": "obs-pod-124",
+      "instanceId": "10.0.0.124#7096#k8s#DEFAULT_GROUP@@obs-app-3",
+      "kind": "extra",
+      "firstSeen": "2026-09-15T22:45:30+08:00",
+      "resolved": "2026-09-15T22:45:41+08:00",
+      "ageMs": 10437,
+      "ledgerOp": "delete",
+      "ledgerAt": "2026-09-15T22:45:27+08:00",
+      "logSlice": [
+        "2026-09-15T22:45:03.564+0800\t\u001b[35mDEBUG\u001b[0m\trpc/grpc_connection.go:76\t1789483427879_172.17.0.1_46120 grpc request nacos server success (proto path), request=metadata:{type:\"PersistentInstanceRequest\" clientIp:\"10.112.12.130\"} body:{value:\"{\\\"requestId\\\":\\\"\\\",\\\"namespace\\\":\\\"\\\",\\\"serviceName\\\":\\\"obs-app-3\\\",\\\"groupName\\\":\\\"DEFAULT_GROUP\\\",\\\"type\\\":\\\"registerInstance\\\",\\\"instance\\\":{\\\"instanceId\\\":\\\"10.0.0.124#7096#k8s#DEFAULT_GROUP@@obs-app-3\\\",\\\"ip\\\":\\\"10.0.0.124\\\",\\\"port\\\":7096,\\\"weight\\\":1,\\\"healthy\\\":true,\\\"enabled\\\":true,\\\"ephemeral\\\":false,\\\"clusterName\\\":\\\"k8s\\\",\\\"serviceName\\\":\\\"obs-app-3\\\",\\\"metadata\\\":{\\\"cpu\\\":\\\"0.1\\\",\\\"envGroup\\\":\\\"\\\",\\\"envType\\\":\\\"test\\\",\\\"idc\\\":\\\"\\\",\\\"instanceId\\\":\\\"obs-pod-124\\\",\\\"reversion\\\":\\\"793\\\",\\\"schemaVersion\\\":\\\"1\\\",\\\"sourceCluster\\\":\\\"config-963696fa7997aed4\\\",\\\"sourceKey\\\":\\\"config-963696fa7997aed4/a469db30-0aa7-4b3a-af23-8387b76c8667\\\",\\\"spotter.instance\\\":\\\"eJysU92K2zwUfJf5buVdex38o9tl-ShbytJsC6WUcCydJCK2JSQ5EELevSjepLShlELxhWF8Zs54NDoiqC0P9Jl9MHaELASCnbziZz5AQtlxbTZZW5VVW62pbtuaWC_uaVG1uivzLCeqs0VXUkbrhzJryqbu6ko1VVXjIvXYTyGy_70cBMwYIo2K32lI2C5kzuqseFhAoOc995CAgLM-BsivR3yggSGhp66zWZ23FQRevI1W2f6CJ8j6CJm-CyzZ743iGcpP4iqyjdH9TL8g59Emb_Ib9jcB4yBR5HfpmZ3yuH-0OvmKHOJ_M_J6cBdkBv73dkpUCKhrMhDYX84g_SmP1PWsIaOfWCBEiknFT-Noxg0Etkx93C7fcAiQc2_LU3zkXFamxLzdG31esWtCSpO6lOYRz81y9fj-0_L16ePq9cvL0w-P5NwvKumtbsWVHRxF05nexIMkG1a31NsZ7VdbG-If50YaODhSaavmNU19_KtK_bMenwSS4eTnppzKTZD5XSEw8GD9AbJ4aAS0CTvIXMCG-XTMQBtOsZNzvVEUz7ctid2vaccpBtnTuSQnAaPVTPN8bUXdlnMPpgBZnL4PABYfKds\\\",\\\"spotterOwner\\\":\\\"spotter\\\",\\\"state\\\":\\\"running\\\",\\\"status\\\":\\\"1\\\",\\\"version\\\":\\\"\\\"}}}\"}",
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-15T22:45:30.175+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"get changes from k8s robot client, resource type: pods, key: default/obs-pod-124, event: update\"}",
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-15T22:45:30.175+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"rsyncing instance: [{\\\"InstanceId\\\":\\\"obs-pod-124\\\",\\\"Level\\\":\\\"\\\",\\\"Ports\\\":[{\\\"Name\\\":\\\"dubbo-7096\\\",\\\"Protocol\\\":\\\"dubbo\\\",\\\"Port\\\":7096,\\\"ServicePort\\\":0},{\\\"Name\\\":\\\"http\\\",\\\"Protocol\\\":\\\"http\\\",\\\"Port\\\":8080,\\\"ServicePort\\\":0}],\\\"Ip\\\":\\\"10.0.0.124\\\",\\\"EnvCode\\\":\\\"test#\\\",\\\"EnvType\\\":\\\"test\\\",\\\"EnvGroup\\\":\\\"\\\",\\\"Cluster\\\":\\\"\\\",\\\"Version\\\":\\\"\\\",\\\"Enabled\\\":false,\\\"State\\\":\\\"terminated\\\",\\\"HealthState\\\":\\\"\\\",\\\"AppCode\\\":\\\"obs-app-3\\\",\\\"Provider\\\":\\\"k8s\\\",\\\"Label\\\":{\\\"K8S_CLUSTER_TYPE\\\":\\\"test\\\",\\\"app\\\":\\\"obs-app-3\\\",\\\"app-code\\\":\\\"obs-app-3\\\",\\\"compatibility:aos_app\\\":\\\"obs-app-3\\\",\\\"compatibility:aos_dr_host\\\":\\\"obs-app-3\\\",\\\"compatibility:aos_namespace\\\":\\\"default\\\",\\\"sourceCluster\\\":\\\"config-963696fa7997aed4\\\",\\\"sourceKey\\\":\\\"config-963696fa7997aed4/a469db30-0aa7-4b3a-af23-8387b76c8667\\\"},\\\"Hostname\\\":\\\"obs-pod-124\\\",\\\"Cpu\\\":0.1,\\\"Memory\\\":128,\\\"Disk\\\":0,\\\"Os\\\":\\\"\\\",\\\"Image\\\":{\\\"application\\\":\\\"obs/fake-app:latest\\\"},\\\"Idc\\\":\\\"\\\",\\\"Reversion\\\":1080,\\\"Status\\\":3}]\"}",
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-15T22:45:30.176+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"synced instance to the discovery center successfully, instance ids: obs-pod-124\"}",
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-15T22:45:30.182+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"get changes from k8s robot client, resource type: pods, key: default/obs-pod-124, event: update\"}",
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-15T22:45:30.186+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"get changes from k8s robot client, resource type: pods, key: default/obs-pod-124, event: delete\"}",
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-15T22:45:30.186+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"delete event, instanceid: obs-pod-124\"}"
+      ]
+    }
+  ],
+  "maxInFlight": 2,
+  "maxRetryDepth": 0,
+  "maxRobotDepth": 0,
+  "droppedTotal": 0,
+  "drainedAtEnd": true,
+  "latency": {
+    "p50": 0.005,
+    "p90": 0.01,
+    "p95": 0.025,
+    "p99": 0.1,
+    "count": 408
+  },
+  "churnCreates": 304,
+  "churnDeletes": 104,
+  "churnErrors": 0,
+  "bursts": [
+    {
+      "name": "storm-100",
+      "size": 100,
+      "createIssued": "2026-09-15T22:44:16+08:00",
+      "convergedUp": "2026-09-15T22:44:20+08:00",
+      "upConvergence": "4s",
+      "deleteIssued": "2026-09-15T22:45:27+08:00",
+      "convergedDown": "2026-09-15T22:45:50+08:00",
+      "downConvergence": "23s"
+    },
+    {
+      "name": "batch-200@25%",
+      "size": 200,
+      "createIssued": "2026-09-15T22:45:45+08:00",
+      "convergedUp": "2026-09-15T22:45:50+08:00",
+      "upConvergence": "5s",
+      "deleteIssued": "",
+      "convergedDown": "",
+      "downConvergence": ""
+    }
+  ],
+  "pass": false,
+  "fails": [
+    "consistency: 2 product-divergent ticks (requirement: zero; see the forensics)",
+    "spotter projection: 2 ticks differed from the authoritative K8s projection",
+    "bursts: 2 of 4 scheduled burst events executed (a window shorter than the 75% mark loses its tail bursts — run the full window)",
+    "burst batch-200@25%: rollback delete never issued (window ended inside the settle wait)"
+  ]
+}

@@ -1218,6 +1218,7 @@ func runTickRaw(t *testing.T, cfg observeConfig, driver *churnDriver, view *naco
 	record.ExactEqual = len(divergences) == 0 && record.ExpectedCount == record.Remote.Count && record.SpotterEqual
 	record.MutationSequence, record.MutationObserved = finishTickMutationState(driver, previousMutationSequence, mutationAtStart, mutationActiveAtStart)
 	record.MutationObserved = record.MutationObserved || (previousSourceFingerprint != "" && record.SourceFingerprint != previousSourceFingerprint)
+	record.SpotterRetryable = record.SpotterObserved && !record.SpotterEqual && record.MutationObserved
 	record.Verdict = string(strictTickVerdict(diffResult, record.MutationObserved || previousTransitional))
 	if !record.SpotterEqual {
 		record.Verdict = string(verdictDivergent)

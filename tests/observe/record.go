@@ -28,6 +28,7 @@ type tickRecord struct {
 	Spotter            sideCount    `json:"spotter"`
 	SpotterObserved    bool         `json:"spotterObserved"`
 	SpotterEqual       bool         `json:"spotterEqual"`
+	SpotterRetryable   bool         `json:"spotterRetryable"`
 	InFlight           int          `json:"inFlight"`
 	ExactEqual         bool         `json:"exactEqual"`
 	MutationObserved   bool         `json:"mutationObserved"`

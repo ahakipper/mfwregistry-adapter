@@ -633,6 +633,15 @@ func TestObserveUnitStableTickRequiresExactEquality(t *testing.T) {
 	}
 }
 
+func TestObserveUnitSpotterMismatchRetriesOnlyWhenMutationAttributed(t *testing.T) {
+	if !snapshotRetryable(tickRecord{Verdict: string(verdictDivergent), SpotterRetryable: true}) {
+		t.Fatal("mutation-attributed Spotter mismatch was not retryable")
+	}
+	if snapshotRetryable(tickRecord{Verdict: string(verdictDivergent), SpotterObserved: true, SpotterEqual: false}) {
+		t.Fatal("unattributed Spotter mismatch was incorrectly retryable")
+	}
+}
+
 func TestObserveUnitTransitionalClassificationExcludesObservationErrors(t *testing.T) {
 	transitional := tickRecord{
 		Verdict:          string(verdictConsistent),
