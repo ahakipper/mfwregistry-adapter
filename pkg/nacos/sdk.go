@@ -309,15 +309,15 @@ func newSDKNamingFacade(cfg ClientConfig) (*sdkNamingFacade, error) {
 		owned = true
 	}
 	clientCfg := &constant.ClientConfig{
-		TimeoutMs:           timeoutMs,
-		NamespaceId:         ns,
-		Username:            cfg.Username,
-		Password:            cfg.Password,
-		NotLoadCacheAtStart: true,
+		TimeoutMs:            timeoutMs,
+		NamespaceId:          ns,
+		Username:             cfg.Username,
+		Password:             cfg.Password,
+		NotLoadCacheAtStart:  true,
 		UpdateCacheWhenEmpty: cfg.UpdateCacheWhenEmpty,
-		DisableUseSnapShot:  true,
-		CacheDir:            cacheDir,
-		TLSCfg:              constant.TLSConfig{Appointed: true, Enable: servers[0].Scheme == "https", TrustAll: cfg.InsecureSkipVerify, CaFile: cfg.CAFile, ServerNameOverride: cfg.ServerName},
+		DisableUseSnapShot:   true,
+		CacheDir:             cacheDir,
+		TLSCfg:               constant.TLSConfig{Appointed: true, Enable: servers[0].Scheme == "https", TrustAll: cfg.InsecureSkipVerify, CaFile: cfg.CAFile, ServerNameOverride: cfg.ServerName},
 	}
 	grpcVendor, err := newNacos3GRPCVendor(*clientCfg, servers)
 	if err != nil {
@@ -351,7 +351,11 @@ func (f *sdkNamingFacade) register(p InstanceParams) error {
 	if group == "" {
 		group = f.group
 	}
-	ok, err := f.client.RegisterInstance(vo.RegisterInstanceParam{Ip: p.IP, Port: uint64(p.Port), Weight: 1, Enable: p.Enabled, Healthy: p.Enabled, Metadata: p.Metadata, ClusterName: p.ClusterName, ServiceName: p.ServiceName, GroupName: effectiveGroup(group), Ephemeral: p.Ephemeral})
+	healthy := p.Enabled
+	if p.Healthy != nil {
+		healthy = *p.Healthy
+	}
+	ok, err := f.client.RegisterInstance(vo.RegisterInstanceParam{Ip: p.IP, Port: uint64(p.Port), Weight: 1, Enable: p.Enabled, Healthy: healthy, Metadata: p.Metadata, ClusterName: p.ClusterName, ServiceName: p.ServiceName, GroupName: effectiveGroup(group), Ephemeral: p.Ephemeral})
 	if err != nil {
 		return classifySDKError(err)
 	}

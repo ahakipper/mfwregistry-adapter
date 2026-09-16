@@ -75,8 +75,13 @@ type InstanceParams struct {
 	GroupName   string
 	NamespaceID string
 	Enabled     bool
-	Ephemeral   bool
-	Metadata    map[string]string
+	// Healthy is optional because legacy callers historically coupled it to
+	// Enabled. Production SDK writes set it explicitly so an unhealthy
+	// persistent instance can remain query-visible (enabled=true) while Nacos
+	// discovery still marks it unhealthy.
+	Healthy   *bool
+	Ephemeral bool
+	Metadata  map[string]string
 }
 
 // Host is one instance as GET /nacos/v1/ns/instance/list serves it
@@ -181,24 +186,24 @@ type ClientConfig struct {
 	ServerURL string
 	// ServerURLs is an ordered list of Nacos addresses. Transport and 5xx
 	// failures advance to the next address; a 4xx is returned immediately.
-	ServerURLs          []string
-	NamespaceID         string
-	GroupName           string
-	Username            string
-	Password            string
-	AccessToken         string
-	CAFile              string
-	ServerName          string
-	InsecureSkipVerify  bool
-	CacheDir            string
+	ServerURLs         []string
+	NamespaceID        string
+	GroupName          string
+	Username           string
+	Password           string
+	AccessToken        string
+	CAFile             string
+	ServerName         string
+	InsecureSkipVerify bool
+	CacheDir           string
 	// UpdateCacheWhenEmpty preserves SDK Subscribe callbacks when a service
 	// transitions to zero instances. Watch-based observers need that empty
 	// snapshot to measure DELETE convergence rather than miss the final event.
 	UpdateCacheWhenEmpty bool
-	Timeout             time.Duration
-	MaxConnsPerHost     int
-	ClusterAdmin        NacosClusterAdmin
-	ClusterAdminFactory func() (NacosClusterAdmin, error)
+	Timeout              time.Duration
+	MaxConnsPerHost      int
+	ClusterAdmin         NacosClusterAdmin
+	ClusterAdminFactory  func() (NacosClusterAdmin, error)
 }
 
 // NacosClusterAdmin is an injected official or approved admin facade.
@@ -892,6 +897,9 @@ func (p InstanceParams) values() url.Values {
 	values.Set("namespaceId", namespace)
 	values.Set("ephemeral", strconv.FormatBool(p.Ephemeral))
 	values.Set("enabled", strconv.FormatBool(p.Enabled))
+	if p.Healthy != nil {
+		values.Set("healthy", strconv.FormatBool(*p.Healthy))
+	}
 	if len(p.Metadata) > 0 {
 		if encoded, err := json.Marshal(p.Metadata); err == nil {
 			values.Set("metadata", string(encoded))

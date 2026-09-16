@@ -1,0 +1,271 @@
+{
+  "stamp": "20260916-122733",
+  "target": "Nacos 3 ARM64 + KWork",
+  "scales": [
+    1
+  ],
+  "aggregates": [
+    {
+      "scale": 1,
+      "operation": "create",
+      "samples": 10,
+      "p90": 1.4501576250000001,
+      "p95": 15.877737083,
+      "p99": 15.877737083,
+      "max": 15.877737083,
+      "sourceToNacosP90": 1.302398334,
+      "sourceToNacosP95": 15.436391292,
+      "sourceToNacosP99": 15.436391292,
+      "consistencyPolls": 31,
+      "mismatchPolls": 21
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "samples": 10,
+      "p90": 1.418115916,
+      "p95": 1.425687833,
+      "p99": 1.425687833,
+      "max": 1.425687833,
+      "sourceToNacosP90": 1.296090833,
+      "sourceToNacosP95": 1.317024417,
+      "sourceToNacosP99": 1.317024417,
+      "consistencyPolls": 20,
+      "mismatchPolls": 10
+    }
+  ],
+  "samples": [
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 15.877737083,
+      "sourceToNacosSec": 15.436391292,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 13,
+      "mismatchPolls": 12
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.390335667,
+      "sourceToNacosSec": 1.283173292,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 1.446954,
+      "sourceToNacosSec": 1.297047875,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.396622584,
+      "sourceToNacosSec": 1.2828448749999999,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 1.417573792,
+      "sourceToNacosSec": 1.300404084,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.399073625,
+      "sourceToNacosSec": 1.2901872079999999,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 1.434453708,
+      "sourceToNacosSec": 1.286465458,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.394456333,
+      "sourceToNacosSec": 1.292923708,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 1.4501576250000001,
+      "sourceToNacosSec": 1.2880094579999999,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.361624584,
+      "sourceToNacosSec": 1.262996792,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 1.415809667,
+      "sourceToNacosSec": 1.283165042,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.425687833,
+      "sourceToNacosSec": 1.317024417,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 1.389293166,
+      "sourceToNacosSec": 1.2811742910000001,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.36249375,
+      "sourceToNacosSec": 1.286208791,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 1.433333709,
+      "sourceToNacosSec": 1.287147542,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.418115916,
+      "sourceToNacosSec": 1.296090833,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 1.421776667,
+      "sourceToNacosSec": 1.284620959,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.384927375,
+      "sourceToNacosSec": 1.275507125,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 1.4265103749999999,
+      "sourceToNacosSec": 1.302398334,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.408500375,
+      "sourceToNacosSec": 1.295550042,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": true,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    }
+  ],
+  "crashTransitions": [
+    {
+      "operation": "recover",
+      "latencySec": 6.61806,
+      "consistencyPolls": 6,
+      "mismatchPolls": 5
+    }
+  ],
+  "pass": false,
+  "failures": [
+    "crash convergence: strict equality did not converge within 2m0s (polls=93 mismatches=93): spotterEqual=true; ladder-pod-11 source=true remote=false; divergences=[{ladder-app-0 k8s ladder-pod-11  missing false 2026-09-16 12:28:22.244125 +0800 +08 m=+57.647614835}]"
+  ]
+}

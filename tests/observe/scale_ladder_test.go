@@ -267,6 +267,7 @@ func waitLadderExact(t *testing.T, driver *churnDriver, view *nacosView, child *
 	t.Helper()
 	started := time.Now()
 	result := ladderWaitResult{}
+	lastDetail := "no observation"
 	for time.Since(started) < timeout {
 		result.Polls++
 		pods, err := driver.liveSourcePods("app-code=" + appCode)
@@ -324,10 +325,34 @@ func waitLadderExact(t *testing.T, driver *churnDriver, view *nacosView, child *
 			}
 			return result, nil
 		}
+		lastDetail = ladderMismatchDetail(model, remote["k8s"], appCode, names, spotterOK, diff)
 		result.Mismatches++
 		time.Sleep(time.Second)
 	}
-	return result, fmt.Errorf("strict equality did not converge within %s (polls=%d mismatches=%d)", timeout, result.Polls, result.Mismatches)
+	return result, fmt.Errorf("strict equality did not converge within %s (polls=%d mismatches=%d): %s", timeout, result.Polls, result.Mismatches, lastDetail)
+}
+
+func ladderMismatchDetail(model *sourceModel, remote []remoteEntry, appCode string, names []string, spotterOK bool, diff diffResult) string {
+	parts := []string{fmt.Sprintf("spotterEqual=%v", spotterOK)}
+	for _, name := range names {
+		expected, sourcePresent := model.Entries[appCode][name]
+		var found *remoteEntry
+		for i := range remote {
+			if remote[i].ID == name {
+				found = &remote[i]
+				break
+			}
+		}
+		if found == nil {
+			parts = append(parts, fmt.Sprintf("%s source=%v remote=false", name, sourcePresent))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s source=%v remote=true expectedStatus=%s remoteStatus=%s expectedEnabled=%v remoteEnabled=%v expectedPayload=%s remotePayload=%s", name, sourcePresent, expected.Status, found.Metadata["status"], expected.Enabled, found.Enabled, expected.Metadata["spotter.instance"], found.Metadata["spotter.instance"]))
+	}
+	if len(diff.Divergences) > 0 {
+		parts = append(parts, fmt.Sprintf("divergences=%v", diff.Divergences))
+	}
+	return strings.Join(parts, "; ")
 }
 
 func allWatchReady(timeline *watchTimeline, names []string, present bool, issuedAt time.Time, source bool) bool {

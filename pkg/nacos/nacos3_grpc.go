@@ -75,7 +75,8 @@ func (c *grpcSDKClient) RegisterPersistentBatch(items []InstanceParams) error {
 }
 
 func (c *grpcSDKClient) RegisterInstance(p vo.RegisterInstanceParam) (bool, error) {
-	err := c.vendor.RegisterPersistent(InstanceParams{ServiceName: p.ServiceName, IP: p.Ip, Port: int(p.Port), ClusterName: p.ClusterName, GroupName: p.GroupName, Enabled: p.Enable, Ephemeral: false, Metadata: p.Metadata})
+	healthy := p.Healthy
+	err := c.vendor.RegisterPersistent(InstanceParams{ServiceName: p.ServiceName, IP: p.Ip, Port: int(p.Port), ClusterName: p.ClusterName, GroupName: p.GroupName, Enabled: p.Enable, Healthy: &healthy, Ephemeral: false, Metadata: p.Metadata})
 	return err == nil, err
 }
 func (c *grpcSDKClient) BatchRegisterInstance(vo.BatchRegisterInstanceParam) (bool, error) {
@@ -86,7 +87,8 @@ func (c *grpcSDKClient) DeregisterInstance(p vo.DeregisterInstanceParam) (bool, 
 	return err == nil, err
 }
 func (c *grpcSDKClient) UpdateInstance(p vo.UpdateInstanceParam) (bool, error) {
-	err := c.vendor.RegisterPersistent(InstanceParams{ServiceName: p.ServiceName, IP: p.Ip, Port: int(p.Port), ClusterName: p.ClusterName, GroupName: p.GroupName, Enabled: p.Enable, Ephemeral: false, Metadata: p.Metadata})
+	healthy := p.Healthy
+	err := c.vendor.RegisterPersistent(InstanceParams{ServiceName: p.ServiceName, IP: p.Ip, Port: int(p.Port), ClusterName: p.ClusterName, GroupName: p.GroupName, Enabled: p.Enable, Healthy: &healthy, Ephemeral: false, Metadata: p.Metadata})
 	return err == nil, err
 }
 func (c *grpcSDKClient) SelectAllInstances(p vo.SelectAllInstancesParam) ([]model.Instance, error) {
@@ -173,7 +175,11 @@ func newNacos3GRPCVendor(cfg constant.ClientConfig, servers []constant.ServerCon
 
 func (v *nacos3GRPCVendor) RegisterPersistent(p InstanceParams) error {
 	p.Ephemeral = false
-	instance := model.Instance{InstanceId: instanceID(p), Ip: p.IP, Port: uint64(p.Port), Weight: 1, Enable: p.Enabled, Healthy: p.Enabled, Ephemeral: false, ClusterName: p.ClusterName, ServiceName: p.ServiceName, Metadata: p.Metadata}
+	healthy := p.Enabled
+	if p.Healthy != nil {
+		healthy = *p.Healthy
+	}
+	instance := model.Instance{InstanceId: instanceID(p), Ip: p.IP, Port: uint64(p.Port), Weight: 1, Enable: p.Enabled, Healthy: healthy, Ephemeral: false, ClusterName: p.ClusterName, ServiceName: p.ServiceName, Metadata: p.Metadata}
 	req := &persistentInstanceRequest{Request: rpc_request.Request{Headers: map[string]string{}}, Namespace: v.namespace, ServiceName: p.ServiceName, GroupName: effectiveGroupValue(p.GroupName, v.group), Type: "registerInstance", Instance: instance}
 	v.server.InjectSecurityInfo(req.GetHeaders(), security.BuildNamingResource(v.namespace, req.GroupName, req.ServiceName))
 	response, err := v.persistent.GetRpcClient().Request(req, int64(v.proxyTimeout()))

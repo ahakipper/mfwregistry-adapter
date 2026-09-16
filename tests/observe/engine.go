@@ -453,7 +453,7 @@ func compareService(appCode string, model *sourceModel, remote []remoteEntry,
 		}
 		if !remoteEntryMatches(model.Entries[appCode][id], remoteEntries[id][0]) {
 			record(divField, id, remoteEntries[id][0].CompositeID, clockSource(id, ledger, model))
-		} else if remoteEntries[id][0].Enabled {
+		} else if remoteEntries[id][0].Enabled && model.Entries[appCode][id].Status != "2" {
 			record(divDisabled, id, compositeOf(remote, id), clockSource(id, ledger, model))
 		}
 	}
@@ -497,7 +497,7 @@ func remoteEntryMatches(expected sourceEntry, got remoteEntry) bool {
 	if expected.ID != got.ID || expected.IP != got.IP || expected.Port != got.Port ||
 		expected.ClusterName != got.ClusterName || !serviceNameMatches(expected.ServiceName, got.ServiceName) ||
 		expected.CompositeID != got.CompositeID ||
-		expected.Enabled != got.Enabled || expected.Ephemeral != got.Ephemeral {
+		!wireEnabledMatches(expected, got) || expected.Ephemeral != got.Ephemeral {
 		return false
 	}
 	for key, want := range expected.Metadata {
@@ -506,6 +506,19 @@ func remoteEntryMatches(expected sourceEntry, got remoteEntry) bool {
 		}
 	}
 	return true
+}
+
+func wireEnabledMatches(expected sourceEntry, got remoteEntry) bool {
+	if expected.Enabled == got.Enabled {
+		return true
+	}
+	// Nacos 3 omits disabled persistent instances from official naming query
+	// and Subscribe results. Spotter therefore writes status-2 instances as
+	// transport-enabled but unhealthy while preserving domain Enabled=false in
+	// the canonical payload. Only that exact metadata-backed exception is
+	// accepted; online/manual-disable drift remains strict.
+	return expected.Status == "2" && !expected.Enabled && got.Enabled &&
+		got.Metadata["status"] == "2" && got.Metadata["spotter.instance"] == expected.Metadata["spotter.instance"]
 }
 
 func copyStringMap(input map[string]string) map[string]string {

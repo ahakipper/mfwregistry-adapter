@@ -117,6 +117,21 @@ func TestObserveUnitNacosOwnedHealthDriftDoesNotBreakSpotterEquality(t *testing.
 	}
 }
 
+func TestObserveUnitUnhealthySDKVisibilityPreservesCanonicalEnabled(t *testing.T) {
+	ins := &instance.Instance{SourceKey: "default/pod-a", SourceCluster: "cluster-a", InstanceId: "pod-a", AppCode: "obs-app-0", Provider: "k8s", EnvType: "test", Ip: "10.0.0.7", Reversion: 42, Status: 2, Enabled: false, State: "crash"}
+	pod := sourcePod{Name: "pod-a", AppCode: "obs-app-0", Phase: "Running", PodIP: ins.Ip, ContainersReady: false, Instance: ins}
+	model := buildSourceModel([]sourcePod{pod}, []string{"obs-app-0"})
+	expected := model.Entries["obs-app-0"]["pod-a"]
+	remote := remoteEntry{ID: "pod-a", IP: expected.IP, Port: expected.Port, ClusterName: expected.ClusterName, ServiceName: expected.ServiceName, CompositeID: expected.CompositeID, Enabled: true, Healthy: false, Ephemeral: false, Metadata: copyStringMap(expected.Metadata)}
+	if diff := compareService("obs-app-0", model, []remoteEntry{remote}, stubLedger(nil), time.Minute, time.Now()); len(diff.Divergences) != 0 {
+		t.Fatalf("query-visible unhealthy wire shape diverged: %+v", diff.Divergences)
+	}
+	remote.Metadata["status"] = "1"
+	if diff := compareService("obs-app-0", model, []remoteEntry{remote}, stubLedger(nil), time.Minute, time.Now()); len(diff.Divergences) == 0 {
+		t.Fatal("status/canonical drift was accepted by unhealthy wire exception")
+	}
+}
+
 func TestObserveUnitFullPayloadDetectsReversionAndLabelDrift(t *testing.T) {
 	now := time.Now()
 	source := &instance.Instance{

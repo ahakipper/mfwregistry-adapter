@@ -1838,10 +1838,8 @@ func TestBlackboxSinkGetAllRequestsProviderScopedCatalogPairs(t *testing.T) {
 
 // TestBlackboxSinkGetAllUnhealthyRoundTripSteady: the spotter-written
 // unhealthy shape round-trips stably (the §1 round-trip demonstration's
-// unhealthy row): a status-2 push registers with wire enabled=false and
-// metadata status "2"; the catalog-based GetAll reconstructs Status=2 /
-// Enabled=false / State=probing — the exact mirror a local status-2 k8s
-// instance (locally enabled=false by readiness) compares equal against.
+// unhealthy row). The canonical payload preserves the source Enabled value;
+// transport visibility is a separate Nacos concern.
 // This is the precondition the k8s steady pin in pkg/providers/k8s builds
 // on (§3.5: "the k8s status-2 steady pin").
 func TestBlackboxSinkGetAllUnhealthyRoundTripSteady(t *testing.T) {
@@ -1861,8 +1859,8 @@ func TestBlackboxSinkGetAllUnhealthyRoundTripSteady(t *testing.T) {
 		t.Fatalf("GetAll([2], ecs) = %d instances, want 1 (the catalog serves the disabled host)", len(list.Instance))
 	}
 	got := list.Instance[0]
-	if got.Status != 2 || got.Enabled || got.State != "probing" {
-		t.Fatalf("reconstructed status/enabled/state = %d/%v/%q, want 2/false/probing (the pushed unhealthy shape)", got.Status, got.Enabled, got.State)
+	if got.Status != 2 || !got.Enabled || got.State != "probing" {
+		t.Fatalf("reconstructed status/enabled/state = %d/%v/%q, want 2/true/probing (the canonical source shape)", got.Status, got.Enabled, got.State)
 	}
 	if got.Reversion != 42 {
 		t.Fatalf("reconstructed reversion = %d, want 42 (the current-schema entry keeps its written reversion)", got.Reversion)

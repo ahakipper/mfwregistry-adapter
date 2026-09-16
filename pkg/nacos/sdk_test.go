@@ -138,6 +138,22 @@ func TestSDKFacadeRoutesPersistentLifecycleAndPreservesFields(t *testing.T) {
 	}
 }
 
+func TestSDKFacadeKeepsUnhealthyPersistentInstanceQueryVisible(t *testing.T) {
+	fake := &fakeSDKNaming{}
+	facade := &sdkNamingFacade{client: fake, group: DefaultGroup}
+	healthy := false
+	if err := facade.register(InstanceParams{ServiceName: "svc", IP: "10.0.0.9", Port: 8080, ClusterName: "k8s", Enabled: true, Healthy: &healthy}); err != nil {
+		t.Fatalf("register unhealthy persistent instance: %v", err)
+	}
+	if len(fake.registered) != 1 {
+		t.Fatalf("registered calls = %d, want 1", len(fake.registered))
+	}
+	got := fake.registered[0]
+	if !got.Enable || got.Healthy || got.Ephemeral {
+		t.Fatalf("wire flags = enable:%v healthy:%v ephemeral:%v, want true/false/false", got.Enable, got.Healthy, got.Ephemeral)
+	}
+}
+
 func TestSDKFacadeSelectAllErrorNeverReturnsCachedInstances(t *testing.T) {
 	fake := &fakeSDKNaming{instances: []model.Instance{{InstanceId: "stale"}}, selectErr: errors.New("subscribe failed")}
 	f := &sdkNamingFacade{client: fake, group: DefaultGroup}

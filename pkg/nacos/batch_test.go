@@ -260,8 +260,8 @@ func TestPushPersistentBatchesLimitsRequestsAndPreservesApplicationOrder(t *test
 		if param.GroupName != DefaultGroup || param.ClusterName != "k8s" || param.Ephemeral {
 			t.Fatalf("register parameters = %+v, want DEFAULT_GROUP/k8s/persistent", param)
 		}
-		if param.ServiceName == "app-b" && (param.Enable || param.Healthy) {
-			t.Fatalf("unhealthy register parameters = %+v, want Enable=false and Healthy=false", param)
+		if param.ServiceName == "app-b" && (!param.Enable || param.Healthy) {
+			t.Fatalf("unhealthy register parameters = %+v, want query-visible Enable=true and Healthy=false", param)
 		}
 		if param.ServiceName == "app-a" && (!param.Enable || !param.Healthy) {
 			t.Fatalf("online register parameters = %+v, want Enable=true and Healthy=true", param)

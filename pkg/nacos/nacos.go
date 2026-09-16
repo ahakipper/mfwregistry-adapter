@@ -624,8 +624,10 @@ func (s *Sink) pushOne(ins *instance.Instance) error {
 	}
 }
 
-// register upserts one instance: the enabled flag follows the status
-// policy — Enabled for online, forced false for unhealthy.
+// register upserts one instance. Canonical metadata preserves the domain
+// Enabled/Status values. SDK mode keeps unhealthy persistent instances
+// transport-enabled but marks them unhealthy so official query/Subscribe can
+// still observe and reconcile them.
 func (s *Sink) register(ins *instance.Instance) error {
 	// The sink's persistent-instance contract requires Nacos's server-side
 	// health checker to be disabled before any business registration is
@@ -633,8 +635,18 @@ func (s *Sink) register(ins *instance.Instance) error {
 	// operation first and SDK mode fails closed when no approved admin facade is
 	// injected; compatibility HTTP retains its warning-only legacy behavior.
 	enabled := ins.Enabled
+	healthy := ins.Enabled
 	if ins.Status == instance.InstanceStatusUnhealthy {
-		enabled = false
+		healthy = false
+		// Nacos 3's official naming query and Subscribe paths omit disabled
+		// persistent hosts even with healthyOnly=false. Keep the transport host
+		// enabled but unhealthy so it remains observable/reconcilable; the
+		// canonical payload preserves the Spotter domain Enabled=false value.
+		if s.client.sdk != nil {
+			enabled = true
+		} else {
+			enabled = false // explicit HTTP rollback keeps its historical shape
+		}
 	}
 	if s.shouldApplyHealthPolicy() && s.client.sdk != nil {
 		if err := s.ensureClusterHealthCheckDisabled(ins.AppCode, clusterOf(ins)); err != nil {
@@ -647,6 +659,7 @@ func (s *Sink) register(ins *instance.Instance) error {
 		Port:        firstPort(ins),
 		ClusterName: clusterOf(ins),
 		Enabled:     enabled,
+		Healthy:     &healthy,
 		Ephemeral:   false, // persistent: the sink owns the lifecycle (§7.1)
 		Metadata:    metadataOf(ins),
 	})
@@ -894,7 +907,9 @@ func reconstruct(service string, host Host) *instance.Instance {
 				decoded.Ports[0].Port = int32(host.Port)
 			}
 			decoded.Provider = host.ClusterName
-			decoded.Enabled = host.Enabled
+			if decoded.Status != instance.InstanceStatusUnhealthy {
+				decoded.Enabled = host.Enabled
+			}
 			if decoded.InstanceId == "" {
 				decoded.InstanceId = host.Metadata["instanceId"]
 			}
