@@ -257,7 +257,11 @@ func (v *nacos3GRPCVendor) Subscribe(service, group string, clusters []string, c
 	if callback != nil {
 		cb := callback
 		wrapper := naming_cache.NewSubscribeCallbackFuncWrapper(naming_cache.NewClusterSelector(clusters), funcPtr(&cb))
-		v.holder.RegisterCallback(serviceKey(service, group), "", wrapper)
+		// ServiceInfoHolder keys callbacks by service+group AND clusters. The
+		// previous empty-cluster registration never matched ProcessService's
+		// `...@@k8s` cache key, so official SDK Subscribe updates were cached but
+		// the caller callback was never invoked.
+		v.holder.RegisterCallback(serviceKey(service, group), clusterText, wrapper)
 		v.mu.Lock()
 		v.subs[key] = append(v.subs[key], grpcSubscription{callback: callback, wrapper: wrapper})
 		v.mu.Unlock()
@@ -282,7 +286,7 @@ func (v *nacos3GRPCVendor) Unsubscribe(service, group string, clusters []string,
 	remaining := entries[:0]
 	for _, entry := range entries {
 		if callback == nil || reflect.ValueOf(entry.callback).Pointer() == reflect.ValueOf(callback).Pointer() {
-			v.holder.DeregisterCallback(serviceKey(service, group), "", entry.wrapper)
+			v.holder.DeregisterCallback(serviceKey(service, group), clusterText, entry.wrapper)
 			continue
 		}
 		remaining = append(remaining, entry)

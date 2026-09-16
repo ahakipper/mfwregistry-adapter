@@ -1,0 +1,291 @@
+{
+  "stamp": "20260916-122023",
+  "target": "Nacos 3 ARM64 + KWork",
+  "scales": [
+    1
+  ],
+  "aggregates": [
+    {
+      "scale": 1,
+      "operation": "create",
+      "samples": 10,
+      "p90": 1.448672708,
+      "p95": 15.98656425,
+      "p99": 15.98656425,
+      "max": 15.98656425,
+      "sourceToNacosP90": 1.306057792,
+      "sourceToNacosP95": 15.425532958,
+      "sourceToNacosP99": 15.425532958,
+      "consistencyPolls": 31,
+      "mismatchPolls": 21
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "samples": 10,
+      "p90": 1.425871208,
+      "p95": 1.481349208,
+      "p99": 1.481349208,
+      "max": 1.481349208,
+      "sourceToNacosP90": 1.312805583,
+      "sourceToNacosP95": 1.359691333,
+      "sourceToNacosP99": 1.359691333,
+      "consistencyPolls": 20,
+      "mismatchPolls": 10
+    }
+  ],
+  "samples": [
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 15.98656425,
+      "sourceToNacosSec": 15.425532958,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 13,
+      "mismatchPolls": 12
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.481349208,
+      "sourceToNacosSec": 1.359691333,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 1.406496292,
+      "sourceToNacosSec": 1.283409667,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.386987833,
+      "sourceToNacosSec": 1.28392675,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 1.408846584,
+      "sourceToNacosSec": 1.275070584,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.425871208,
+      "sourceToNacosSec": 1.279415666,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 1.410552875,
+      "sourceToNacosSec": 1.263621,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.369494,
+      "sourceToNacosSec": 1.273034583,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 1.396857209,
+      "sourceToNacosSec": 1.2957659590000001,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.420424125,
+      "sourceToNacosSec": 1.312639917,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 1.427870042,
+      "sourceToNacosSec": 1.285316083,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.3890704999999999,
+      "sourceToNacosSec": 1.274984125,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 1.448672708,
+      "sourceToNacosSec": 1.289244042,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.399016334,
+      "sourceToNacosSec": 1.287543625,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 1.444821459,
+      "sourceToNacosSec": 1.306057792,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.413815333,
+      "sourceToNacosSec": 1.312805583,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 1.406716958,
+      "sourceToNacosSec": 1.283614083,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.375053542,
+      "sourceToNacosSec": 1.2608534169999999,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "create",
+      "latencySec": 1.426513042,
+      "sourceToNacosSec": 1.291912167,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    },
+    {
+      "scale": 1,
+      "operation": "delete",
+      "latencySec": 1.387833708,
+      "sourceToNacosSec": 1.268422625,
+      "sourceWatchObserved": true,
+      "spotterObserved": true,
+      "nacosWatchObserved": false,
+      "consistencyPolls": 2,
+      "mismatchPolls": 1
+    }
+  ],
+  "crashTransitions": [
+    {
+      "operation": "recover",
+      "latencySec": 6.613684333,
+      "consistencyPolls": 6,
+      "mismatchPolls": 5
+    }
+  ],
+  "pass": false,
+  "failures": [
+    "crash convergence: strict equality did not converge within 2m0s (polls=93 mismatches=93)",
+    "watch coverage missing for create scale 1 (source=true nacos=false)",
+    "watch coverage missing for delete scale 1 (source=true nacos=false)",
+    "watch coverage missing for create scale 1 (source=true nacos=false)",
+    "watch coverage missing for delete scale 1 (source=true nacos=false)",
+    "watch coverage missing for create scale 1 (source=true nacos=false)",
+    "watch coverage missing for delete scale 1 (source=true nacos=false)",
+    "watch coverage missing for create scale 1 (source=true nacos=false)",
+    "watch coverage missing for delete scale 1 (source=true nacos=false)",
+    "watch coverage missing for create scale 1 (source=true nacos=false)",
+    "watch coverage missing for delete scale 1 (source=true nacos=false)",
+    "watch coverage missing for create scale 1 (source=true nacos=false)",
+    "watch coverage missing for delete scale 1 (source=true nacos=false)",
+    "watch coverage missing for create scale 1 (source=true nacos=false)",
+    "watch coverage missing for delete scale 1 (source=true nacos=false)",
+    "watch coverage missing for create scale 1 (source=true nacos=false)",
+    "watch coverage missing for delete scale 1 (source=true nacos=false)",
+    "watch coverage missing for create scale 1 (source=true nacos=false)",
+    "watch coverage missing for delete scale 1 (source=true nacos=false)",
+    "watch coverage missing for create scale 1 (source=true nacos=false)",
+    "watch coverage missing for delete scale 1 (source=true nacos=false)"
+  ]
+}

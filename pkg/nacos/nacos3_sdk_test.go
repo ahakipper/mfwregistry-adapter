@@ -4,11 +4,37 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
+	"github.com/nacos-group/nacos-sdk-go/v3/clients/naming_client/naming_cache"
 	"github.com/nacos-group/nacos-sdk-go/v3/common/remote/codec"
 	"github.com/nacos-group/nacos-sdk-go/v3/model"
 	namingproto "github.com/nacos-group/nacos-sdk-proto/go/naming"
 )
+
+func TestNacos3VendorSubscribeCallbackUsesClusterCacheKey(t *testing.T) {
+	holder := naming_cache.NewServiceInfoHolder("public", t.TempDir(), true, true)
+	defer holder.Close()
+	called := make(chan []model.Instance, 1)
+	callback := func(hosts []model.Instance, err error) {
+		if err == nil {
+			called <- hosts
+		}
+	}
+	clusters := []string{"k8s"}
+	clusterText := "k8s"
+	wrapper := naming_cache.NewSubscribeCallbackFuncWrapper(naming_cache.NewClusterSelector(clusters), &callback)
+	holder.RegisterCallback(serviceKey("payments", DefaultGroup), clusterText, wrapper)
+	holder.ProcessService(&model.Service{Name: "payments", GroupName: DefaultGroup, Clusters: clusterText, LastRefTime: uint64(time.Now().UnixMilli()), Hosts: []model.Instance{{InstanceId: "pod-a", Ip: "10.0.0.1", Port: 8080, ClusterName: "k8s", ServiceName: "payments", Enable: true}}})
+	select {
+	case hosts := <-called:
+		if len(hosts) != 1 || hosts[0].InstanceId != "pod-a" {
+			t.Fatalf("callback hosts = %#v, want pod-a", hosts)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cluster-scoped Subscribe callback was not invoked")
+	}
+}
 
 type recordingNacos3Vendor struct {
 	registered    []InstanceParams
