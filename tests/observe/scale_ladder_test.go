@@ -162,6 +162,33 @@ func TestObserveScaleLadder(t *testing.T) {
 		t.Fatalf("start independent Nacos Subscribe watch: %v", err)
 	}
 	timeline := newWatchTimeline(k8sEvents, nacosEvents.Events())
+	// Prime both independent streams before collecting percentile samples. The
+	// Nacos Subscribe RPC can return before the server-side push stream has
+	// delivered its first changed snapshot; starting the first measured create
+	// immediately makes observer startup latency indistinguishable from product
+	// propagation latency. The warm-up is fully converged and removed, but is
+	// deliberately excluded from the measured sample set.
+	warmIssued := time.Now()
+	warmNames, err := driver.applyBatch(1, 100, warmIssued)
+	if err != nil {
+		t.Fatalf("watch warm-up create: %v", err)
+	}
+	if _, err := waitLadderExact(t, driver, view, child, nil, appCode, warmNames, warmIssued, true, 2*time.Minute); err != nil {
+		t.Fatalf("watch warm-up create convergence: %v", err)
+	}
+	if err := waitWatchCoverage(timeline, warmNames, true, warmIssued, 30*time.Second); err != nil {
+		t.Fatalf("watch warm-up create coverage: %v", err)
+	}
+	warmDeleted := time.Now()
+	if err := driver.deletePods(warmNames, warmDeleted); err != nil {
+		t.Fatalf("watch warm-up delete: %v", err)
+	}
+	if _, err := waitLadderExact(t, driver, view, child, nil, appCode, warmNames, warmDeleted, false, 2*time.Minute); err != nil {
+		t.Fatalf("watch warm-up delete convergence: %v", err)
+	}
+	if err := waitWatchCoverage(timeline, warmNames, false, warmDeleted, 30*time.Second); err != nil {
+		t.Fatalf("watch warm-up delete coverage: %v", err)
+	}
 
 	stamp := time.Now().Format("20060102-150405")
 	scales := []int{1, 10, 100, 500, 1000}
@@ -366,6 +393,19 @@ func allWatchReady(timeline *watchTimeline, names []string, present bool, issued
 		}
 	}
 	return true
+}
+
+func waitWatchCoverage(timeline *watchTimeline, names []string, present bool, issuedAt time.Time, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if allWatchReady(timeline, names, present, issuedAt, true) && allWatchReady(timeline, names, present, issuedAt, false) {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("independent watch coverage missing after %s (source=%v nacos=%v errors=%v)", timeout,
+		allWatchReady(timeline, names, present, issuedAt, true),
+		allWatchReady(timeline, names, present, issuedAt, false), timeline.errorsSnapshot())
 }
 
 func ladderSourceReady(model *sourceModel, appCode string, names []string, present bool) bool {
