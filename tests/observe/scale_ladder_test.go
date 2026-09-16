@@ -164,7 +164,11 @@ func TestObserveScaleLadder(t *testing.T) {
 	timeline := newWatchTimeline(k8sEvents, nacosEvents.Events())
 
 	stamp := time.Now().Format("20060102-150405")
-	report := scaleLadderReport{Stamp: stamp, Target: "Nacos 3 ARM64 + KWork", Scales: []int{1, 10, 100, 500, 1000}}
+	scales := []int{1, 10, 100, 500, 1000}
+	if os.Getenv("OBS_LADDER_DIAGNOSTIC") == "1" {
+		scales = []int{1}
+	}
+	report := scaleLadderReport{Stamp: stamp, Target: "Nacos 3 ARM64 + KWork", Scales: scales}
 	for _, scale := range report.Scales {
 		repetitions := ladderRepetitions(scale)
 		for i := 0; i < repetitions; i++ {
@@ -231,6 +235,11 @@ func TestObserveScaleLadder(t *testing.T) {
 
 	report.Aggregates = aggregateLadder(report.Samples)
 	report.WatchErrors = timeline.errorsSnapshot()
+	for _, sample := range report.Samples {
+		if !sample.SourceWatch || !sample.NacosWatch {
+			report.Failures = append(report.Failures, fmt.Sprintf("watch coverage missing for %s scale %d (source=%v nacos=%v)", sample.Operation, sample.Scale, sample.SourceWatch, sample.NacosWatch))
+		}
+	}
 	if len(report.WatchErrors) > 0 {
 		report.Failures = append(report.Failures, report.WatchErrors...)
 	}
@@ -302,7 +311,7 @@ func waitLadderExact(t *testing.T, driver *churnDriver, view *nacosView, child *
 		diff := compareService(appCode, model, remote["k8s"], driver.ledgerLookup, time.Minute, now)
 		watchSourceReady := timeline == nil || allWatchReady(timeline, names, present, issuedAt, true)
 		watchNacosReady := timeline == nil || allWatchReady(timeline, names, present, issuedAt, false)
-		if len(diff.Divergences) == 0 && diff.InFlightCount == 0 && spotterOK && ladderIDsPresent(model, remote["k8s"], appCode, names, present) && watchSourceReady && watchNacosReady {
+		if len(diff.Divergences) == 0 && diff.InFlightCount == 0 && spotterOK && ladderIDsPresent(model, remote["k8s"], appCode, names, present) {
 			result.Latency = now.Sub(issuedAt)
 			if !result.SourceSeen.IsZero() {
 				result.SourceToNacos = now.Sub(result.SourceSeen)
