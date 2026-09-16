@@ -102,8 +102,8 @@ func TestObserveScaleLadder(t *testing.T) {
 		t.Skipf("NOT VERIFIED: EnvError kwok kubeconfig %s: %v", cfg.Kubeconfig, err)
 	}
 
-	const appCode = "ladder-app"
-	driver := newChurnDriver(cfg.Kubeconfig, []string{appCode}, "ladder-app")
+	const appCode = "ladder-app-0"
+	driver := newChurnDriver(cfg.Kubeconfig, []string{appCode}, "ladder")
 	if _, err := driver.kubectlStdin("", "get", "nodes"); err != nil {
 		t.Skipf("NOT VERIFIED: EnvError kwok preflight: %v", err)
 	}
@@ -302,7 +302,7 @@ func waitLadderExact(t *testing.T, driver *churnDriver, view *nacosView, child *
 		diff := compareService(appCode, model, remote["k8s"], driver.ledgerLookup, time.Minute, now)
 		watchSourceReady := timeline == nil || allWatchReady(timeline, names, present, issuedAt, true)
 		watchNacosReady := timeline == nil || allWatchReady(timeline, names, present, issuedAt, false)
-		if len(diff.Divergences) == 0 && diff.InFlightCount == 0 && spotterOK && ladderIDsPresent(model, remote["k8s"], names, present) && watchSourceReady && watchNacosReady {
+		if len(diff.Divergences) == 0 && diff.InFlightCount == 0 && spotterOK && ladderIDsPresent(model, remote["k8s"], appCode, names, present) && watchSourceReady && watchNacosReady {
 			result.Latency = now.Sub(issuedAt)
 			if !result.SourceSeen.IsZero() {
 				result.SourceToNacos = now.Sub(result.SourceSeen)
@@ -345,7 +345,7 @@ func ladderSourceReady(model *sourceModel, appCode string, names []string, prese
 	return true
 }
 
-func ladderIDsPresent(model *sourceModel, remote []remoteEntry, names []string, present bool) bool {
+func ladderIDsPresent(model *sourceModel, remote []remoteEntry, appCode string, names []string, present bool) bool {
 	want := map[string]bool{}
 	for _, name := range names {
 		want[name] = true
@@ -360,7 +360,7 @@ func ladderIDsPresent(model *sourceModel, remote []remoteEntry, names []string, 
 		}
 	}
 	if present {
-		return len(model.Entries["ladder-app"]) >= len(names)
+		return len(model.Entries[appCode]) >= len(names)
 	}
 	return true
 }
