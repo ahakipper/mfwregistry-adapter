@@ -23,6 +23,11 @@ finish() {
   rc=$?
   printf 'EXIT_CODE=%d\n' "$rc" > "$status"
   rm -f "$pid_file"
+  # launchctl submit may respawn a completed submitted service. Remove our own
+  # label after the terminal status is durable so a successful gate runs once.
+  if [[ -n "${XPC_SERVICE_NAME:-}" ]]; then
+    (/bin/launchctl remove "$XPC_SERVICE_NAME" >/dev/null 2>&1 || true) &
+  fi
 }
 trap finish EXIT
 
