@@ -3,6 +3,7 @@ set -euo pipefail
 
 grep -q 'OBS_KUBECONFIG external mode' Makefile
 grep -q 'external kubeconfig mode: no deletion' scripts/observe-down.sh
+bash -n scripts/observe-runner.sh
 root=$(cd "$(dirname "$0")/.." && pwd)
 rm -f "$root/build/observe/observe-state" "$root/build/observe/observe-state.sha256"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/observe-life.XXXXXX")
