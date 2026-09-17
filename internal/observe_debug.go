@@ -19,6 +19,7 @@ const observeEventCapacity = 32768
 // emitted after K8s conversion/filtering and before the worker calls sinks.
 type observeDebugEvent struct {
 	Sequence         uint64 `json:"sequence"`
+	Boundary         string `json:"boundary"`
 	TriggerAt        string `json:"triggerAt"`
 	ObservedAt       string `json:"observedAt"`
 	InstanceID       string `json:"instanceId"`
@@ -64,7 +65,7 @@ func (r *observeEventRecorder) record(triggerTime int64, ins *v2.Instance) {
 	r.mu.Lock()
 	r.next++
 	event := observeDebugEvent{
-		Sequence: r.next, TriggerAt: triggerAt, ObservedAt: now.Format(time.RFC3339Nano),
+		Sequence: r.next, Boundary: "cache-applied/pre-worker", TriggerAt: triggerAt, ObservedAt: now.Format(time.RFC3339Nano),
 		InstanceID: ins.InstanceId, AppCode: ins.AppCode, SourceKey: ins.SourceKey,
 		SourceCluster: ins.SourceCluster, Reversion: ins.Reversion, Status: ins.Status,
 		CanonicalPayload: domaininstance.CanonicalPayload(ins),

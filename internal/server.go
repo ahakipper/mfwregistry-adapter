@@ -252,11 +252,20 @@ func (s *Server) handleObserveDebugSnapshot(w http.ResponseWriter, r *http.Reque
 	s.Unlock()
 	instances := make([]*v2.Instance, 0)
 	canonical := make([]string, 0)
+	cacheGeneration := uint64(0)
 	for _, provider := range providersSnapshot {
 		if provider == nil {
 			continue
 		}
-		for _, instance := range provider.GetAll() {
+		providerInstances := provider.GetAll()
+		if cacheSnapshotter, ok := provider.(k8s.ObserveCacheSnapshotter); ok {
+			var generation uint64
+			providerInstances, generation = cacheSnapshotter.ObserveCacheSnapshot()
+			if generation > cacheGeneration {
+				cacheGeneration = generation
+			}
+		}
+		for _, instance := range providerInstances {
 			if instance != nil && instance.Provider == providers.ProviderK8s {
 				instances = append(instances, instance)
 				canonical = append(canonical, domaininstance.CanonicalPayload(instance))
@@ -277,7 +286,8 @@ func (s *Server) handleObserveDebugSnapshot(w http.ResponseWriter, r *http.Reque
 		CanonicalPayload    []string       `json:"canonicalPayload"`
 		ObserverProviders   int            `json:"observerProviders"`
 		LatestEventSequence uint64         `json:"latestEventSequence"`
-	}{ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), Instances: instances, CanonicalPayload: canonical, ObserverProviders: observerProviders, LatestEventSequence: latestSequence})
+		CacheGeneration     uint64         `json:"cacheGeneration"`
+	}{ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), Instances: instances, CanonicalPayload: canonical, ObserverProviders: observerProviders, LatestEventSequence: latestSequence, CacheGeneration: cacheGeneration})
 }
 
 func (s *Server) stopMetricsServer() {

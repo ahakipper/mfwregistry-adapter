@@ -100,27 +100,6 @@ func TestSetDropObserverNilIsSilent(t *testing.T) {
 	// have panicked inside notifyDrop).
 }
 
-func TestSourceEventObserverRunsBeforeQueueCoalescing(t *testing.T) {
-	owner := &robot{}
-	watcher := &clusterWatcher{cluster: Cluster{ClusterID: "cluster-a"}, owner: owner}
-	queue := newCoalescingQueue(1)
-	seen := make(chan QueueObject, 1)
-	owner.SetSourceEventObserver(func(obj QueueObject, pod *corev1.Pod) {
-		if pod != nil && pod.Name == "pod-a" {
-			seen <- obj
-		}
-	})
-	watcher.enqueue(EventUpdate, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-a", Namespace: "default", UID: "uid-a"}}, queue)
-	select {
-	case got := <-seen:
-		if got.Event != EventUpdate || got.ClusterID != "cluster-a" || got.Key != "default/pod-a" || got.CreateAt.IsZero() {
-			t.Fatalf("source observer event = %+v, want complete update boundary", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("source observer did not receive informer boundary")
-	}
-}
-
 // TestSetDropObserverSwappable pins the race-safe read path: a second
 // SetDropObserver call (after the first) takes effect for later drops —
 // the atomic value supports the swap, which the -race build also verifies

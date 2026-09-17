@@ -154,36 +154,55 @@ type MetricsReporter interface {
 }
 
 // InstanceEventObserver is the guarded Observe harness seam. Production never
-// installs it. The callback fires after K8s conversion/filtering and before the
-// worker submits the Instance to sinks, which is the Spotter middle-plane
-// boundary needed for per-instance latency correlation.
+// installs it. The callback fires from eventSync after pod2Instance has applied
+// the converted Instance to the provider cache and immediately before
+// worker.Handle submits it to sinks. That is the first real Spotter-owned
+// middle-plane boundary; the robot informer callback is only another K8s
+// observer and must not be reported as processed Spotter state.
 type InstanceEventObserver interface {
 	SetInstanceEventObserver(func(triggerTime int64, instance *sv.Instance))
+}
+
+// ObserveCacheSnapshotter exposes the provider's active internal cache only to
+// the guarded Observe endpoint. Offline tombstones remain in the operational
+// cache so deletes retain their last-known endpoint, but are excluded from the
+// active desired-state projection compared with K8s and Nacos.
+type ObserveCacheSnapshotter interface {
+	ObserveCacheSnapshot() ([]*sv.Instance, uint64)
 }
 
 func (k *k8s) SetInstanceEventObserver(observer func(triggerTime int64, instance *sv.Instance)) {
 	k.Lock()
 	k.instanceObserver = observer
 	k.Unlock()
-	if source, ok := k.robot.(interface {
-		SetSourceEventObserver(func(k8srobot.QueueObject, *v1.Pod))
-	}); ok {
-		source.SetSourceEventObserver(k.observeSourceEvent)
-	}
 }
 
-func (k *k8s) observeSourceEvent(obj k8srobot.QueueObject, pod *v1.Pod) {
-	k.ensureDeps()
-	ins := formatInstanceWithDeps(&obj, pod, k.pushAppCodes, k.logger)
-	if ins == nil || k.VerifyInstance(ins) != nil {
-		return
-	}
+func (k *k8s) observeInstanceEvent(triggerTime int64, ins *sv.Instance) {
 	k.Lock()
 	observer := k.instanceObserver
 	k.Unlock()
 	if observer != nil {
-		observer(obj.CreateAt.UnixNano(), ins)
+		observer(triggerTime, ins)
 	}
+}
+
+func (k *k8s) ObserveCacheSnapshot() ([]*sv.Instance, uint64) {
+	cache := k.cacheRef()
+	if cache == nil {
+		return []*sv.Instance{}, 0
+	}
+	all := cache.List()
+	active := make([]*sv.Instance, 0, len(all))
+	for _, ins := range all {
+		if ins == nil || ins.Status == providers.InstanceStatusOffline {
+			continue
+		}
+		active = append(active, ins)
+	}
+	k.Lock()
+	generation := k.generation
+	k.Unlock()
+	return active, generation
 }
 
 func (k *k8s) SetMetricsRecorder(recorder ports.MetricsRecorder) {
@@ -515,6 +534,9 @@ func (k *k8s) VerifyInstance(ins *sv.Instance) error {
 
 // eventSync sync the event to the finder
 func (k *k8s) eventSync(ins *sv.Instance, triggerTime int64) {
+	if ins == nil {
+		return
+	}
 	sequence := uint64(0)
 	scope := "k8s"
 	if ins != nil && ins.Reversion > 0 {
@@ -523,6 +545,7 @@ func (k *k8s) eventSync(ins *sv.Instance, triggerTime int64) {
 	if ins != nil && ins.SourceCluster != "" {
 		scope = ins.SourceCluster
 	}
+	k.observeInstanceEvent(triggerTime, ins)
 	k.worker.Handle(&worker.Event{
 		Trigger:  triggerTime,
 		Data:     []*sv.Instance{ins},

@@ -45,18 +45,34 @@ func TestConvertPodUsesCompleteProductionInstanceProjection(t *testing.T) {
 }
 
 func TestInstanceEventObserverReceivesConvertedEventBoundary(t *testing.T) {
-	provider := &k8s{filters: providers.InitInstanceFilters(), logger: ports.NopLogger{}}
+	worker := &fakeWorker{}
+	provider := &k8s{
+		filters: providers.InitInstanceFilters(), logger: ports.NopLogger{},
+		cache: providers.NewCache(2), worker: worker,
+	}
 	trigger := time.Now().Add(-time.Second).UnixNano()
 	pod := newValidPod("msp", "pod-a")
 	pod.Labels["team"] = "payments"
+	instance := ConvertPod(&k8srobot.QueueObject{ClusterID: "cluster-a"}, pod, nil, ports.NopLogger{})
+	provider.ProcessCache(k8srobot.EventUpdate, instance)
 	var gotTrigger int64
 	var got *sv.Instance
 	provider.SetInstanceEventObserver(func(eventTrigger int64, instance *sv.Instance) {
+		if len(worker.handleSnapshot()) != 0 {
+			t.Fatal("observer ran after worker.Handle; want the cache-applied/pre-worker boundary")
+		}
+		cached, _ := provider.ObserveCacheSnapshot()
+		if len(cached) != 1 || cached[0].InstanceId != "pod-a" {
+			t.Fatalf("observer saw cache snapshot %#v, want pod-a already applied", cached)
+		}
 		gotTrigger = eventTrigger
 		got = instance
 	})
-	provider.observeSourceEvent(k8srobot.QueueObject{Event: k8srobot.EventUpdate, CreateAt: time.Unix(0, trigger)}, pod)
+	provider.eventSync(instance, trigger)
 	if gotTrigger != trigger || got == nil || got.InstanceId != pod.Name || got.Reversion != 42 || got.Label["team"] != "payments" {
 		t.Fatalf("observer event = trigger:%d instance:%#v, want complete pod-a event at %d", gotTrigger, got, trigger)
+	}
+	if len(worker.handleSnapshot()) != 1 {
+		t.Fatalf("worker.Handle calls = %d, want 1 after observer", len(worker.handleSnapshot()))
 	}
 }

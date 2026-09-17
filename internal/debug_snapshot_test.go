@@ -11,7 +11,8 @@ import (
 )
 
 type debugSnapshotProvider struct {
-	instances []*v2.Instance
+	instances      []*v2.Instance
+	cacheInstances []*v2.Instance
 }
 
 func TestObserveDebugEventsExposeOrderedCanonicalBoundary(t *testing.T) {
@@ -36,7 +37,7 @@ func TestObserveDebugEventsExposeOrderedCanonicalBoundary(t *testing.T) {
 		t.Fatalf("event batch = %+v, want bounded sequence 2..3 with gap", got)
 	}
 	last := got.Events[1]
-	if last.Sequence != 3 || last.InstanceID != "pod-c" || last.Status != 3 || last.Reversion != 44 || last.CanonicalPayload == "" || last.ObservedAt == "" {
+	if last.Sequence != 3 || last.Boundary != "cache-applied/pre-worker" || last.InstanceID != "pod-c" || last.Status != 3 || last.Reversion != 44 || last.CanonicalPayload == "" || last.ObservedAt == "" {
 		t.Fatalf("last event = %+v, want complete pod-c boundary", last)
 	}
 }
@@ -44,11 +45,17 @@ func TestObserveDebugEventsExposeOrderedCanonicalBoundary(t *testing.T) {
 func (p debugSnapshotProvider) Run() error             { return nil }
 func (p debugSnapshotProvider) CompareAndFlush()       {}
 func (p debugSnapshotProvider) GetAll() []*v2.Instance { return p.instances }
+func (p debugSnapshotProvider) ObserveCacheSnapshot() ([]*v2.Instance, uint64) {
+	return p.cacheInstances, 17
+}
 
 func TestObserveDebugSnapshotReturnsProviderProjection(t *testing.T) {
 	want := &v2.Instance{InstanceId: "pod-a", Provider: providers.ProviderK8s, AppCode: "pay-user", Reversion: 42, Label: map[string]string{"env": "test"}}
 	s := &Server{Providers: []providers.Provider{
-		debugSnapshotProvider{instances: []*v2.Instance{want, {InstanceId: "ecs-a", Provider: providers.ProviderEcs}}},
+		debugSnapshotProvider{
+			instances:      []*v2.Instance{{InstanceId: "informer-only", Provider: providers.ProviderK8s}},
+			cacheInstances: []*v2.Instance{want, {InstanceId: "ecs-a", Provider: providers.ProviderEcs}},
+		},
 	}}
 	req := httptest.NewRequest("GET", "/debug/spotter/k8s", nil)
 	resp := httptest.NewRecorder()
@@ -57,13 +64,17 @@ func TestObserveDebugSnapshotReturnsProviderProjection(t *testing.T) {
 		t.Fatalf("debug snapshot status = %d, want 200", resp.Code)
 	}
 	var got struct {
-		Instances []*v2.Instance `json:"instances"`
+		Instances       []*v2.Instance `json:"instances"`
+		CacheGeneration uint64         `json:"cacheGeneration"`
 	}
 	if err := json.Unmarshal(resp.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode debug snapshot: %v", err)
 	}
 	if len(got.Instances) != 1 || got.Instances[0].InstanceId != want.InstanceId || got.Instances[0].Reversion != want.Reversion || got.Instances[0].Label["env"] != "test" {
 		t.Fatalf("debug snapshot instances = %#v, want the complete K8s projection", got.Instances)
+	}
+	if got.CacheGeneration != 17 {
+		t.Fatalf("debug snapshot cache generation = %d, want 17", got.CacheGeneration)
 	}
 }
 
