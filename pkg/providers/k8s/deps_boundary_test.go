@@ -2,11 +2,15 @@ package k8s
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"spotter/internal/ports"
+	sv "spotter/pkg/beehive/service/v2"
 	"spotter/pkg/k8srobot"
-	"testing"
+	"spotter/pkg/providers"
 )
 
 type depsTestLogger struct{ ports.NopLogger }
@@ -37,5 +41,22 @@ func TestConvertPodUsesCompleteProductionInstanceProjection(t *testing.T) {
 	got := ConvertPod(&k8srobot.QueueObject{ClusterID: "cluster-a"}, pod, nil, ports.NopLogger{})
 	if got == nil || got.Reversion != 42 || got.Label["custom"] != "kept" || got.Image["application"] != "repo/app:v7" || len(got.Ports) != 2 {
 		t.Fatalf("ConvertPod() = %#v, want full labels/reversion/image/ports projection", got)
+	}
+}
+
+func TestInstanceEventObserverReceivesConvertedEventBoundary(t *testing.T) {
+	provider := &k8s{filters: providers.InitInstanceFilters(), logger: ports.NopLogger{}}
+	trigger := time.Now().Add(-time.Second).UnixNano()
+	pod := newValidPod("msp", "pod-a")
+	pod.Labels["team"] = "payments"
+	var gotTrigger int64
+	var got *sv.Instance
+	provider.SetInstanceEventObserver(func(eventTrigger int64, instance *sv.Instance) {
+		gotTrigger = eventTrigger
+		got = instance
+	})
+	provider.observeSourceEvent(k8srobot.QueueObject{Event: k8srobot.EventUpdate, CreateAt: time.Unix(0, trigger)}, pod)
+	if gotTrigger != trigger || got == nil || got.InstanceId != pod.Name || got.Reversion != 42 || got.Label["team"] != "payments" {
+		t.Fatalf("observer event = trigger:%d instance:%#v, want complete pod-a event at %d", gotTrigger, got, trigger)
 	}
 }

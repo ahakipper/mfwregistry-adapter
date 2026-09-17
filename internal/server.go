@@ -73,7 +73,9 @@ type Server struct {
 
 	// stopMetrics stops the Prometheus HTTP server started by Run; nil when
 	// no metrics server was started.
-	stopMetrics func() error
+	stopMetrics           func() error
+	observeDebug          *observeEventRecorder
+	observeDebugProviders int
 
 	sync.Mutex
 }
@@ -234,7 +236,10 @@ func (s *Server) registerObserveDebugEndpoint() {
 	if os.Getenv("SPOTTER_OBSERVE_DEBUG") != "1" {
 		return
 	}
-	http.HandleFunc("/debug/spotter/k8s", s.handleObserveDebugSnapshot)
+	if s.observeDebug == nil {
+		s.observeDebug = newObserveEventRecorder(observeEventCapacity)
+	}
+	registerObserveDebugHandlers(s)
 }
 
 func (s *Server) handleObserveDebugSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -259,11 +264,20 @@ func (s *Server) handleObserveDebugSnapshot(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
+	s.Lock()
+	observerProviders := s.observeDebugProviders
+	s.Unlock()
+	latestSequence := uint64(0)
+	if s.observeDebug != nil {
+		latestSequence = s.observeDebug.latestSequence()
+	}
 	_ = json.NewEncoder(w).Encode(struct {
-		ObservedAt       string         `json:"observedAt"`
-		Instances        []*v2.Instance `json:"instances"`
-		CanonicalPayload []string       `json:"canonicalPayload"`
-	}{ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), Instances: instances, CanonicalPayload: canonical})
+		ObservedAt          string         `json:"observedAt"`
+		Instances           []*v2.Instance `json:"instances"`
+		CanonicalPayload    []string       `json:"canonicalPayload"`
+		ObserverProviders   int            `json:"observerProviders"`
+		LatestEventSequence uint64         `json:"latestEventSequence"`
+	}{ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), Instances: instances, CanonicalPayload: canonical, ObserverProviders: observerProviders, LatestEventSequence: latestSequence})
 }
 
 func (s *Server) stopMetricsServer() {
@@ -526,6 +540,12 @@ func (s *Server) startProviders() error {
 	// unchanged). The recorder is the same one the drop observer closes
 	// over, so both series of the queue's health land on one recorder.
 	for _, provider := range prs {
+		if observer, ok := provider.(k8s.InstanceEventObserver); ok && s.observeDebug != nil {
+			observer.SetInstanceEventObserver(s.observeDebug.record)
+			s.Lock()
+			s.observeDebugProviders++
+			s.Unlock()
+		}
 		if reporter, ok := provider.(k8s.QueueDepthReporter); ok {
 			reporter.SetQueueDepthReporter(s.metrics)
 		}

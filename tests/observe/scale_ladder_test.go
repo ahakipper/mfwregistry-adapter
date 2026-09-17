@@ -23,37 +23,62 @@ import (
 // latency. The sample is strict: every poll uses compareService, which checks
 // the complete projected Instance including labels, metadata, and Reversion.
 type ladderSample struct {
-	Scale            int     `json:"scale"`
-	Operation        string  `json:"operation"`
-	LatencySec       float64 `json:"latencySec"`
-	SourceToNacosSec float64 `json:"sourceToNacosSec"`
-	SourceWatch      bool    `json:"sourceWatchObserved"`
-	SpotterObserved  bool    `json:"spotterObserved"`
-	NacosWatch       bool    `json:"nacosWatchObserved"`
-	Polls            int     `json:"consistencyPolls"`
-	MismatchPolls    int     `json:"mismatchPolls"`
+	Scale                  int     `json:"scale"`
+	Operation              string  `json:"operation"`
+	LatencySec             float64 `json:"latencySec"`
+	SourceToNacosSec       float64 `json:"sourceToNacosSec"`
+	APIToK8sWatchSec       float64 `json:"apiToK8sWatchSec"`
+	APIToSpotterEventSec   float64 `json:"apiToSpotterEventSec"`
+	K8sWatchToSpotterSec   float64 `json:"k8sWatchToSpotterSec"`
+	SpotterToNacosWatchSec float64 `json:"spotterToNacosWatchSec"`
+	APIToNacosWatchSec     float64 `json:"apiToNacosWatchSec"`
+	SourceWatch            bool    `json:"sourceWatchObserved"`
+	SpotterObserved        bool    `json:"spotterObserved"`
+	NacosWatch             bool    `json:"nacosWatchObserved"`
+	Polls                  int     `json:"consistencyPolls"`
+	MismatchPolls          int     `json:"mismatchPolls"`
 }
 
 type ladderAggregate struct {
-	Scale            int     `json:"scale"`
-	Operation        string  `json:"operation"`
-	Samples          int     `json:"samples"`
-	P90              float64 `json:"p90"`
-	P95              float64 `json:"p95"`
-	P99              float64 `json:"p99"`
-	Max              float64 `json:"max"`
-	SourceToNacosP90 float64 `json:"sourceToNacosP90"`
-	SourceToNacosP95 float64 `json:"sourceToNacosP95"`
-	SourceToNacosP99 float64 `json:"sourceToNacosP99"`
-	ConsistencyPolls int     `json:"consistencyPolls"`
-	MismatchPolls    int     `json:"mismatchPolls"`
+	Scale                  int     `json:"scale"`
+	Operation              string  `json:"operation"`
+	Samples                int     `json:"samples"`
+	P90                    float64 `json:"p90"`
+	P95                    float64 `json:"p95"`
+	P99                    float64 `json:"p99"`
+	Max                    float64 `json:"max"`
+	SourceToNacosP90       float64 `json:"sourceToNacosP90"`
+	SourceToNacosP95       float64 `json:"sourceToNacosP95"`
+	SourceToNacosP99       float64 `json:"sourceToNacosP99"`
+	APIToK8sWatchP90       float64 `json:"apiToK8sWatchP90"`
+	APIToK8sWatchP95       float64 `json:"apiToK8sWatchP95"`
+	APIToK8sWatchP99       float64 `json:"apiToK8sWatchP99"`
+	APIToSpotterEventP90   float64 `json:"apiToSpotterEventP90"`
+	APIToSpotterEventP95   float64 `json:"apiToSpotterEventP95"`
+	APIToSpotterEventP99   float64 `json:"apiToSpotterEventP99"`
+	K8sWatchToSpotterP90   float64 `json:"k8sWatchToSpotterP90"`
+	K8sWatchToSpotterP95   float64 `json:"k8sWatchToSpotterP95"`
+	K8sWatchToSpotterP99   float64 `json:"k8sWatchToSpotterP99"`
+	SpotterToNacosWatchP90 float64 `json:"spotterToNacosWatchP90"`
+	SpotterToNacosWatchP95 float64 `json:"spotterToNacosWatchP95"`
+	SpotterToNacosWatchP99 float64 `json:"spotterToNacosWatchP99"`
+	APIToNacosWatchP90     float64 `json:"apiToNacosWatchP90"`
+	APIToNacosWatchP95     float64 `json:"apiToNacosWatchP95"`
+	APIToNacosWatchP99     float64 `json:"apiToNacosWatchP99"`
+	ConsistencyPolls       int     `json:"consistencyPolls"`
+	MismatchPolls          int     `json:"mismatchPolls"`
 }
 
 type crashTransition struct {
-	Operation  string  `json:"operation"`
-	LatencySec float64 `json:"latencySec"`
-	Polls      int     `json:"consistencyPolls"`
-	Mismatches int     `json:"mismatchPolls"`
+	Operation              string  `json:"operation"`
+	LatencySec             float64 `json:"latencySec"`
+	APIToK8sWatchSec       float64 `json:"apiToK8sWatchSec"`
+	APIToSpotterEventSec   float64 `json:"apiToSpotterEventSec"`
+	K8sWatchToSpotterSec   float64 `json:"k8sWatchToSpotterSec"`
+	SpotterToNacosWatchSec float64 `json:"spotterToNacosWatchSec"`
+	APIToNacosWatchSec     float64 `json:"apiToNacosWatchSec"`
+	Polls                  int     `json:"consistencyPolls"`
+	Mismatches             int     `json:"mismatchPolls"`
 }
 
 type scaleLadderReport struct {
@@ -69,14 +94,19 @@ type scaleLadderReport struct {
 }
 
 type ladderWaitResult struct {
-	Latency         time.Duration
-	SourceToNacos   time.Duration
-	SourceSeen      time.Time
-	SourceWatchSeen time.Time
-	SpotterSeen     time.Time
-	NacosWatchSeen  time.Time
-	Polls           int
-	Mismatches      int
+	Latency             time.Duration
+	SourceToNacos       time.Duration
+	SourceSeen          time.Time
+	SourceWatchSeen     time.Time
+	SpotterSeen         time.Time
+	NacosWatchSeen      time.Time
+	APIToK8sWatch       time.Duration
+	APIToSpotterEvent   time.Duration
+	K8sWatchToSpotter   time.Duration
+	SpotterToNacosWatch time.Duration
+	APIToNacosWatch     time.Duration
+	Polls               int
+	Mismatches          int
 }
 
 // TestObserveScaleLadder measures single-Pod, 10-Pod, 100-Pod, 500-Pod and
@@ -161,7 +191,8 @@ func TestObserveScaleLadder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start independent Nacos Subscribe watch: %v", err)
 	}
-	timeline := newWatchTimeline(k8sEvents, nacosEvents.Events())
+	spotterEvents := startSpotterEventWatch(watchCtx, cfg.MetricsPort)
+	timeline := newWatchTimeline(k8sEvents, spotterEvents, nacosEvents.Events())
 	// Prime both independent streams before collecting percentile samples. The
 	// Nacos Subscribe RPC can return before the server-side push stream has
 	// delivered its first changed snapshot; starting the first measured create
@@ -209,7 +240,7 @@ func TestObserveScaleLadder(t *testing.T) {
 			if err != nil {
 				report.Failures = append(report.Failures, fmt.Sprintf("create scale %d sample %d: %v", scale, i+1, err))
 			} else {
-				report.Samples = append(report.Samples, ladderSample{Scale: scale, Operation: "create", LatencySec: wait.Latency.Seconds(), SourceToNacosSec: wait.SourceToNacos.Seconds(), SourceWatch: !wait.SourceWatchSeen.IsZero(), SpotterObserved: !wait.SpotterSeen.IsZero(), NacosWatch: !wait.NacosWatchSeen.IsZero(), Polls: wait.Polls, MismatchPolls: wait.Mismatches})
+				report.Samples = append(report.Samples, ladderSampleFromWait(scale, "create", wait))
 			}
 			deletedAt := time.Now()
 			if err := driver.deletePods(names, deletedAt); err != nil {
@@ -220,7 +251,7 @@ func TestObserveScaleLadder(t *testing.T) {
 			if err != nil {
 				report.Failures = append(report.Failures, fmt.Sprintf("delete scale %d sample %d: %v", scale, i+1, err))
 			} else {
-				report.Samples = append(report.Samples, ladderSample{Scale: scale, Operation: "delete", LatencySec: wait.Latency.Seconds(), SourceToNacosSec: wait.SourceToNacos.Seconds(), SourceWatch: !wait.SourceWatchSeen.IsZero(), SpotterObserved: !wait.SpotterSeen.IsZero(), NacosWatch: !wait.NacosWatchSeen.IsZero(), Polls: wait.Polls, MismatchPolls: wait.Mismatches})
+				report.Samples = append(report.Samples, ladderSampleFromWait(scale, "delete", wait))
 			}
 		}
 	}
@@ -242,7 +273,7 @@ func TestObserveScaleLadder(t *testing.T) {
 			} else if wait, err := waitLadderExact(t, driver, view, child, timeline, appCode, names, crashAt, true, 2*time.Minute); err != nil {
 				report.Failures = append(report.Failures, fmt.Sprintf("crash convergence: %v", err))
 			} else {
-				report.Crash = append(report.Crash, crashTransition{Operation: "crash", LatencySec: wait.Latency.Seconds(), Polls: wait.Polls, Mismatches: wait.Mismatches})
+				report.Crash = append(report.Crash, crashTransitionFromWait("crash", wait))
 			}
 			recoverAt := time.Now()
 			if err := driver.patchRecovered(names[0], recoverAt); err != nil {
@@ -250,7 +281,7 @@ func TestObserveScaleLadder(t *testing.T) {
 			} else if wait, err := waitLadderExact(t, driver, view, child, timeline, appCode, names, recoverAt, true, 2*time.Minute); err != nil {
 				report.Failures = append(report.Failures, fmt.Sprintf("crash recovery convergence: %v", err))
 			} else {
-				report.Crash = append(report.Crash, crashTransition{Operation: "recover", LatencySec: wait.Latency.Seconds(), Polls: wait.Polls, Mismatches: wait.Mismatches})
+				report.Crash = append(report.Crash, crashTransitionFromWait("recover", wait))
 			}
 		}
 		if err := driver.deletePods(names, time.Now()); err != nil {
@@ -263,8 +294,8 @@ func TestObserveScaleLadder(t *testing.T) {
 	report.Aggregates = aggregateLadder(report.Samples)
 	report.WatchErrors = timeline.errorsSnapshot()
 	for _, sample := range report.Samples {
-		if !sample.SourceWatch || !sample.NacosWatch {
-			report.Failures = append(report.Failures, fmt.Sprintf("watch coverage missing for %s scale %d (source=%v nacos=%v)", sample.Operation, sample.Scale, sample.SourceWatch, sample.NacosWatch))
+		if !sample.SourceWatch || !sample.SpotterObserved || !sample.NacosWatch {
+			report.Failures = append(report.Failures, fmt.Sprintf("watch coverage missing for %s scale %d (source=%v spotter=%v nacos=%v)", sample.Operation, sample.Scale, sample.SourceWatch, sample.SpotterObserved, sample.NacosWatch))
 		}
 	}
 	if len(report.WatchErrors) > 0 {
@@ -337,18 +368,25 @@ func waitLadderExact(t *testing.T, driver *churnDriver, view *nacosView, child *
 			continue
 		}
 		diff := compareService(appCode, model, remote["k8s"], driver.ledgerLookup, time.Minute, now)
-		watchSourceReady := timeline == nil || allWatchReady(timeline, names, present, issuedAt, true)
-		watchNacosReady := timeline == nil || allWatchReady(timeline, names, present, issuedAt, false)
-		if len(diff.Divergences) == 0 && diff.InFlightCount == 0 && spotterOK && ladderIDsPresent(model, remote["k8s"], appCode, names, present) {
+		boundaryOK := timeline == nil
+		var sourceWatchAt, spotterEventAt, nacosWatchAt time.Time
+		if timeline != nil {
+			sourceWatchAt, spotterEventAt, nacosWatchAt, boundaryOK = timeline.boundaryTimes(names, present, issuedAt)
+		}
+		if len(diff.Divergences) == 0 && diff.InFlightCount == 0 && spotterOK && ladderIDsPresent(model, remote["k8s"], appCode, names, present) && boundaryOK {
 			result.Latency = now.Sub(issuedAt)
 			if !result.SourceSeen.IsZero() {
 				result.SourceToNacos = now.Sub(result.SourceSeen)
 			}
-			if watchSourceReady {
-				result.SourceWatchSeen = now
-			}
-			if watchNacosReady {
-				result.NacosWatchSeen = now
+			if timeline != nil {
+				result.SourceWatchSeen = sourceWatchAt
+				result.SpotterSeen = spotterEventAt
+				result.NacosWatchSeen = nacosWatchAt
+				result.APIToK8sWatch = sourceWatchAt.Sub(issuedAt)
+				result.APIToSpotterEvent = spotterEventAt.Sub(issuedAt)
+				result.K8sWatchToSpotter = spotterEventAt.Sub(sourceWatchAt)
+				result.SpotterToNacosWatch = nacosWatchAt.Sub(spotterEventAt)
+				result.APIToNacosWatch = nacosWatchAt.Sub(issuedAt)
 			}
 			return result, nil
 		}
@@ -398,14 +436,21 @@ func allWatchReady(timeline *watchTimeline, names []string, present bool, issued
 func waitWatchCoverage(timeline *watchTimeline, names []string, present bool, issuedAt time.Time, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if allWatchReady(timeline, names, present, issuedAt, true) && allWatchReady(timeline, names, present, issuedAt, false) {
+		if _, _, _, ok := timeline.boundaryTimes(names, present, issuedAt); ok {
 			return nil
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	return fmt.Errorf("independent watch coverage missing after %s (source=%v nacos=%v errors=%v)", timeout,
+	spotterReady := true
+	for _, name := range names {
+		if !timeline.spotterReady(name, present, issuedAt) {
+			spotterReady = false
+			break
+		}
+	}
+	return fmt.Errorf("independent watch coverage missing after %s (source=%v spotter=%v nacos=%v errors=%v)", timeout,
 		allWatchReady(timeline, names, present, issuedAt, true),
-		allWatchReady(timeline, names, present, issuedAt, false), timeline.errorsSnapshot())
+		spotterReady, allWatchReady(timeline, names, present, issuedAt, false), timeline.errorsSnapshot())
 }
 
 func ladderSourceReady(model *sourceModel, appCode string, names []string, present bool) bool {
@@ -439,6 +484,28 @@ func ladderIDsPresent(model *sourceModel, remote []remoteEntry, appCode string, 
 	return true
 }
 
+func ladderSampleFromWait(scale int, operation string, wait ladderWaitResult) ladderSample {
+	return ladderSample{
+		Scale: scale, Operation: operation, LatencySec: wait.Latency.Seconds(),
+		SourceToNacosSec: wait.SourceToNacos.Seconds(),
+		APIToK8sWatchSec: wait.APIToK8sWatch.Seconds(), APIToSpotterEventSec: wait.APIToSpotterEvent.Seconds(),
+		K8sWatchToSpotterSec:   wait.K8sWatchToSpotter.Seconds(),
+		SpotterToNacosWatchSec: wait.SpotterToNacosWatch.Seconds(), APIToNacosWatchSec: wait.APIToNacosWatch.Seconds(),
+		SourceWatch: !wait.SourceWatchSeen.IsZero(), SpotterObserved: !wait.SpotterSeen.IsZero(),
+		NacosWatch: !wait.NacosWatchSeen.IsZero(), Polls: wait.Polls, MismatchPolls: wait.Mismatches,
+	}
+}
+
+func crashTransitionFromWait(operation string, wait ladderWaitResult) crashTransition {
+	return crashTransition{
+		Operation: operation, LatencySec: wait.Latency.Seconds(),
+		APIToK8sWatchSec: wait.APIToK8sWatch.Seconds(), APIToSpotterEventSec: wait.APIToSpotterEvent.Seconds(),
+		K8sWatchToSpotterSec:   wait.K8sWatchToSpotter.Seconds(),
+		SpotterToNacosWatchSec: wait.SpotterToNacosWatch.Seconds(), APIToNacosWatchSec: wait.APIToNacosWatch.Seconds(),
+		Polls: wait.Polls, Mismatches: wait.Mismatches,
+	}
+}
+
 func aggregateLadder(samples []ladderSample) []ladderAggregate {
 	groups := map[string][]ladderSample{}
 	for _, sample := range samples {
@@ -458,18 +525,42 @@ func aggregateLadder(samples []ladderSample) []ladderAggregate {
 		group := groups[key]
 		values := make([]float64, len(group))
 		sourceValues := make([]float64, len(group))
+		apiK8sValues := make([]float64, len(group))
+		apiSpotterValues := make([]float64, len(group))
+		k8sSpotterValues := make([]float64, len(group))
+		spotterNacosValues := make([]float64, len(group))
+		apiNacosValues := make([]float64, len(group))
 		for i, sample := range group {
 			values[i] = sample.LatencySec
 			sourceValues[i] = sample.SourceToNacosSec
+			apiK8sValues[i] = sample.APIToK8sWatchSec
+			apiSpotterValues[i] = sample.APIToSpotterEventSec
+			k8sSpotterValues[i] = sample.K8sWatchToSpotterSec
+			spotterNacosValues[i] = sample.SpotterToNacosWatchSec
+			apiNacosValues[i] = sample.APIToNacosWatchSec
 		}
 		sort.Float64s(values)
 		sort.Float64s(sourceValues)
+		sort.Float64s(apiK8sValues)
+		sort.Float64s(apiSpotterValues)
+		sort.Float64s(k8sSpotterValues)
+		sort.Float64s(spotterNacosValues)
+		sort.Float64s(apiNacosValues)
 		polls, mismatches := 0, 0
 		for _, sample := range group {
 			polls += sample.Polls
 			mismatches += sample.MismatchPolls
 		}
-		out = append(out, ladderAggregate{Scale: scale, Operation: op, Samples: len(values), P90: ladderQuantile(values, 0.90), P95: ladderQuantile(values, 0.95), P99: ladderQuantile(values, 0.99), Max: values[len(values)-1], SourceToNacosP90: ladderQuantile(sourceValues, 0.90), SourceToNacosP95: ladderQuantile(sourceValues, 0.95), SourceToNacosP99: ladderQuantile(sourceValues, 0.99), ConsistencyPolls: polls, MismatchPolls: mismatches})
+		out = append(out, ladderAggregate{
+			Scale: scale, Operation: op, Samples: len(values), P90: ladderQuantile(values, 0.90), P95: ladderQuantile(values, 0.95), P99: ladderQuantile(values, 0.99), Max: values[len(values)-1],
+			SourceToNacosP90: ladderQuantile(sourceValues, 0.90), SourceToNacosP95: ladderQuantile(sourceValues, 0.95), SourceToNacosP99: ladderQuantile(sourceValues, 0.99),
+			APIToK8sWatchP90: ladderQuantile(apiK8sValues, 0.90), APIToK8sWatchP95: ladderQuantile(apiK8sValues, 0.95), APIToK8sWatchP99: ladderQuantile(apiK8sValues, 0.99),
+			APIToSpotterEventP90: ladderQuantile(apiSpotterValues, 0.90), APIToSpotterEventP95: ladderQuantile(apiSpotterValues, 0.95), APIToSpotterEventP99: ladderQuantile(apiSpotterValues, 0.99),
+			K8sWatchToSpotterP90: ladderQuantile(k8sSpotterValues, 0.90), K8sWatchToSpotterP95: ladderQuantile(k8sSpotterValues, 0.95), K8sWatchToSpotterP99: ladderQuantile(k8sSpotterValues, 0.99),
+			SpotterToNacosWatchP90: ladderQuantile(spotterNacosValues, 0.90), SpotterToNacosWatchP95: ladderQuantile(spotterNacosValues, 0.95), SpotterToNacosWatchP99: ladderQuantile(spotterNacosValues, 0.99),
+			APIToNacosWatchP90: ladderQuantile(apiNacosValues, 0.90), APIToNacosWatchP95: ladderQuantile(apiNacosValues, 0.95), APIToNacosWatchP99: ladderQuantile(apiNacosValues, 0.99),
+			ConsistencyPolls: polls, MismatchPolls: mismatches,
+		})
 	}
 	return out
 }
@@ -508,9 +599,25 @@ func writeScaleLadderReport(dir string, report scaleLadderReport) error {
 	for _, aggregate := range report.Aggregates {
 		fmt.Fprintf(&b, "| %d | %s | %d | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %d |\n", aggregate.Scale, aggregate.Operation, aggregate.Samples, aggregate.P90, aggregate.P95, aggregate.P99, aggregate.SourceToNacosP90, aggregate.SourceToNacosP95, aggregate.SourceToNacosP99, aggregate.MismatchPolls)
 	}
-	b.WriteString("\n## Crash consistency\n\n| Transition | Latency (s) | Polls | Mismatch polls |\n|---|---:|---:|---:|\n")
+	b.WriteString("\n## Continuous watch stage latency\n\n| Scale | Operation | Stage | P90 (s) | P95 (s) | P99 (s) |\n|---:|---|---|---:|---:|---:|\n")
+	for _, aggregate := range report.Aggregates {
+		rows := []struct {
+			stage         string
+			p90, p95, p99 float64
+		}{
+			{"API→K8s Watch", aggregate.APIToK8sWatchP90, aggregate.APIToK8sWatchP95, aggregate.APIToK8sWatchP99},
+			{"API→Spotter event", aggregate.APIToSpotterEventP90, aggregate.APIToSpotterEventP95, aggregate.APIToSpotterEventP99},
+			{"K8s Watch→Spotter event", aggregate.K8sWatchToSpotterP90, aggregate.K8sWatchToSpotterP95, aggregate.K8sWatchToSpotterP99},
+			{"Spotter event→Nacos Subscribe", aggregate.SpotterToNacosWatchP90, aggregate.SpotterToNacosWatchP95, aggregate.SpotterToNacosWatchP99},
+			{"API→Nacos Subscribe", aggregate.APIToNacosWatchP90, aggregate.APIToNacosWatchP95, aggregate.APIToNacosWatchP99},
+		}
+		for _, row := range rows {
+			fmt.Fprintf(&b, "| %d | %s | %s | %.3f | %.3f | %.3f |\n", aggregate.Scale, aggregate.Operation, row.stage, row.p90, row.p95, row.p99)
+		}
+	}
+	b.WriteString("\n## Crash consistency\n\n| Transition | Exact latency (s) | API→K8s (s) | API→Spotter (s) | Spotter→Nacos (s) | API→Nacos (s) | Polls |\n|---|---:|---:|---:|---:|---:|---:|\n")
 	for _, transition := range report.Crash {
-		fmt.Fprintf(&b, "| %s | %.3f | %d | %d |\n", transition.Operation, transition.LatencySec, transition.Polls, transition.Mismatches)
+		fmt.Fprintf(&b, "| %s | %.3f | %.3f | %.3f | %.3f | %.3f | %d |\n", transition.Operation, transition.LatencySec, transition.APIToK8sWatchSec, transition.APIToSpotterEventSec, transition.SpotterToNacosWatchSec, transition.APIToNacosWatchSec, transition.Polls)
 	}
 	if len(report.WatchErrors) > 0 {
 		b.WriteString("\n## Watch errors\n\n")

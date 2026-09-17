@@ -5,7 +5,10 @@ package observe
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"sync"
 	"time"
 
@@ -116,6 +119,89 @@ type nacosWatchEvent struct {
 	Err   error
 }
 
+type spotterWatchEvent struct {
+	Sequence         uint64 `json:"sequence"`
+	TriggerAt        string `json:"triggerAt"`
+	ObservedAt       string `json:"observedAt"`
+	InstanceID       string `json:"instanceId"`
+	AppCode          string `json:"appCode"`
+	SourceKey        string `json:"sourceKey"`
+	SourceCluster    string `json:"sourceCluster"`
+	Reversion        int64  `json:"reversion"`
+	Status           int32  `json:"status"`
+	CanonicalPayload string `json:"canonicalPayload"`
+	Err              error  `json:"-"`
+}
+
+type spotterWatchBatch struct {
+	Events           []spotterWatchEvent `json:"events"`
+	EarliestSequence uint64              `json:"earliestSequence"`
+	LatestSequence   uint64              `json:"latestSequence"`
+	Gap              bool                `json:"gap"`
+}
+
+// startSpotterEventWatch continuously consumes the guarded long-poll endpoint
+// backed by Spotter's K8s event boundary. A ring gap or HTTP/decode failure is
+// emitted as an explicit watch error and therefore fails the ladder report.
+func startSpotterEventWatch(ctx context.Context, metricsPort int) <-chan spotterWatchEvent {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	out := make(chan spotterWatchEvent, 4096)
+	go func() {
+		defer close(out)
+		var after uint64
+		emit := func(event spotterWatchEvent) bool {
+			select {
+			case out <- event:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+		for ctx.Err() == nil {
+			url := fmt.Sprintf("http://127.0.0.1:%d/debug/spotter/events?after=%d&wait=5s", metricsPort, after)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			if err != nil {
+				_ = emit(spotterWatchEvent{Err: err})
+				return
+			}
+			response, err := sharedHTTP.Do(req) //nolint:gosec // fixed loopback URL
+			if err != nil {
+				if ctx.Err() == nil && !emit(spotterWatchEvent{Err: fmt.Errorf("spotter event watch: %w", err)}) {
+					return
+				}
+				continue
+			}
+			var batch spotterWatchBatch
+			decodeErr := json.NewDecoder(io.LimitReader(response.Body, 32<<20)).Decode(&batch)
+			_ = response.Body.Close()
+			if response.StatusCode != http.StatusOK || decodeErr != nil {
+				err = fmt.Errorf("spotter event watch answered %d: %v", response.StatusCode, decodeErr)
+				if !emit(spotterWatchEvent{Err: err}) {
+					return
+				}
+				continue
+			}
+			if batch.Gap {
+				if !emit(spotterWatchEvent{Err: fmt.Errorf("spotter event ring gap: after=%d earliest=%d latest=%d", after, batch.EarliestSequence, batch.LatestSequence)}) {
+					return
+				}
+			}
+			for _, event := range batch.Events {
+				if event.Sequence <= after {
+					continue
+				}
+				if !emit(event) {
+					return
+				}
+				after = event.Sequence
+			}
+		}
+	}()
+	return out
+}
+
 type nacosServiceWatch struct {
 	client     *spotternacos.Client
 	service    string
@@ -133,16 +219,22 @@ type nacosServiceWatch struct {
 // It is intentionally lossy only for historical events; each ladder target
 // has a unique name and is matched against an issue timestamp.
 type watchTimeline struct {
-	mu            sync.Mutex
-	sourcePresent map[string]time.Time
-	sourceDeleted map[string]time.Time
-	nacosPresent  map[string]time.Time
-	nacosEmpty    time.Time
-	errors        []error
+	mu             sync.Mutex
+	sourcePresent  map[string]time.Time
+	sourceDeleted  map[string]time.Time
+	nacosPresent   map[string]time.Time
+	nacosEmpty     time.Time
+	spotterPresent map[string]time.Time
+	spotterDeleted map[string]time.Time
+	errors         []error
 }
 
-func newWatchTimeline(k8sEvents <-chan k8sWatchEvent, nacosEvents <-chan nacosWatchEvent) *watchTimeline {
-	timeline := &watchTimeline{sourcePresent: map[string]time.Time{}, sourceDeleted: map[string]time.Time{}, nacosPresent: map[string]time.Time{}}
+func newWatchTimeline(k8sEvents <-chan k8sWatchEvent, spotterEvents <-chan spotterWatchEvent, nacosEvents <-chan nacosWatchEvent) *watchTimeline {
+	timeline := &watchTimeline{
+		sourcePresent: map[string]time.Time{}, sourceDeleted: map[string]time.Time{},
+		spotterPresent: map[string]time.Time{}, spotterDeleted: map[string]time.Time{},
+		nacosPresent: map[string]time.Time{},
+	}
 	go func() {
 		for event := range k8sEvents {
 			timeline.mu.Lock()
@@ -157,6 +249,25 @@ func newWatchTimeline(k8sEvents <-chan k8sWatchEvent, nacosEvents <-chan nacosWa
 				} else {
 					timeline.sourcePresent[event.Pod.Name] = event.At
 				}
+			}
+			timeline.mu.Unlock()
+		}
+	}()
+	go func() {
+		for event := range spotterEvents {
+			timeline.mu.Lock()
+			if event.Err != nil {
+				timeline.errors = append(timeline.errors, event.Err)
+				timeline.mu.Unlock()
+				continue
+			}
+			observedAt, err := time.Parse(time.RFC3339Nano, event.ObservedAt)
+			if err != nil {
+				timeline.errors = append(timeline.errors, fmt.Errorf("spotter event timestamp %q: %w", event.ObservedAt, err))
+			} else if event.Status == 3 {
+				timeline.spotterDeleted[event.InstanceID] = observedAt
+			} else {
+				timeline.spotterPresent[event.InstanceID] = observedAt
 			}
 			timeline.mu.Unlock()
 		}
@@ -183,6 +294,51 @@ func newWatchTimeline(k8sEvents <-chan k8sWatchEvent, nacosEvents <-chan nacosWa
 		}
 	}()
 	return timeline
+}
+
+func (t *watchTimeline) spotterReady(name string, present bool, issuedAt time.Time) bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if present {
+		return !t.spotterPresent[name].IsZero() && !t.spotterPresent[name].Before(issuedAt)
+	}
+	return !t.spotterDeleted[name].IsZero() && !t.spotterDeleted[name].Before(issuedAt)
+}
+
+func (t *watchTimeline) boundaryTimes(names []string, present bool, issuedAt time.Time) (source, spotter, nacos time.Time, ok bool) {
+	if t == nil {
+		return time.Time{}, time.Time{}, time.Time{}, false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, name := range names {
+		var sourceAt, spotterAt, nacosAt time.Time
+		if present {
+			sourceAt = t.sourcePresent[name]
+			spotterAt = t.spotterPresent[name]
+			nacosAt = t.nacosPresent[name]
+		} else {
+			sourceAt = t.sourceDeleted[name]
+			spotterAt = t.spotterDeleted[name]
+			nacosAt = t.nacosEmpty
+		}
+		if sourceAt.Before(issuedAt) || spotterAt.Before(issuedAt) || nacosAt.Before(issuedAt) || sourceAt.IsZero() || spotterAt.IsZero() || nacosAt.IsZero() {
+			return time.Time{}, time.Time{}, time.Time{}, false
+		}
+		if sourceAt.After(source) {
+			source = sourceAt
+		}
+		if spotterAt.After(spotter) {
+			spotter = spotterAt
+		}
+		if nacosAt.After(nacos) {
+			nacos = nacosAt
+		}
+	}
+	return source, spotter, nacos, true
 }
 
 func (t *watchTimeline) sourceReady(name string, present bool, issuedAt time.Time) bool {

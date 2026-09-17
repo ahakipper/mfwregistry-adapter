@@ -190,16 +190,19 @@ type clusterWatcher struct {
 	cluster  Cluster
 	factory  informers.SharedInformerFactory
 	informer cache.SharedIndexInformer
+	owner    *robot
 }
 
 // robot is the default Robot implementation.
 type robot struct {
 	clusters []*clusterWatcher
 
-	queue   *coalescingQueue
-	done    chan struct{}
-	stopMu  sync.Mutex
-	stopped bool
+	queue          *coalescingQueue
+	done           chan struct{}
+	stopMu         sync.Mutex
+	stopped        bool
+	observerMu     sync.Mutex
+	sourceObserver func(QueueObject, *corev1.Pod)
 }
 
 // NewRobot validates every kubeconfig, builds the clientsets and the pod
@@ -216,7 +219,7 @@ func NewRobot(clusters []Cluster, debug bool) (Robot, error) {
 		done:  make(chan struct{}),
 	}
 	for _, c := range clusters {
-		watcher, err := newClusterWatcher(c, r.queue)
+		watcher, err := newClusterWatcher(c, r.queue, r)
 		if err != nil {
 			return nil, err
 		}
@@ -228,7 +231,7 @@ func NewRobot(clusters []Cluster, debug bool) (Robot, error) {
 // newClusterWatcher loads the kubeconfig and wires the pod informer event
 // handlers of a single cluster. The produced events are pushed on the robot's
 // shared coalescing queue.
-func newClusterWatcher(c Cluster, queue *coalescingQueue) (*clusterWatcher, error) {
+func newClusterWatcher(c Cluster, queue *coalescingQueue, owner *robot) (*clusterWatcher, error) {
 	if c.ConfigPath == "" {
 		return nil, errors.New("k8srobot: empty kubeconfig path")
 	}
@@ -251,6 +254,7 @@ func newClusterWatcher(c Cluster, queue *coalescingQueue) (*clusterWatcher, erro
 		cluster:  c,
 		factory:  factory,
 		informer: informer,
+		owner:    owner,
 	}
 	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
@@ -303,6 +307,9 @@ func (w *clusterWatcher) enqueue(event EventType, obj interface{}, queue *coales
 		Event:    event,
 		CreateAt: time.Now(),
 	}
+	if w.owner != nil {
+		w.owner.notifySourceEvent(item, pod)
+	}
 	if dropped := queue.Offer(item); dropped {
 		// The queue is full of DISTINCT KEYS: drop the event instead of
 		// blocking the informer. The drop is OBSERVABLE (dsca-1 DS-1-1 fix
@@ -325,6 +332,25 @@ func (w *clusterWatcher) enqueue(event EventType, obj interface{}, queue *coales
 		if dropWarningRate() {
 			log.Printf("[WARN] k8srobot: queue full (%d distinct keys), dropped one event of cluster %s; the next full-push tick is the healer", queueSize, w.cluster.ConfigPath)
 		}
+	}
+}
+
+// SetSourceEventObserver installs a callback at the robot's own informer
+// boundary. It is an optional test/observation seam and does not alter queue
+// delivery. The callback runs synchronously while the informer object is
+// current, before keyed coalescing can supersede the event.
+func (r *robot) SetSourceEventObserver(observer func(QueueObject, *corev1.Pod)) {
+	r.observerMu.Lock()
+	r.sourceObserver = observer
+	r.observerMu.Unlock()
+}
+
+func (r *robot) notifySourceEvent(obj QueueObject, pod *corev1.Pod) {
+	r.observerMu.Lock()
+	observer := r.sourceObserver
+	r.observerMu.Unlock()
+	if observer != nil {
+		observer(obj, pod)
 	}
 }
 

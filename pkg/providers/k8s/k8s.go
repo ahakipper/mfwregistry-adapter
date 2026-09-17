@@ -45,6 +45,7 @@ type k8s struct {
 	logger            ports.Logger
 	notifier          ports.Notifier
 	pushAppCodes      []string
+	instanceObserver  func(triggerTime int64, instance *sv.Instance)
 	depsConfigured    bool
 	depsOnce          sync.Once
 	// nacosReconcile records that the periodic CompareAndFlush's remote view
@@ -150,6 +151,39 @@ type QueueDepthReporter interface {
 // installs the injected recorder.
 type MetricsReporter interface {
 	SetMetricsRecorder(ports.MetricsRecorder)
+}
+
+// InstanceEventObserver is the guarded Observe harness seam. Production never
+// installs it. The callback fires after K8s conversion/filtering and before the
+// worker submits the Instance to sinks, which is the Spotter middle-plane
+// boundary needed for per-instance latency correlation.
+type InstanceEventObserver interface {
+	SetInstanceEventObserver(func(triggerTime int64, instance *sv.Instance))
+}
+
+func (k *k8s) SetInstanceEventObserver(observer func(triggerTime int64, instance *sv.Instance)) {
+	k.Lock()
+	k.instanceObserver = observer
+	k.Unlock()
+	if source, ok := k.robot.(interface {
+		SetSourceEventObserver(func(k8srobot.QueueObject, *v1.Pod))
+	}); ok {
+		source.SetSourceEventObserver(k.observeSourceEvent)
+	}
+}
+
+func (k *k8s) observeSourceEvent(obj k8srobot.QueueObject, pod *v1.Pod) {
+	k.ensureDeps()
+	ins := formatInstanceWithDeps(&obj, pod, k.pushAppCodes, k.logger)
+	if ins == nil || k.VerifyInstance(ins) != nil {
+		return
+	}
+	k.Lock()
+	observer := k.instanceObserver
+	k.Unlock()
+	if observer != nil {
+		observer(obj.CreateAt.UnixNano(), ins)
+	}
 }
 
 func (k *k8s) SetMetricsRecorder(recorder ports.MetricsRecorder) {
