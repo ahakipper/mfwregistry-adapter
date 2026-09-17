@@ -45,7 +45,7 @@ type k8s struct {
 	logger            ports.Logger
 	notifier          ports.Notifier
 	pushAppCodes      []string
-	instanceObserver  func(triggerTime int64, instance *sv.Instance)
+	instanceObserver  func(InstanceEventObservation)
 	depsConfigured    bool
 	depsOnce          sync.Once
 	// nacosReconcile records that the periodic CompareAndFlush's remote view
@@ -154,13 +154,22 @@ type MetricsReporter interface {
 }
 
 // InstanceEventObserver is the guarded Observe harness seam. Production never
-// installs it. The callback fires from eventSync after pod2Instance has applied
-// the converted Instance to the provider cache and immediately before
-// worker.Handle submits it to sinks. That is the first real Spotter-owned
-// middle-plane boundary; the robot informer callback is only another K8s
-// observer and must not be reported as processed Spotter state.
+// installs it. The callback covers every provider output immediately before
+// worker.Handle; Origin identifies the cache-applied informer path, SyncAll
+// cache snapshots, and reconcile-generated output without pretending they all
+// have identical cache semantics.
 type InstanceEventObserver interface {
-	SetInstanceEventObserver(func(triggerTime int64, instance *sv.Instance))
+	SetInstanceEventObserver(func(InstanceEventObservation))
+}
+
+// InstanceEventObservation describes one provider output immediately before it
+// enters the worker. Origin distinguishes cache-applied informer events from
+// SyncAll cache snapshots and reconcile-generated output.
+type InstanceEventObservation struct {
+	TriggerTime int64
+	Operate     worker.OperateType
+	Origin      string
+	Instance    *sv.Instance
 }
 
 // ObserveCacheSnapshotter exposes the provider's active internal cache only to
@@ -171,19 +180,33 @@ type ObserveCacheSnapshotter interface {
 	ObserveCacheSnapshot() ([]*sv.Instance, uint64)
 }
 
-func (k *k8s) SetInstanceEventObserver(observer func(triggerTime int64, instance *sv.Instance)) {
+func (k *k8s) SetInstanceEventObserver(observer func(InstanceEventObservation)) {
 	k.Lock()
 	k.instanceObserver = observer
 	k.Unlock()
 }
 
-func (k *k8s) observeInstanceEvent(triggerTime int64, ins *sv.Instance) {
+func (k *k8s) observeInstanceEvent(observation InstanceEventObservation) {
 	k.Lock()
 	observer := k.instanceObserver
 	k.Unlock()
 	if observer != nil {
-		observer(triggerTime, ins)
+		observer(observation)
 	}
+}
+
+// handleWorkerEvent is the single provider-output/pre-worker boundary.
+func (k *k8s) handleWorkerEvent(event *worker.Event, origin string) {
+	if event != nil {
+		for _, ins := range event.Data {
+			if ins != nil {
+				k.observeInstanceEvent(InstanceEventObservation{
+					TriggerTime: event.Trigger, Operate: event.Operate, Origin: origin, Instance: ins,
+				})
+			}
+		}
+	}
+	k.worker.Handle(event)
 }
 
 func (k *k8s) ObserveCacheSnapshot() ([]*sv.Instance, uint64) {
@@ -545,8 +568,7 @@ func (k *k8s) eventSync(ins *sv.Instance, triggerTime int64) {
 	if ins != nil && ins.SourceCluster != "" {
 		scope = ins.SourceCluster
 	}
-	k.observeInstanceEvent(triggerTime, ins)
-	k.worker.Handle(&worker.Event{
+	k.handleWorkerEvent(&worker.Event{
 		Trigger:  triggerTime,
 		Data:     []*sv.Instance{ins},
 		Operate:  worker.OperateTypeSync,
@@ -554,7 +576,7 @@ func (k *k8s) eventSync(ins *sv.Instance, triggerTime int64) {
 		Identity: providers.IdentityKey(ins),
 		Revision: ins.Reversion,
 		Sequence: sequence,
-	})
+	}, "event-cache-applied")
 }
 
 func (k *k8s) pod2Instance(obj k8srobot.QueueObject) (ins *sv.Instance) {
@@ -722,7 +744,7 @@ func (k *k8s) flushInstances() {
 			BatchID:  worker.FullBatchID("k8s", all),
 			Sequence: generation,
 		}
-		k.worker.Handle(event)
+		k.handleWorkerEvent(event, "startup-syncall-cache-snapshot")
 	}
 }
 
@@ -895,7 +917,7 @@ func (k *k8s) buildAndSendEvent(instance *sv.Instance) {
 			Data:    ins,
 			Operate: worker.OperateTypeSync,
 		}
-		k.worker.Handle(event)
+		k.handleWorkerEvent(event, "reconcile-output")
 	}); err != nil {
 		key := providers.IdentityKey(instance)
 		k.requeueEvent(key, func() {
@@ -904,11 +926,11 @@ func (k *k8s) buildAndSendEvent(instance *sv.Instance) {
 			}
 			ins := make([]*sv.Instance, 1)
 			ins[0] = instance
-			k.worker.Handle(&worker.Event{
+			k.handleWorkerEvent(&worker.Event{
 				Trigger: time.Now().UnixNano(),
 				Data:    ins,
 				Operate: worker.OperateTypeSync,
-			})
+			}, "reconcile-output-retry")
 		})
 	}
 }
@@ -1014,7 +1036,7 @@ func (k *k8s) emitSyncAll() {
 	// Tick-time origin + ns unit (dsca-2 §3 Option (b), §6 origin semantics):
 	// a PushAll observation measures "age of the full push at completion",
 	// not event age.
-	k.worker.Handle(&worker.Event{
+	k.handleWorkerEvent(&worker.Event{
 		Trigger:        time.Now().UnixNano(),
 		Data:           all,
 		Operate:        worker.OperateTypeSyncAll,
@@ -1032,7 +1054,7 @@ func (k *k8s) emitSyncAll() {
 			}
 			return all, true
 		},
-	})
+	}, "syncall-cache-snapshot")
 }
 
 // reportQueueDepthLoop publishes the robot's coalescing-queue depth on the

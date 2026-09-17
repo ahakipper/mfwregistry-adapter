@@ -1,5 +1,11 @@
 # Nacos 3 + KWork scale ladder PASS
 
+> **Superseded latency evidence:** this run remains useful as historical
+> snapshot-convergence evidence, but its Spotter middle plane was sampled and
+> its 500/1000-Pod P90/P95/P99 were derived from only three batch samples. It
+> must not be used as the final continuous-watch latency proof. See
+> [observation-method-validation-2026-09-17.md](../observation-method-validation-2026-09-17.md).
+
 ## Scope
 
 The run used the official Nacos 3 SDK, independent client-go K8s Watch,

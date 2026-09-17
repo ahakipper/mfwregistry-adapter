@@ -551,7 +551,9 @@ func (s *Server) startProviders() error {
 	// over, so both series of the queue's health land on one recorder.
 	for _, provider := range prs {
 		if observer, ok := provider.(k8s.InstanceEventObserver); ok && s.observeDebug != nil {
-			observer.SetInstanceEventObserver(s.observeDebug.record)
+			observer.SetInstanceEventObserver(func(observation k8s.InstanceEventObservation) {
+				s.observeDebug.record(observation.TriggerTime, string(observation.Operate), observation.Origin, observation.Instance)
+			})
 			s.Lock()
 			s.observeDebugProviders++
 			s.Unlock()

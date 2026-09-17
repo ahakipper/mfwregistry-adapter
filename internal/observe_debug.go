@@ -20,6 +20,8 @@ const observeEventCapacity = 32768
 type observeDebugEvent struct {
 	Sequence         uint64 `json:"sequence"`
 	Boundary         string `json:"boundary"`
+	Operation        string `json:"operation"`
+	Origin           string `json:"origin"`
 	TriggerAt        string `json:"triggerAt"`
 	ObservedAt       string `json:"observedAt"`
 	InstanceID       string `json:"instanceId"`
@@ -53,7 +55,7 @@ func newObserveEventRecorder(capacity int) *observeEventRecorder {
 	return &observeEventRecorder{capacity: capacity, notify: make(chan struct{})}
 }
 
-func (r *observeEventRecorder) record(triggerTime int64, ins *v2.Instance) {
+func (r *observeEventRecorder) record(triggerTime int64, operation, origin string, ins *v2.Instance) {
 	if r == nil || ins == nil {
 		return
 	}
@@ -65,7 +67,8 @@ func (r *observeEventRecorder) record(triggerTime int64, ins *v2.Instance) {
 	r.mu.Lock()
 	r.next++
 	event := observeDebugEvent{
-		Sequence: r.next, Boundary: "cache-applied/pre-worker", TriggerAt: triggerAt, ObservedAt: now.Format(time.RFC3339Nano),
+		Sequence: r.next, Boundary: "provider-output/pre-worker", Operation: operation, Origin: origin,
+		TriggerAt: triggerAt, ObservedAt: now.Format(time.RFC3339Nano),
 		InstanceID: ins.InstanceId, AppCode: ins.AppCode, SourceKey: ins.SourceKey,
 		SourceCluster: ins.SourceCluster, Reversion: ins.Reversion, Status: ins.Status,
 		CanonicalPayload: domaininstance.CanonicalPayload(ins),

@@ -272,15 +272,17 @@ func (c *spotterChild) waitForHealthyContext(parent context.Context, bound time.
 }
 
 type spotterSnapshot struct {
-	Instances        []*v2.Instance
-	CanonicalPayload []string
-	ObservedAt       time.Time
+	Instances           []*v2.Instance
+	CanonicalPayload    []string
+	ObservedAt          time.Time
+	LatestEventSequence uint64
+	CacheGeneration     uint64
 }
 
 // debugSnapshot reads the test-only Spotter projection endpoint. It is
 // enabled only when the child inherits SPOTTER_OBSERVE_DEBUG=1 and exposes
-// the provider's informer-derived Instance list, giving the triad observer a
-// third side between K8s and Nacos.
+// the provider's active internal-cache Instance list and generation, giving
+// the triad observer a real processed middle plane between K8s and Nacos.
 func (c *spotterChild) debugSnapshot(ctx context.Context) (spotterSnapshot, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -299,15 +301,21 @@ func (c *spotterChild) debugSnapshot(ctx context.Context) (spotterSnapshot, erro
 		return spotterSnapshot{}, fmt.Errorf("spotter debug snapshot answered %d", response.StatusCode)
 	}
 	var payload struct {
-		ObservedAt       string         `json:"observedAt"`
-		Instances        []*v2.Instance `json:"instances"`
-		CanonicalPayload []string       `json:"canonicalPayload"`
+		ObservedAt          string         `json:"observedAt"`
+		Instances           []*v2.Instance `json:"instances"`
+		CanonicalPayload    []string       `json:"canonicalPayload"`
+		LatestEventSequence uint64         `json:"latestEventSequence"`
+		CacheGeneration     uint64         `json:"cacheGeneration"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 16<<20)).Decode(&payload); err != nil {
 		return spotterSnapshot{}, fmt.Errorf("decode spotter debug snapshot: %w", err)
 	}
 	observedAt, _ := time.Parse(time.RFC3339Nano, payload.ObservedAt)
-	return spotterSnapshot{Instances: payload.Instances, CanonicalPayload: payload.CanonicalPayload, ObservedAt: observedAt}, nil
+	return spotterSnapshot{
+		Instances: payload.Instances, CanonicalPayload: payload.CanonicalPayload,
+		ObservedAt: observedAt, LatestEventSequence: payload.LatestEventSequence,
+		CacheGeneration: payload.CacheGeneration,
+	}, nil
 }
 
 // logSlice extracts the lines naming any of the needles, issued within

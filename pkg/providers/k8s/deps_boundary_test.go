@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	sv "spotter/pkg/beehive/service/v2"
 	"spotter/pkg/k8srobot"
 	"spotter/pkg/providers"
+	workerpkg "spotter/pkg/worker"
 )
 
 type depsTestLogger struct{ ports.NopLogger }
@@ -57,7 +59,7 @@ func TestInstanceEventObserverReceivesConvertedEventBoundary(t *testing.T) {
 	provider.ProcessCache(k8srobot.EventUpdate, instance)
 	var gotTrigger int64
 	var got *sv.Instance
-	provider.SetInstanceEventObserver(func(eventTrigger int64, instance *sv.Instance) {
+	provider.SetInstanceEventObserver(func(observation InstanceEventObservation) {
 		if len(worker.handleSnapshot()) != 0 {
 			t.Fatal("observer ran after worker.Handle; want the cache-applied/pre-worker boundary")
 		}
@@ -65,8 +67,11 @@ func TestInstanceEventObserverReceivesConvertedEventBoundary(t *testing.T) {
 		if len(cached) != 1 || cached[0].InstanceId != "pod-a" {
 			t.Fatalf("observer saw cache snapshot %#v, want pod-a already applied", cached)
 		}
-		gotTrigger = eventTrigger
-		got = instance
+		if observation.Origin != "event-cache-applied" || observation.Operate != workerpkg.OperateTypeSync {
+			t.Fatalf("observation metadata = origin:%q operate:%q", observation.Origin, observation.Operate)
+		}
+		gotTrigger = observation.TriggerTime
+		got = observation.Instance
 	})
 	provider.eventSync(instance, trigger)
 	if gotTrigger != trigger || got == nil || got.InstanceId != pod.Name || got.Reversion != 42 || got.Label["team"] != "payments" {
@@ -74,5 +79,31 @@ func TestInstanceEventObserverReceivesConvertedEventBoundary(t *testing.T) {
 	}
 	if len(worker.handleSnapshot()) != 1 {
 		t.Fatalf("worker.Handle calls = %d, want 1 after observer", len(worker.handleSnapshot()))
+	}
+}
+
+func TestInstanceEventObserverCoversSyncAllWorkerBoundary(t *testing.T) {
+	sinkWorker := &fakeWorker{}
+	provider := &k8s{cache: providers.NewCache(2), worker: sinkWorker, logger: ports.NopLogger{}}
+	instances := []*sv.Instance{
+		{InstanceId: "pod-a", Provider: "k8s", Status: 1, Reversion: 10},
+		{InstanceId: "pod-b", Provider: "k8s", Status: 1, Reversion: 11},
+	}
+	for _, instance := range instances {
+		provider.ProcessCache(k8srobot.EventAdd, instance)
+	}
+	var observed []string
+	provider.SetInstanceEventObserver(func(observation InstanceEventObservation) {
+		if len(sinkWorker.handleSnapshot()) != 0 {
+			t.Fatal("SyncAll observer ran after worker.Handle")
+		}
+		if observation.Origin != "test-syncall" || observation.Operate != workerpkg.OperateTypeSyncAll {
+			t.Fatalf("observation metadata = origin:%q operate:%q", observation.Origin, observation.Operate)
+		}
+		observed = append(observed, observation.Instance.InstanceId)
+	})
+	provider.handleWorkerEvent(&workerpkg.Event{Trigger: 123, Data: instances, Operate: workerpkg.OperateTypeSyncAll}, "test-syncall")
+	if strings.Join(observed, ",") != "pod-a,pod-b" {
+		t.Fatalf("observed SyncAll instances = %v, want pod-a,pod-b", observed)
 	}
 }

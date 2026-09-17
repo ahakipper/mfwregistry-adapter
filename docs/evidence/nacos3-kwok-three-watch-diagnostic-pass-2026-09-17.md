@@ -1,5 +1,12 @@
 # KWork three-watch diagnostic PASS
 
+> **Superseded evidence:** an independent review found that this run's Spotter
+> event was emitted before queue admission/cache application and that its
+> name-only correlation could misattribute revisions and status transitions.
+> Keep this file as historical evidence only. The corrected method and current
+> diagnostic are documented in
+> [observation-method-validation-2026-09-17.md](../observation-method-validation-2026-09-17.md).
+
 ## Observed boundaries
 
 The harness now continuously observes three independent boundaries:

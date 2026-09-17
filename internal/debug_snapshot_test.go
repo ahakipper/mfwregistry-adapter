@@ -19,9 +19,9 @@ func TestObserveDebugEventsExposeOrderedCanonicalBoundary(t *testing.T) {
 	recorder := newObserveEventRecorder(2)
 	s := &Server{observeDebug: recorder}
 	first := &v2.Instance{InstanceId: "pod-a", AppCode: "pay-user", Provider: "k8s", Reversion: 42, Status: 1, Label: map[string]string{"team": "payments"}}
-	recorder.record(time.Now().Add(-time.Second).UnixNano(), first)
-	recorder.record(time.Now().UnixNano(), &v2.Instance{InstanceId: "pod-b", AppCode: "pay-user", Provider: "k8s", Reversion: 43, Status: 1})
-	recorder.record(time.Now().UnixNano(), &v2.Instance{InstanceId: "pod-c", AppCode: "pay-user", Provider: "k8s", Reversion: 44, Status: 3})
+	recorder.record(time.Now().Add(-time.Second).UnixNano(), "Sync", "event-cache-applied", first)
+	recorder.record(time.Now().UnixNano(), "Sync", "reconcile-output", &v2.Instance{InstanceId: "pod-b", AppCode: "pay-user", Provider: "k8s", Reversion: 43, Status: 1})
+	recorder.record(time.Now().UnixNano(), "Sync", "event-cache-applied", &v2.Instance{InstanceId: "pod-c", AppCode: "pay-user", Provider: "k8s", Reversion: 44, Status: 3})
 
 	req := httptest.NewRequest("GET", "/debug/spotter/events?after=0&wait=0s", nil)
 	resp := httptest.NewRecorder()
@@ -37,7 +37,7 @@ func TestObserveDebugEventsExposeOrderedCanonicalBoundary(t *testing.T) {
 		t.Fatalf("event batch = %+v, want bounded sequence 2..3 with gap", got)
 	}
 	last := got.Events[1]
-	if last.Sequence != 3 || last.Boundary != "cache-applied/pre-worker" || last.InstanceID != "pod-c" || last.Status != 3 || last.Reversion != 44 || last.CanonicalPayload == "" || last.ObservedAt == "" {
+	if last.Sequence != 3 || last.Boundary != "provider-output/pre-worker" || last.Operation != "Sync" || last.Origin != "event-cache-applied" || last.InstanceID != "pod-c" || last.Status != 3 || last.Reversion != 44 || last.CanonicalPayload == "" || last.ObservedAt == "" {
 		t.Fatalf("last event = %+v, want complete pod-c boundary", last)
 	}
 }
