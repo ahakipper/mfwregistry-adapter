@@ -1,0 +1,53 @@
+RUN 20260918-2320 — CURATED ROOT-CAUSE EXCERPT
+Generated from immutable result artifacts and local cumulative Spotter log.
+Times in harness/ticks are Asia/Singapore (+08:00); events JSONL uses UTC.
+
+[Harness schedule plus tick-JSON annotations]
+23:36:02 EVENT burst batch-200@75%: applying 200 pods
+23:36:08 EVENT burst batch-200@75%: 200 pods applied (ledger create@2026-09-18T23:36:02+08:00)
+23:36:17 EVENT burst batch-200@75%: UP-converged after 12s
+23:37:54 EVENT burst batch-200@75%: 200 pods deleted (ledger delete@2026-09-18T23:37:18+08:00)
+23:38:19 EVENT tick 87 DIVERGENT src=1066 rmt=1066 retry=0 robot=0 dropped=0
+[annotated synthesis from tick JSON] tick 87 spotter=1075
+23:38:19 EVENT old-harness burst DOWN-converged after 59s
+[annotated synthesis] that DOWN stamp was invalid because Spotter still held nine stale instances
+23:38:51 EVENT tick 88 CONSISTENT src=1066 rmt=1066
+[annotated synthesis from tick JSON] tick 88 spotter=1066
+
+[Tick JSONL facts]
+tick=87 ts=2026-09-18T23:38:17+08:00 attempts=14 waitMs=61742 snapshotStable=true exactEqual=false spotterEqual=false
+tick=88 ts=2026-09-18T23:38:49+08:00 attempts=10 waitMs=22024 snapshotStable=true exactEqual=true spotterEqual=true
+
+[obs-pod-2404 exact watch boundary]
+create issued=2026-09-18T15:36:02.223863Z k8s=15:36:43.456624Z spotter=15:36:43.456983Z nacos=15:36:43.997891Z reversion=16289
+delete issued=2026-09-18T15:37:18.196675Z k8s=15:37:50.651816Z spotter=15:37:50.554719Z nacos=15:37:51.197798Z reversion=16289
+
+[obs-pod-2404 Nacos write sequence extracted from build/observe/spotter-child.log]
+line 2518372 2026-09-18T23:37:50.761+0800 deregisterInstance service=obs-app-3 ip=10.0.0.13 port=7096
+line 2518450 2026-09-18T23:37:53.216+0800 registerInstance service=obs-app-3 ip=10.0.0.13 port=7096 instanceId=obs-pod-2404 reversion=16289
+line 2519695 2026-09-18T23:37:57.534+0800 deregisterInstance service=obs-app-3 ip=10.0.0.13 port=7096
+
+[Old correlation defects]
+reported mutations=3368 correlated=3313 missing=55
+missing delete names=obs-pod-1034..1083 (50), obs-pod-1085..1089 (5)
+same physical delete boundary reused twice=obs-pod-1090..1100 (11)
+corrected invalid/no-op mutation count=50+5+11=66
+last window tick=99 source population=1066; configured base=1000; drift=+66
+
+[Codex restart and replacement chronology]
+2026-09-18T23:38:17+08:00 tick 87 product divergence recorded
+2026-09-18T23:41:05+08:00 final test tick/harness log mtime
+2026-09-18T23:42:16+08:00 summary JSON mtime
+2026-09-18T23:44:52.653+08:00 macOS unified log: old Codex application process exited with SIGTERM(15)
+2026-09-18T23:44:54.449+08:00 macOS unified log: new Codex application process entered running-active state
+2026-09-18T23:46:37+08:00 empty replacement artifact 20260918-2346-ticks.jsonl mtime
+Conclusion: restart/replacement followed the failure and completed summary; it could not cause tick 87.
+Unified-log source command: /usr/bin/log show --style compact --start '2026-09-18 23:44:45' --end '2026-09-18 23:45:10' --predicate 'eventMessage CONTAINS[c] "Codex" OR process == "codex"'
+Filesystem source command: stat -f '%N size=%z mtime=%Sm' -t '%Y-%m-%dT%H:%M:%S%z' tests/observe/results/20260918-2320-summary.json tests/observe/results/20260918-2320-ticks.jsonl build/observe/observe-20260918-2320.log tests/observe/results/20260918-2346-ticks.jsonl
+
+[Artifact hashes]
+summary.json 11ef1ded48d890b40497bde4ae8ef7793597839077e6df6f197afa7dcb47b240
+events.jsonl 83488d103cc81c44b1c840b982a7a574f4d508f6f28e6951210eda75b5411357
+ticks.jsonl a7d5841732ac02d9f1031a06710edfce858101cf3ed62ac40363909549e27d57
+harness.log faf973a6b66ebc8779de66c0ff994da861d0a0bdb0eddd028b5e48e656626521
+spotter-child.log d5d254b93469e069e8eb284842d2d0297f4c5c67dd7d83649d556f0b4f86d4f5
