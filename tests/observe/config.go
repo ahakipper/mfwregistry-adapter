@@ -89,6 +89,10 @@ type observeConfig struct {
 	// with both convergence directions observed (OBS_BURSTS knob; "false"
 	// keeps the sustained-churn-only shape of the 2h definitive window).
 	Bursts bool
+	// CrashCycles enables one CrashLoopBackOff -> Recovery cycle during the
+	// window (OBS_CRASH_CYCLES). It is used by short and definitive runs to
+	// exercise status transitions in the same continuous three-plane harness.
+	CrashCycles bool
 }
 
 // loadObserveConfig resolves the harness knobs with the contract's
@@ -203,6 +207,9 @@ func loadObserveConfig() (observeConfig, error) {
 		cfg.Bursts = raw == "true" || raw == "1"
 	} else if cfg.Duration <= 30*time.Minute {
 		cfg.Bursts = true
+	}
+	if raw := strings.TrimSpace(os.Getenv("OBS_CRASH_CYCLES")); raw != "" {
+		cfg.CrashCycles = raw == "true" || raw == "1"
 	}
 	if cfg.Duration < time.Minute {
 		return observeConfig{}, fmt.Errorf("OBS_DURATION %s is below the 1m harness floor", cfg.Duration)

@@ -366,6 +366,8 @@ type observeRun struct {
 	// flips its tick DIVERGENT, the no-amnesty semantics).
 	burstMu     sync.Mutex
 	burstEvents []burstEvent
+	crashMu     sync.Mutex
+	crashPod    string
 
 	// Drain state.
 	drainHeld     map[string]int // the previous nonzero depth past the gate
@@ -474,6 +476,72 @@ func (r *observeRun) runBursts(stop <-chan struct{}) {
 	}
 }
 
+// runCrashCycle exercises a real status transition while the standing churn
+// and snapshots continue. The mutation journal and the three independent
+// watchers observe both CrashLoopBackOff and Recovery as first-class events.
+func (r *observeRun) runCrashCycle(stop <-chan struct{}) {
+	// Start after the first burst's settle/delete window, so the selected
+	// target cannot be removed by the storm rollback.
+	wait := time.Duration(float64(r.cfg.Duration) * 0.15)
+	if wait < r.cfg.Tick {
+		wait = r.cfg.Tick
+	}
+	select {
+	case <-stop:
+		return
+	case <-time.After(wait):
+	}
+	pods, err := r.driver.liveSourcePods("app-code")
+	if err != nil {
+		r.addChurnStats(0, 0, 1)
+		r.log.event("crash cycle: source read failed: %v", err)
+		return
+	}
+	var candidate string
+	for _, pod := range pods {
+		if pod.Phase == "Running" && r.isOwnPod(pod) && !r.isBurstPod(pod.Name) {
+			candidate = pod.Name
+			break
+		}
+	}
+	if candidate == "" {
+		r.addChurnStats(0, 0, 1)
+		r.log.event("crash cycle: no running harness pod available")
+		return
+	}
+	r.crashMu.Lock()
+	r.crashPod = candidate
+	r.crashMu.Unlock()
+	defer func() {
+		r.crashMu.Lock()
+		r.crashPod = ""
+		r.crashMu.Unlock()
+	}()
+	crashAt := time.Now()
+	if err := r.driver.patchCrash(candidate, crashAt); err != nil {
+		r.addChurnStats(0, 0, 1)
+		r.log.event("crash cycle: CrashLoopBackOff patch failed for %s: %v", candidate, err)
+		return
+	}
+	r.log.event("crash cycle: %s entered CrashLoopBackOff (ledger crash@%s)", candidate, formatTime(crashAt))
+	settle := 20 * time.Second
+	if bound := r.cfg.obsBound() / 2; bound < settle {
+		settle = bound
+	}
+	select {
+	case <-stop:
+		return
+	case <-time.After(settle):
+	}
+	recoverAt := time.Now()
+	if err := r.driver.patchRecovered(candidate, recoverAt); err != nil {
+		r.addChurnStats(0, 0, 1)
+		r.log.event("crash cycle: recovery patch failed for %s: %v", candidate, err)
+		return
+	}
+	r.log.event("crash cycle: %s recovered (ledger recover@%s)", candidate, formatTime(recoverAt))
+}
+
 // checkBurstConvergence folds one tick's divergence list into the burst
 // accounting: a burst pod absent from the list is converged on the side
 // the burst is currently proving (up: expected-online + remote-present +
@@ -567,6 +635,13 @@ func (r *observeRun) runWindow(t *testing.T) {
 			r.runBursts(stopChurn)
 		}()
 	}
+	if r.cfg.CrashCycles {
+		churnWG.Add(1)
+		go func() {
+			defer churnWG.Done()
+			r.runCrashCycle(stopChurn)
+		}()
+	}
 
 	tickNo := 0
 	next := time.Now()
@@ -615,7 +690,7 @@ func (r *observeRun) churnOnce() {
 	}
 	candidates := make([]string, 0, len(pods))
 	for _, pod := range pods {
-		if pod.Phase == "Running" && r.isOwnPod(pod) {
+		if pod.Phase == "Running" && r.isOwnPod(pod) && !r.isCrashProtected(pod.Name) {
 			candidates = append(candidates, pod.Name)
 		}
 	}
@@ -645,6 +720,25 @@ func (r *observeRun) churnOnce() {
 			r.addChurnStats(0, len(victims), 0)
 		}
 	}
+}
+
+func (r *observeRun) isCrashProtected(name string) bool {
+	r.crashMu.Lock()
+	defer r.crashMu.Unlock()
+	return r.crashPod != "" && r.crashPod == name
+}
+
+func (r *observeRun) isBurstPod(name string) bool {
+	r.burstMu.Lock()
+	defer r.burstMu.Unlock()
+	for _, event := range r.burstEvents {
+		for _, pod := range event.Pods {
+			if pod == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // isOwnPod reports whether a live pod belongs to this harness (its
