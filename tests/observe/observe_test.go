@@ -563,6 +563,22 @@ func (r *observeRun) runCrashCycle(stop <-chan struct{}) {
 	}
 	r.mutationDriverMu.Unlock()
 	r.log.event("crash cycle: %s recovered (ledger recover@%s)", candidate, formatTime(recoverAt))
+	// Keep the recovered Pod reserved until its exact K8s/Spotter/Nacos
+	// boundary is observable. Releasing crashPod immediately let the next
+	// churn cadence delete the same identity less than a second later; the
+	// keyed watches legitimately coalesced recovery+delete and the harness
+	// invented two unobservable mutation records (run 20260919-0229).
+	if r.timeline != nil {
+		if recovery, ok := r.driver.ledgerLookup(candidate); ok && recovery.Op == "recover" {
+			r.timeline.waitForMutationCoverage([]ledgerEntry{recovery}, r.cfg.obsBound())
+			if _, complete := r.timeline.mutationBoundary(recovery); !complete {
+				// A timed-out recovery is already an acceptance failure. Keep
+				// ownership until the window stops so ordinary churn cannot add a
+				// second overlapping mutation and obscure the original failure.
+				<-stop
+			}
+		}
+	}
 }
 
 // checkBurstConvergence folds one tick's divergence list into the burst
