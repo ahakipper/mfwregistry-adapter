@@ -992,6 +992,22 @@ func TestObserveUnitBurstWatchResultUsesFinalStableBoundaryAndChunkClocks(t *tes
 	if !run.burstEvents[0].ConvergedDown.Equal(base.Add(40 * time.Second)) {
 		t.Fatalf("membership-proven convergence = %s, want %s", run.burstEvents[0].ConvergedDown, base.Add(40*time.Second))
 	}
+	// Repeated desired-state updates near the horizon must not move create
+	// convergence from the first exact boundary to the last healthy refresh.
+	timeline.sourceHistory["pod-c"] = []planeWatchObservation{
+		observation(40*time.Second, true, 1, "uid-c"), observation(time.Second, true, 1, "uid-c"),
+	}
+	timeline.spotterHistory["pod-c"] = []planeWatchObservation{
+		observation(41*time.Second, true, 1, "cluster/uid-c"), observation(2*time.Second, true, 1, "cluster/uid-c"),
+	}
+	timeline.nacosHistory["pod-c"] = []planeWatchObservation{
+		observation(42*time.Second, true, 1, "cluster/uid-c"), observation(3*time.Second, true, 1, "cluster/uid-c"),
+	}
+	driver.mutationJournal = append(driver.mutationJournal, ledgerEntry{Op: "create", PodName: "pod-c", AppCode: "obs-app-0", IssuedAt: base})
+	create, ok := run.burstWatchResult([]string{"pod-c"}, "create", base.Add(50*time.Second))
+	if !ok || !create.ConvergedAt.Equal(base.Add(3*time.Second)) {
+		t.Fatalf("repeated desired update result=%+v ok=%t, want first exact boundary at +3s", create, ok)
+	}
 }
 
 func TestObserveUnitBurstBoundUsesUnroundedDuration(t *testing.T) {

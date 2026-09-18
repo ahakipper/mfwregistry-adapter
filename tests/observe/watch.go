@@ -559,11 +559,11 @@ func (t *watchTimeline) mutationBoundary(entry ledgerEntry) (exactWatchBoundary,
 	return t.exactBoundary(entry.PodName, present, status, "", entry.IssuedAt)
 }
 
-// finalMutationBoundary returns the final stable three-plane state for one
-// mutation at the supplied horizon. Unlike exactBoundary (the first matching
-// transition used for ordinary per-mutation latency), this uses the last
-// observation on every plane and therefore cannot under-report a
-// delete→resurrect→delete sequence as converged at the first delete.
+// finalMutationBoundary verifies that every plane ends the horizon in the
+// desired state, then returns the earliest exact three-plane boundary after
+// each plane's last opposite state. It therefore ignores repeated healthy
+// refreshes without under-reporting delete→resurrect→delete at the first
+// delete.
 func (t *watchTimeline) finalMutationBoundary(entry ledgerEntry, horizon time.Time) (exactWatchBoundary, bool) {
 	if t == nil {
 		return exactWatchBoundary{}, false
@@ -588,42 +588,105 @@ func (t *watchTimeline) finalMutationBoundary(entry ledgerEntry, horizon time.Ti
 		return horizon.IsZero() || !at.After(horizon)
 	}
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	var source, spotter, nacos planeWatchObservation
-	for _, observation := range t.sourceHistory[entry.PodName] {
-		if inWindow(observation.At) && (source.At.IsZero() || observation.At.After(source.At)) {
-			source = observation
+	sources := append([]planeWatchObservation(nil), t.sourceHistory[entry.PodName]...)
+	spotters := append([]planeWatchObservation(nil), t.spotterHistory[entry.PodName]...)
+	nacoses := append([]planeWatchObservation(nil), t.nacosHistory[entry.PodName]...)
+	t.mu.Unlock()
+	spotters = slicesMatching(spotters, func(observation planeWatchObservation) bool {
+		return observation.Operation == "Sync" && observation.Origin == "event-cache-applied"
+	})
+	for _, history := range [][]planeWatchObservation{sources, spotters, nacoses} {
+		sort.Slice(history, func(i, j int) bool { return history[i].At.Before(history[j].At) })
+	}
+	stateMatches := func(observation planeWatchObservation) bool {
+		return observation.Present == present && observation.Status == status
+	}
+	lastState := func(history []planeWatchObservation) (planeWatchObservation, bool) {
+		var latest planeWatchObservation
+		for _, observation := range history {
+			if inWindow(observation.At) {
+				latest = observation
+			}
 		}
+		return latest, !latest.At.IsZero() && stateMatches(latest)
 	}
-	for _, observation := range t.spotterHistory[entry.PodName] {
-		if observation.Operation == "Sync" && observation.Origin == "event-cache-applied" &&
-			inWindow(observation.At) && (spotter.At.IsZero() || observation.At.After(spotter.At)) {
-			spotter = observation
-		}
-	}
-	for _, observation := range t.nacosHistory[entry.PodName] {
-		if inWindow(observation.At) && (nacos.At.IsZero() || observation.At.After(nacos.At)) {
-			nacos = observation
-		}
-	}
-	if source.At.IsZero() || spotter.At.IsZero() || nacos.At.IsZero() ||
-		source.Present != present || spotter.Present != present || nacos.Present != present ||
-		source.Status != status || spotter.Status != status || nacos.Status != status {
-		return exactWatchBoundary{}, false
-	}
-	if present {
-		if spotter.CanonicalPayload == "" || source.Reversion != spotter.Reversion ||
-			nacos.Reversion != spotter.Reversion || nacos.CanonicalPayload != spotter.CanonicalPayload {
+	for _, history := range [][]planeWatchObservation{sources, spotters, nacoses} {
+		if _, ok := lastState(history); !ok {
 			return exactWatchBoundary{}, false
 		}
-	} else if !deleteSourceIdentityMatches(source, spotter) || !deleteNacosIdentityMatches(nacos, spotter) {
+	}
+	cutoff := func(history []planeWatchObservation) time.Time {
+		result := entry.IssuedAt
+		for _, observation := range history {
+			if inWindow(observation.At) && !stateMatches(observation) && observation.At.After(result) {
+				result = observation.At
+			}
+		}
+		return result
+	}
+	sourceCutoff, spotterCutoff, nacosCutoff := cutoff(sources), cutoff(spotters), cutoff(nacoses)
+	completedAt := func(source, spotter, nacos planeWatchObservation) time.Time {
+		latest := source.At
+		if spotter.At.After(latest) {
+			latest = spotter.At
+		}
+		if nacos.At.After(latest) {
+			latest = nacos.At
+		}
+		return latest
+	}
+	var best exactWatchBoundary
+	var bestCompleted time.Time
+	for _, spotter := range spotters {
+		if !inWindow(spotter.At) || spotter.At.Before(spotterCutoff) || !stateMatches(spotter) {
+			continue
+		}
+		for _, source := range sources {
+			if !inWindow(source.At) || source.At.Before(sourceCutoff) || !stateMatches(source) {
+				continue
+			}
+			if present && source.Reversion != spotter.Reversion {
+				continue
+			}
+			if !present && !deleteSourceIdentityMatches(source, spotter) {
+				continue
+			}
+			for _, nacos := range nacoses {
+				if !inWindow(nacos.At) || nacos.At.Before(nacosCutoff) || nacos.At.Before(spotter.At) || !stateMatches(nacos) {
+					continue
+				}
+				if present && (spotter.CanonicalPayload == "" || nacos.Reversion != spotter.Reversion || nacos.CanonicalPayload != spotter.CanonicalPayload) {
+					continue
+				}
+				if !present && !deleteNacosIdentityMatches(nacos, spotter) {
+					continue
+				}
+				completed := completedAt(source, spotter, nacos)
+				if bestCompleted.IsZero() || completed.Before(bestCompleted) {
+					bestCompleted = completed
+					best = exactWatchBoundary{
+						IssuedAt: entry.IssuedAt, SourceSeen: source.At, SpotterTrigger: spotter.TriggerAt,
+						SpotterSeen: spotter.At, NacosSeen: nacos.At, Reversion: spotter.Reversion,
+						Operation: spotter.Operation, Origin: spotter.Origin,
+					}
+				}
+			}
+		}
+	}
+	if bestCompleted.IsZero() {
 		return exactWatchBoundary{}, false
 	}
-	return exactWatchBoundary{
-		IssuedAt: entry.IssuedAt, SourceSeen: source.At, SpotterTrigger: spotter.TriggerAt,
-		SpotterSeen: spotter.At, NacosSeen: nacos.At, Reversion: spotter.Reversion,
-		Operation: spotter.Operation, Origin: spotter.Origin,
-	}, true
+	return best, true
+}
+
+func slicesMatching(values []planeWatchObservation, keep func(planeWatchObservation) bool) []planeWatchObservation {
+	result := make([]planeWatchObservation, 0, len(values))
+	for _, value := range values {
+		if keep(value) {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func (t *watchTimeline) waitForMutationCoverage(entries []ledgerEntry, timeout time.Duration) {
