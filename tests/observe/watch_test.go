@@ -247,3 +247,21 @@ func TestObserveUnitWatchTimelineSeparatesSameNamePodGenerations(t *testing.T) {
 	}
 	t.Fatal("same-name new UID deletion was not correlated to its own Nacos generation")
 }
+
+func TestObserveUnitWatchSummaryFailsClosedOnMissingMutation(t *testing.T) {
+	k8sEvents := make(chan k8sWatchEvent)
+	spotterEvents := make(chan spotterWatchEvent)
+	nacosEvents := make(chan nacosWatchEvent)
+	timeline := newWatchTimeline(k8sEvents, spotterEvents, nacosEvents)
+	issued := time.Now()
+	evidence, records := timeline.summarizeMutations([]ledgerEntry{{Op: "create", AppCode: "app-a", PodName: "pod-a", IssuedAt: issued}}, 1, 1)
+	if evidence.Mutations != 1 || evidence.Correlated != 0 || evidence.Missing != 1 {
+		t.Fatalf("watch evidence = %+v, want one fail-closed missing mutation", evidence)
+	}
+	if len(records) != 1 || records[0].Missing == "" {
+		t.Fatalf("mutation records = %+v, want explicit missing reason", records)
+	}
+	close(k8sEvents)
+	close(spotterEvents)
+	close(nacosEvents)
+}

@@ -346,7 +346,9 @@ func ladderRepetitions(scale int) int {
 		return 1
 	}
 	switch scale {
-	case 1, 10:
+	case 1:
+		return 100
+	case 10:
 		return 10
 	case 100:
 		return 5
@@ -627,10 +629,7 @@ func ladderInstanceSamplesFromWait(scale int, operation string, issuedAt time.Ti
 }
 
 func ladderCorrelationMode(operation string) string {
-	if operation == "delete" {
-		return "uid-sourcekey-offline-removal"
-	}
-	return "revision-status-canonical"
+	return watchCorrelationMode(operation)
 }
 
 func crashTransitionFromWait(operation string, wait ladderWaitResult) crashTransition {

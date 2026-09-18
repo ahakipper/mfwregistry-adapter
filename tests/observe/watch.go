@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -85,9 +87,11 @@ func startK8sPodWatch(ctx context.Context, kubeconfig, selector string) (<-chan 
 				}
 				continue
 			}
+			relistNeeded := false
 			for event := range watcher.ResultChan() {
 				if event.Type == watch.Error {
 					_ = emit(k8sWatchEvent{Type: string(event.Type), At: time.Now(), Err: fmt.Errorf("k8s watch error: %v", event.Object)})
+					relistNeeded = true
 					break
 				}
 				pod, ok := event.Object.(*v1.Pod)
@@ -103,6 +107,21 @@ func startK8sPodWatch(ctx context.Context, kubeconfig, selector string) (<-chan 
 				}
 			}
 			watcher.Stop()
+			if relistNeeded && ctx.Err() == nil {
+				relisted, relistErr := client.CoreV1().Pods("").List(ctx, metav1.ListOptions{LabelSelector: selector})
+				if relistErr != nil {
+					if !emit(k8sWatchEvent{Type: string(watch.Error), At: time.Now(), Err: fmt.Errorf("relist after k8s watch gap: %w", relistErr)}) {
+						return
+					}
+				} else {
+					rv = relisted.ResourceVersion
+					for i := range relisted.Items {
+						if !emit(k8sWatchEvent{Type: string(watch.Added), Pod: relisted.Items[i].DeepCopy(), At: time.Now()}) {
+							return
+						}
+					}
+				}
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -230,6 +249,11 @@ type nacosServiceWatch struct {
 	closing    bool
 }
 
+type nacosWatchGroup struct {
+	events        <-chan nacosWatchEvent
+	subscriptions int
+}
+
 type planeWatchObservation struct {
 	At               time.Time
 	TriggerAt        time.Time
@@ -349,11 +373,13 @@ func newWatchTimeline(k8sEvents <-chan k8sWatchEvent, spotterEvents <-chan spott
 					timeline.mu.Unlock()
 					continue
 				}
-				timeline.spotterHistory[event.InstanceID] = append(timeline.spotterHistory[event.InstanceID], planeWatchObservation{
-					At: observedAt, TriggerAt: triggerAt, Present: event.Status != 3, SourceKey: event.SourceKey,
-					Operation: event.Operation, Origin: event.Origin, Status: event.Status,
-					Reversion: event.Reversion, CanonicalPayload: event.CanonicalPayload,
-				})
+				if event.Operation == "Sync" && event.Origin == "event-cache-applied" {
+					timeline.spotterHistory[event.InstanceID] = append(timeline.spotterHistory[event.InstanceID], planeWatchObservation{
+						At: observedAt, TriggerAt: triggerAt, Present: event.Status != 3, SourceKey: event.SourceKey,
+						Operation: event.Operation, Origin: event.Origin, Status: event.Status,
+						Reversion: event.Reversion, CanonicalPayload: event.CanonicalPayload,
+					})
+				}
 			}
 			timeline.mu.Unlock()
 		}
@@ -457,6 +483,9 @@ func (t *watchTimeline) exactBoundary(name string, present bool, status int32, c
 		if canonical != "" && spotter.CanonicalPayload != canonical {
 			continue
 		}
+		if present && spotter.CanonicalPayload == "" {
+			continue
+		}
 		var sourceAt time.Time
 		for _, source := range t.sourceHistory[name] {
 			if source.At.Before(issuedAt) || source.Present != present || source.Status != status {
@@ -497,6 +526,134 @@ func (t *watchTimeline) exactBoundary(name string, present bool, status int32, c
 		}, true
 	}
 	return exactWatchBoundary{}, false
+}
+
+func (t *watchTimeline) mutationBoundary(entry ledgerEntry) (exactWatchBoundary, bool) {
+	present := true
+	status := int32(1)
+	switch entry.Op {
+	case "delete":
+		present = false
+		status = 3
+	case "crash":
+		status = 2
+	case "create", "recover":
+		status = 1
+	default:
+		return exactWatchBoundary{}, false
+	}
+	return t.exactBoundary(entry.PodName, present, status, "", entry.IssuedAt)
+}
+
+func (t *watchTimeline) waitForMutationCoverage(entries []ledgerEntry, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for {
+		complete := true
+		for _, entry := range entries {
+			if _, ok := t.mutationBoundary(entry); !ok {
+				complete = false
+				break
+			}
+		}
+		if complete || time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+type watchLatencyValues struct {
+	apiK8s, apiSpotter, spotterQueue, spotterNacos, apiNacos []float64
+}
+
+func (t *watchTimeline) summarizeMutations(entries []ledgerEntry, subscriptionsWanted, subscriptionsStarted int) (watchRunEvidence, []watchMutationRecord) {
+	evidence := watchRunEvidence{
+		SubscriptionsWanted: subscriptionsWanted, SubscriptionsStarted: subscriptionsStarted,
+		Mutations: len(entries), ByOperation: map[string]watchOperationSummary{},
+	}
+	t.mu.Lock()
+	evidence.K8sEvents = t.sourceEvents
+	evidence.SpotterEvents = t.spotterEvents
+	evidence.NacosEvents = t.nacosEvents
+	t.mu.Unlock()
+	evidence.Errors = append(evidence.Errors, t.errorsSnapshot()...)
+	evidence.Errors = append(evidence.Errors, t.healthErrors()...)
+	values := map[string]*watchLatencyValues{}
+	records := make([]watchMutationRecord, 0, len(entries))
+	for _, entry := range entries {
+		record := watchMutationRecord{
+			Operation: entry.Op, AppCode: entry.AppCode, InstanceID: entry.PodName,
+			IssuedAt: entry.IssuedAt.UTC().Format(time.RFC3339Nano),
+		}
+		boundary, ok := t.mutationBoundary(entry)
+		if !ok {
+			record.Missing = "exact incremental K8s/Spotter/Nacos boundary"
+			evidence.Missing++
+			records = append(records, record)
+			continue
+		}
+		evidence.Correlated++
+		record.K8sWatchAt = boundary.SourceSeen.UTC().Format(time.RFC3339Nano)
+		record.SpotterAt = boundary.SpotterSeen.UTC().Format(time.RFC3339Nano)
+		record.NacosAt = boundary.NacosSeen.UTC().Format(time.RFC3339Nano)
+		record.Reversion = boundary.Reversion
+		record.CorrelationMode = watchCorrelationMode(entry.Op)
+		record.APIToK8sSec = boundary.SourceSeen.Sub(entry.IssuedAt).Seconds()
+		record.APIToSpotterSec = boundary.SpotterSeen.Sub(entry.IssuedAt).Seconds()
+		if !boundary.SpotterTrigger.IsZero() {
+			record.SpotterQueueSec = boundary.SpotterSeen.Sub(boundary.SpotterTrigger).Seconds()
+		}
+		record.SpotterToNacosSec = boundary.NacosSeen.Sub(boundary.SpotterSeen).Seconds()
+		record.APIToNacosSec = boundary.NacosSeen.Sub(entry.IssuedAt).Seconds()
+		group := values[entry.Op]
+		if group == nil {
+			group = &watchLatencyValues{}
+			values[entry.Op] = group
+		}
+		group.apiK8s = append(group.apiK8s, record.APIToK8sSec)
+		group.apiSpotter = append(group.apiSpotter, record.APIToSpotterSec)
+		group.spotterQueue = append(group.spotterQueue, record.SpotterQueueSec)
+		group.spotterNacos = append(group.spotterNacos, record.SpotterToNacosSec)
+		group.apiNacos = append(group.apiNacos, record.APIToNacosSec)
+		records = append(records, record)
+	}
+	for operation, group := range values {
+		evidence.ByOperation[operation] = watchOperationSummary{
+			APIToK8s: watchPercentiles(group.apiK8s), APIToSpotter: watchPercentiles(group.apiSpotter),
+			SpotterQueue: watchPercentiles(group.spotterQueue), SpotterToNacos: watchPercentiles(group.spotterNacos),
+			APIToNacos: watchPercentiles(group.apiNacos),
+		}
+	}
+	return evidence, records
+}
+
+func watchCorrelationMode(operation string) string {
+	if operation == "delete" {
+		return "uid-sourcekey-offline-removal"
+	}
+	return "revision-status-canonical"
+}
+
+func watchPercentiles(values []float64) watchLatencyPercentiles {
+	if len(values) == 0 {
+		return watchLatencyPercentiles{}
+	}
+	sorted := append([]float64(nil), values...)
+	sort.Float64s(sorted)
+	quantile := func(q float64) float64 {
+		index := int(math.Ceil(q*float64(len(sorted)))) - 1
+		if index < 0 {
+			index = 0
+		}
+		if index >= len(sorted) {
+			index = len(sorted) - 1
+		}
+		return sorted[index]
+	}
+	return watchLatencyPercentiles{
+		Samples: len(sorted), P50: quantile(0.50), P90: quantile(0.90),
+		P95: quantile(0.95), P99: quantile(0.99), Max: sorted[len(sorted)-1],
+	}
 }
 
 func deleteSourceIdentityMatches(source, spotter planeWatchObservation) bool {
@@ -672,6 +829,43 @@ func startNacosServiceWatch(ctx context.Context, addr, service string) (*nacosSe
 		close(watch.events)
 	}()
 	return watch, nil
+}
+
+func startNacosServiceWatches(ctx context.Context, addr string, services []string) (*nacosWatchGroup, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	merged := make(chan nacosWatchEvent, 4096)
+	var wg sync.WaitGroup
+	for _, service := range services {
+		watch, err := startNacosServiceWatch(ctx, addr, service)
+		if err != nil {
+			return nil, fmt.Errorf("start Nacos Subscribe for %s: %w", service, err)
+		}
+		wg.Add(1)
+		go func(events <-chan nacosWatchEvent) {
+			defer wg.Done()
+			for event := range events {
+				select {
+				case merged <- event:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}(watch.Events())
+	}
+	go func() {
+		wg.Wait()
+		close(merged)
+	}()
+	return &nacosWatchGroup{events: merged, subscriptions: len(services)}, nil
+}
+
+func (g *nacosWatchGroup) Events() <-chan nacosWatchEvent {
+	if g == nil {
+		return nil
+	}
+	return g.events
 }
 
 func cloneNacosHosts(hosts []spotternacos.Host) []spotternacos.Host {

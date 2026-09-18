@@ -20,6 +20,7 @@ the discovery center ("Atlas") over gRPC.
 | [evidence/nacos3-kwok-target-2026-09-14.md](evidence/nacos3-kwok-target-2026-09-14.md) | Current Nacos 3 SDK provenance, ARM64 target, kwok acceptance schema, and evidence status. |
 | [evidence/nacos3-kwok-complete-instance-equality-2026-09-15.md](evidence/nacos3-kwok-complete-instance-equality-2026-09-15.md) | Fresh one-hour 1000-Pod/20-application evidence for complete Instance, labels, Reversion, and exact per-tick source/Nacos equality. |
 | [observation-method-validation-2026-09-17.md](observation-method-validation-2026-09-17.md) | Corrected K8s Watch → Spotter internal-cache/pre-worker → Nacos Subscribe observation model, stable-cut equality oracle, percentile semantics, and current diagnostic evidence. |
+| [evidence/nacos3-kwok-continuous-watch-scale-pass-2026-09-17.md](evidence/nacos3-kwok-continuous-watch-scale-pass-2026-09-17.md) | Full 1/10/100/500/1000 KWOK continuous-watch scale evidence with 10,220 per-instance samples and strict batch min/median/max. |
 | [superpowers/plans/2026-09-15-remaining-closure.md](superpowers/plans/2026-09-15-remaining-closure.md) | Remaining in-scope closure plan: legacy deletion, two-hour burst gate, status reconciliation, and safe historical commit-message rewrite. |
 
 Start with [architecture.md](architecture.md) for the big picture; see the

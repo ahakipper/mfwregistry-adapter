@@ -594,7 +594,7 @@ func tickIsTransitional(record tickRecord) bool {
 // source mutation and remain inside the bounded in-flight set; an unexplained
 // or expired mismatch is emitted immediately as a product divergence.
 func snapshotRetryable(record tickRecord) bool {
-	return (record.Verdict == string(verdictConsistent) &&
+	return record.SnapshotUnstable || (record.Verdict == string(verdictConsistent) &&
 		!record.ExactEqual && record.MutationObserved &&
 		len(record.Divergence) > 0 && record.InFlight == len(record.Divergence)) ||
 		record.SpotterRetryable

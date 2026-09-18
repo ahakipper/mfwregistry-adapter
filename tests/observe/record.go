@@ -18,30 +18,45 @@ import (
 // the divergences with details, the environment snapshot, the queue
 // depths, and the tick's own duration.
 type tickRecord struct {
-	Tick               int          `json:"tick"`
-	TS                 string       `json:"ts"`
-	ElapsedMS          int64        `json:"elapsedMs"`
-	Verdict            string       `json:"verdict"`
-	Source             sideCount    `json:"source"`
-	ExpectedCount      int          `json:"expectedCount"`
-	Remote             sideCount    `json:"remote"`
-	Spotter            sideCount    `json:"spotter"`
-	SpotterObserved    bool         `json:"spotterObserved"`
-	SpotterEqual       bool         `json:"spotterEqual"`
-	SpotterRetryable   bool         `json:"spotterRetryable"`
-	InFlight           int          `json:"inFlight"`
-	ExactEqual         bool         `json:"exactEqual"`
-	MutationObserved   bool         `json:"mutationObserved"`
-	MutationSequence   uint64       `json:"mutationSequence"`
-	SourceFingerprint  string       `json:"sourceFingerprint"`
-	RemoteFingerprint  string       `json:"remoteFingerprint"`
-	SpotterFingerprint string       `json:"spotterFingerprint"`
-	SnapshotAttempts   int          `json:"snapshotAttempts"`
-	SnapshotWaitMS     int64        `json:"snapshotWaitMs"`
-	Divergence         []divergence `json:"divergences"`
-	Env                envState     `json:"env"`
-	Queue              queueState   `json:"queue"`
-	TickMS             int64        `json:"tickMs"`
+	Tick               int                       `json:"tick"`
+	TS                 string                    `json:"ts"`
+	ElapsedMS          int64                     `json:"elapsedMs"`
+	Verdict            string                    `json:"verdict"`
+	Source             sideCount                 `json:"source"`
+	ExpectedCount      int                       `json:"expectedCount"`
+	Remote             sideCount                 `json:"remote"`
+	Spotter            sideCount                 `json:"spotter"`
+	SpotterObserved    bool                      `json:"spotterObserved"`
+	SpotterEqual       bool                      `json:"spotterEqual"`
+	SpotterRetryable   bool                      `json:"spotterRetryable"`
+	InFlight           int                       `json:"inFlight"`
+	ExactEqual         bool                      `json:"exactEqual"`
+	MutationObserved   bool                      `json:"mutationObserved"`
+	MutationSequence   uint64                    `json:"mutationSequence"`
+	SourceFingerprint  string                    `json:"sourceFingerprint"`
+	RemoteFingerprint  string                    `json:"remoteFingerprint"`
+	SpotterFingerprint string                    `json:"spotterFingerprint"`
+	SnapshotAttempts   int                       `json:"snapshotAttempts"`
+	SnapshotWaitMS     int64                     `json:"snapshotWaitMs"`
+	SnapshotStable     bool                      `json:"snapshotStable"`
+	SnapshotUnstable   bool                      `json:"snapshotUnstable"`
+	AttemptHistory     []snapshotAttemptEvidence `json:"attemptHistory,omitempty"`
+	Divergence         []divergence              `json:"divergences"`
+	Env                envState                  `json:"env"`
+	Queue              queueState                `json:"queue"`
+	TickMS             int64                     `json:"tickMs"`
+}
+
+type snapshotAttemptEvidence struct {
+	Verdict          string `json:"verdict"`
+	ExactEqual       bool   `json:"exactEqual"`
+	SnapshotStable   bool   `json:"snapshotStable"`
+	SnapshotUnstable bool   `json:"snapshotUnstable"`
+	SpotterEqual     bool   `json:"spotterEqual"`
+	InFlight         int    `json:"inFlight"`
+	Divergences      int    `json:"divergences"`
+	SourceCount      int    `json:"sourceCount"`
+	RemoteCount      int    `json:"remoteCount"`
 }
 
 // sideCount is one side's observation (bidirectionality: both sides'
@@ -137,19 +152,21 @@ type runSummary struct {
 	ReconcileSource  string  `json:"reconcileSource"`
 
 	// Ticks
-	Ticks                int     `json:"ticks"`
-	Consistent           int     `json:"consistent"`
-	Divergent            int     `json:"divergent"`
-	ObsErr               int     `json:"obserr"`
-	ConsistencyRatio     float64 `json:"consistencyRatio"`
-	ExactEqualTicks      int     `json:"exactEqualTicks"`
-	TransitionalTicks    int     `json:"transitionalTicks"`
-	SteadyTicks          int     `json:"steadyTicks"`
-	SteadyExactTicks     int     `json:"steadyExactTicks"`
-	SpotterEqualTicks    int     `json:"spotterEqualTicks"`
-	SpotterMismatchTicks int     `json:"spotterMismatchTicks"`
-	ObsErrRatio          float64 `json:"obserrRatio"`
-	MaxObsErrStreak      int     `json:"maxObserrStreak"`
+	Ticks                    int     `json:"ticks"`
+	Consistent               int     `json:"consistent"`
+	Divergent                int     `json:"divergent"`
+	ObsErr                   int     `json:"obserr"`
+	ConsistencyRatio         float64 `json:"consistencyRatio"`
+	ExactEqualTicks          int     `json:"exactEqualTicks"`
+	TransitionalTicks        int     `json:"transitionalTicks"`
+	SteadyTicks              int     `json:"steadyTicks"`
+	SteadyExactTicks         int     `json:"steadyExactTicks"`
+	SpotterEqualTicks        int     `json:"spotterEqualTicks"`
+	SpotterMismatchTicks     int     `json:"spotterMismatchTicks"`
+	SnapshotAttempts         int     `json:"snapshotAttempts"`
+	UnstableSnapshotAttempts int     `json:"unstableSnapshotAttempts"`
+	ObsErrRatio              float64 `json:"obserrRatio"`
+	MaxObsErrStreak          int     `json:"maxObserrStreak"`
 
 	// Scale criterion
 	TicksSourceGEBase      int     `json:"ticksSourceGeBase"`
@@ -177,6 +194,9 @@ type runSummary struct {
 		Count uint64  `json:"count"`
 	} `json:"latency"`
 
+	// Continuous three-plane watch evidence.
+	Watch watchRunEvidence `json:"watch"`
+
 	// Environment
 	EnvWindows []envWindow `json:"envWindows,omitempty"`
 
@@ -191,6 +211,55 @@ type runSummary struct {
 	// The verdict
 	Pass  bool     `json:"pass"`
 	Fails []string `json:"fails,omitempty"`
+}
+
+type watchMutationRecord struct {
+	Operation         string  `json:"operation"`
+	AppCode           string  `json:"appCode"`
+	InstanceID        string  `json:"instanceId"`
+	IssuedAt          string  `json:"issuedAt"`
+	K8sWatchAt        string  `json:"k8sWatchAt,omitempty"`
+	SpotterAt         string  `json:"spotterAt,omitempty"`
+	NacosAt           string  `json:"nacosAt,omitempty"`
+	Reversion         int64   `json:"reversion,omitempty"`
+	CorrelationMode   string  `json:"correlationMode,omitempty"`
+	APIToK8sSec       float64 `json:"apiToK8sSec,omitempty"`
+	APIToSpotterSec   float64 `json:"apiToSpotterSec,omitempty"`
+	SpotterQueueSec   float64 `json:"spotterProviderTriggerToWorkerSec,omitempty"`
+	SpotterToNacosSec float64 `json:"spotterToNacosSec,omitempty"`
+	APIToNacosSec     float64 `json:"apiToNacosSec,omitempty"`
+	Missing           string  `json:"missing,omitempty"`
+}
+
+type watchLatencyPercentiles struct {
+	Samples int     `json:"samples"`
+	P50     float64 `json:"p50"`
+	P90     float64 `json:"p90"`
+	P95     float64 `json:"p95"`
+	P99     float64 `json:"p99"`
+	Max     float64 `json:"max"`
+}
+
+type watchOperationSummary struct {
+	APIToK8s       watchLatencyPercentiles `json:"apiToK8s"`
+	APIToSpotter   watchLatencyPercentiles `json:"apiToSpotter"`
+	SpotterQueue   watchLatencyPercentiles `json:"spotterProviderTriggerToWorker"`
+	SpotterToNacos watchLatencyPercentiles `json:"spotterToNacos"`
+	APIToNacos     watchLatencyPercentiles `json:"apiToNacos"`
+}
+
+type watchRunEvidence struct {
+	SubscriptionsWanted  int                              `json:"subscriptionsWanted"`
+	SubscriptionsStarted int                              `json:"subscriptionsStarted"`
+	K8sEvents            int                              `json:"k8sEvents"`
+	SpotterEvents        int                              `json:"spotterEvents"`
+	NacosEvents          int                              `json:"nacosEvents"`
+	Mutations            int                              `json:"mutations"`
+	Correlated           int                              `json:"correlated"`
+	Missing              int                              `json:"missing"`
+	ByOperation          map[string]watchOperationSummary `json:"byOperation,omitempty"`
+	Errors               []string                         `json:"errors,omitempty"`
+	EventsFile           string                           `json:"eventsFile,omitempty"`
 }
 
 // burstSummary is one burst event's measured record: the issue times and
@@ -257,6 +326,7 @@ func renderSummaryMarkdown(s runSummary) string {
 	b.WriteString(fmt.Sprintf("Exact-equal ticks: %d; transitional ticks: %d\n", s.ExactEqualTicks, s.TransitionalTicks))
 	b.WriteString(fmt.Sprintf("Spotter projection exact ticks: %d; mismatches: %d (test-only informer projection read)\n", s.SpotterEqualTicks, s.SpotterMismatchTicks))
 	b.WriteString(fmt.Sprintf("Steady exact-equal ticks: %d/%d\n", s.SteadyExactTicks, s.SteadyTicks))
+	b.WriteString(fmt.Sprintf("Snapshot attempts: %d; unstable cuts retried: %d\n", s.SnapshotAttempts, s.UnstableSnapshotAttempts))
 	b.WriteString(fmt.Sprintf("Scale: source >= %d on %d/%d ticks (%.4f); min source count %d\n",
 		s.Scale, s.TicksSourceGEBase, s.Ticks, s.TicksSourceGEBaseRatio, s.MinSourceCount))
 	b.WriteString("\n## Queue / drops\n\n")
@@ -264,6 +334,21 @@ func renderSummaryMarkdown(s runSummary) string {
 		s.MaxRetryDepth, s.MaxRobotDepth, s.DroppedTotal, s.DrainedAtEnd))
 	b.WriteString("\n## Latency (event_to_store_e2e, nacos/ok)\n\n")
 	b.WriteString(fmt.Sprintf("p50 %.3fs, p90 %.3fs, p95 %.3fs, p99 %.3fs over %d observations\n", s.Latency.P50, s.Latency.P90, s.Latency.P95, s.Latency.P99, s.Latency.Count))
+	if s.Watch.SubscriptionsWanted > 0 {
+		b.WriteString("\n## Continuous K8s → Spotter → Nacos watch\n\n")
+		b.WriteString(fmt.Sprintf("Subscriptions %d/%d; events K8s=%d Spotter=%d Nacos=%d; mutations correlated %d/%d; missing %d; watcher errors %d; raw %s\n",
+			s.Watch.SubscriptionsStarted, s.Watch.SubscriptionsWanted, s.Watch.K8sEvents, s.Watch.SpotterEvents, s.Watch.NacosEvents,
+			s.Watch.Correlated, s.Watch.Mutations, s.Watch.Missing, len(s.Watch.Errors), s.Watch.EventsFile))
+		operations := make([]string, 0, len(s.Watch.ByOperation))
+		for operation := range s.Watch.ByOperation {
+			operations = append(operations, operation)
+		}
+		sort.Strings(operations)
+		for _, operation := range operations {
+			latency := s.Watch.ByOperation[operation].APIToNacos
+			b.WriteString(fmt.Sprintf("- %s API→Nacos: n=%d p50=%.3fs p90=%.3fs p95=%.3fs p99=%.3fs max=%.3fs\n", operation, latency.Samples, latency.P50, latency.P90, latency.P95, latency.P99, latency.Max))
+		}
+	}
 	b.WriteString("\n## Divergences\n\n")
 	b.WriteString(fmt.Sprintf("Product-divergent ticks: %d; max heal %s; max in-flight %d\n", s.ProductDivergentTicks, s.MaxHeal, s.MaxInFlight))
 	if len(s.Bursts) > 0 {
@@ -319,6 +404,28 @@ func writeSummaryFile(dir, stamp string, s runSummary) (jsonPath, mdPath string,
 		return "", "", err
 	}
 	return jsonPath, mdPath, nil
+}
+
+func writeWatchMutationFile(dir, stamp string, records []watchMutationRecord) (string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, fmt.Sprintf("%s-events.jsonl", stamp))
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return "", err
+	}
+	encoder := json.NewEncoder(file)
+	for _, record := range records {
+		if err := encoder.Encode(record); err != nil {
+			_ = file.Close()
+			return "", err
+		}
+	}
+	if err := file.Close(); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // sortedKeys returns the sorted keys of a string-keyed map (deterministic

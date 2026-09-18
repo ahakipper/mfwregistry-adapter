@@ -180,6 +180,9 @@ func TestObserveUnitRemoteFingerprintIncludesMetadataAndWireFields(t *testing.T)
 }
 
 func TestObserveUnitSnapshotRetryRequiresBoundedMutationEvidence(t *testing.T) {
+	if !snapshotRetryable(tickRecord{SnapshotUnstable: true}) {
+		t.Fatal("an unstable three-plane cut must request a fresh snapshot")
+	}
 	if !snapshotRetryable(tickRecord{Verdict: string(verdictConsistent), ExactEqual: false, MutationObserved: true, InFlight: 1, Divergence: []divergence{{Kind: divMissing, InFlight: true}}}) {
 		t.Fatal("mutation-backed in-flight mismatch should request a fresh snapshot")
 	}
@@ -188,6 +191,21 @@ func TestObserveUnitSnapshotRetryRequiresBoundedMutationEvidence(t *testing.T) {
 	}
 	if snapshotRetryable(tickRecord{Verdict: string(verdictObsErr), ExactEqual: false, MutationObserved: true, InFlight: 1, Divergence: []divergence{{Kind: divMissing, InFlight: true}}}) {
 		t.Fatal("observation errors must not be hidden by snapshot retries")
+	}
+}
+
+func TestObserveUnitMutationJournalRetainsEveryOperation(t *testing.T) {
+	driver := newChurnDriver("unused", []string{"obs-app-0"}, observePodPrefix)
+	start := time.Now()
+	driver.mu.Lock()
+	driver.mutationJournal = append(driver.mutationJournal,
+		ledgerEntry{Op: "create", PodName: "pod-a", AppCode: "obs-app-0", IssuedAt: start},
+		ledgerEntry{Op: "delete", PodName: "pod-a", AppCode: "obs-app-0", IssuedAt: start.Add(time.Second)},
+	)
+	driver.mu.Unlock()
+	journal := driver.mutationJournalSince(start)
+	if len(journal) != 2 || journal[0].Op != "create" || journal[1].Op != "delete" {
+		t.Fatalf("mutation journal = %+v, want append-only create/delete history", journal)
 	}
 }
 

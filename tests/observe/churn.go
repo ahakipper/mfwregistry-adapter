@@ -47,12 +47,13 @@ type churnDriver struct {
 	appCodes   []string
 	prefix     string
 
-	mu             sync.Mutex
-	ledger         map[string]ledgerEntry // podName -> latest mutation
-	mutationSeq    uint64                 // monotonic source-mutation epoch
-	mutationActive int                    // overlapping source mutation operations
-	counter        int                    // monotonically increasing pod-name suffix
-	applied        int                    // live pod count the driver tracks
+	mu              sync.Mutex
+	ledger          map[string]ledgerEntry // podName -> latest mutation
+	mutationJournal []ledgerEntry          // append-only per-operation evidence
+	mutationSeq     uint64                 // monotonic source-mutation epoch
+	mutationActive  int                    // overlapping source mutation operations
+	counter         int                    // monotonically increasing pod-name suffix
+	applied         int                    // live pod count the driver tracks
 }
 
 // ledgerEntry is one mutation's record (the in-flight clock source).
@@ -88,6 +89,7 @@ func (d *churnDriver) patchStatus(name string, issuedAt time.Time, op, patch str
 		entry.AppCode = d.appCodeOf(0)
 	}
 	d.ledger[name] = ledgerEntry{Op: op, PodName: name, AppCode: entry.AppCode, IssuedAt: issuedAt}
+	d.mutationJournal = append(d.mutationJournal, d.ledger[name])
 	d.mutationSeq++
 	d.mutationActive++
 	d.mu.Unlock()
@@ -252,6 +254,7 @@ func (d *churnDriver) applyBatch(count, batchSize int, issuedAt time.Time) ([]st
 	// window for that first tick.
 	for _, p := range pods {
 		d.ledger[p.name] = ledgerEntry{Op: "create", PodName: p.name, AppCode: p.appCode, IssuedAt: issuedAt}
+		d.mutationJournal = append(d.mutationJournal, d.ledger[p.name])
 	}
 	d.mutationSeq++
 	d.mutationActive++
@@ -296,6 +299,7 @@ func (d *churnDriver) deletePods(names []string, issuedAt time.Time) error {
 			appCode = d.appCodeOf(0)
 		}
 		d.ledger[name] = ledgerEntry{Op: "delete", PodName: name, AppCode: appCode, IssuedAt: issuedAt}
+		d.mutationJournal = append(d.mutationJournal, d.ledger[name])
 	}
 	d.mutationSeq++
 	d.mutationActive++
@@ -336,6 +340,18 @@ func (d *churnDriver) ledgerSnapshot() map[string]ledgerEntry {
 	out := make(map[string]ledgerEntry, len(d.ledger))
 	for name, entry := range d.ledger {
 		out[name] = entry
+	}
+	return out
+}
+
+func (d *churnDriver) mutationJournalSince(start time.Time) []ledgerEntry {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]ledgerEntry, 0, len(d.mutationJournal))
+	for _, entry := range d.mutationJournal {
+		if !entry.IssuedAt.Before(start) {
+			out = append(out, entry)
+		}
 	}
 	return out
 }
