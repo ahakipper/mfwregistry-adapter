@@ -18,6 +18,17 @@ log="$out/${mode}-${run_id}.log"
 pid_file="$out/${mode}-${run_id}.pid"
 launch_label="${OBS_LAUNCH_LABEL:-${XPC_SERVICE_NAME:-}}"
 
+# launchctl submit may schedule one replacement process in the small interval
+# between this service exiting and the asynchronous self-remove completing.
+# A terminal status makes RUN_ID immutable: a replacement removes the label
+# and exits without overwriting artifacts or starting a second owned stack.
+if [[ -f "$status" ]] && grep -Eq '^EXIT_CODE=[0-9]+$' "$status"; then
+  if [[ -n "$launch_label" ]]; then
+    (/bin/launchctl remove "$launch_label" >/dev/null 2>&1 || true) &
+  fi
+  exit 0
+fi
+
 printf 'RUNNING\n' > "$status"
 printf '%d\n' "$$" > "$pid_file"
 finish() {

@@ -19,13 +19,17 @@ import (
 // depths, and the tick's own duration.
 type tickRecord struct {
 	Tick               int                       `json:"tick"`
+	Scope              string                    `json:"scope"` // cold-attach | window | post-quiescence
 	TS                 string                    `json:"ts"`
 	ElapsedMS          int64                     `json:"elapsedMs"`
 	Verdict            string                    `json:"verdict"`
 	Source             sideCount                 `json:"source"`
+	SourceIDs          []string                  `json:"sourceIds,omitempty"`
 	ExpectedCount      int                       `json:"expectedCount"`
 	Remote             sideCount                 `json:"remote"`
+	RemoteIDs          []string                  `json:"remoteIds,omitempty"`
 	Spotter            sideCount                 `json:"spotter"`
+	SpotterIDs         []string                  `json:"spotterIds,omitempty"`
 	SpotterObserved    bool                      `json:"spotterObserved"`
 	SpotterEqual       bool                      `json:"spotterEqual"`
 	SpotterRetryable   bool                      `json:"spotterRetryable"`
@@ -172,6 +176,8 @@ type runSummary struct {
 	TicksSourceGEBase      int     `json:"ticksSourceGeBase"`
 	TicksSourceGEBaseRatio float64 `json:"ticksSourceGeBaseRatio"`
 	MinSourceCount         int     `json:"minSourceCount"`
+	FinalSourceCount       int     `json:"finalSourceCount"`
+	FinalSnapshotExact     bool    `json:"finalSnapshotExact"`
 
 	// Divergences
 	ProductDivergentTicks int              `json:"productDivergentTicks"`
@@ -329,6 +335,8 @@ func renderSummaryMarkdown(s runSummary) string {
 	b.WriteString(fmt.Sprintf("Snapshot attempts: %d; unstable cuts retried: %d\n", s.SnapshotAttempts, s.UnstableSnapshotAttempts))
 	b.WriteString(fmt.Sprintf("Scale: source >= %d on %d/%d ticks (%.4f); min source count %d\n",
 		s.Scale, s.TicksSourceGEBase, s.Ticks, s.TicksSourceGEBaseRatio, s.MinSourceCount))
+	b.WriteString(fmt.Sprintf("Final source population: %d (base %d)\n", s.FinalSourceCount, s.Scale))
+	b.WriteString(fmt.Sprintf("Final post-quiescence three-plane snapshot exact: %v\n", s.FinalSnapshotExact))
 	b.WriteString("\n## Queue / drops\n\n")
 	b.WriteString(fmt.Sprintf("Max retry-queue depth %d; max robot queue depth %d; dropped events %.0f; drained at end: %v\n",
 		s.MaxRetryDepth, s.MaxRobotDepth, s.DroppedTotal, s.DrainedAtEnd))

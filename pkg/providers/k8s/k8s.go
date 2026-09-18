@@ -505,6 +505,21 @@ func (k *k8s) cacheRef() providers.CacheIterface {
 	return cache
 }
 
+// replaceCacheIfGeneration installs a rebuilt cache only when no incremental
+// event updated the active cache after the rebuild's starting snapshot. Without
+// this CAS fence, CompareAndFlush can overwrite a concurrent delete tombstone
+// with an older online informer snapshot.
+func (k *k8s) replaceCacheIfGeneration(candidate providers.CacheIterface, observed uint64) (uint64, bool) {
+	k.Lock()
+	defer k.Unlock()
+	if k.generation != observed {
+		return k.generation, false
+	}
+	k.cache = candidate
+	k.generation++
+	return k.generation, true
+}
+
 func (k *k8s) isStopped() bool {
 	k.Lock()
 	stopped := k.stopped
@@ -513,33 +528,58 @@ func (k *k8s) isStopped() bool {
 }
 
 func (k *k8s) snapshotForFullPush() ([]*sv.Instance, uint64, bool, bool) {
-	// Snapshot the cache interface under the provider lock before calling
-	// List. flushInstances swaps the interface during an atomic cache rebuild;
-	// reading k.cache without the lock races with that assignment even though
-	// the cache implementation itself is synchronized.
-	k.Lock()
-	cache := k.cache
-	k.Unlock()
-	var all []*sv.Instance
-	if cache != nil {
-		all = cache.List()
-	}
-	if k.robot != nil && k.robot.HasSynced() {
-		if source := k.GetAll(); source != nil {
-			all = source
+	return k.snapshotForFullPushWithLoader(func(cache providers.CacheIterface) []*sv.Instance {
+		var all []*sv.Instance
+		if cache != nil {
+			all = cache.List()
 		}
+		if k.robot != nil && k.robot.HasSynced() {
+			if source := k.GetAll(); source != nil {
+				all = source
+			}
+		}
+		return all
+	})
+}
+
+// snapshotForFullPushWithLoader binds a full snapshot to exactly the cache
+// generation that surrounded its read. A concurrent informer event can make
+// the source reader return an older list after ProcessCache has already moved
+// generation forward; pairing that list with the newer generation would let
+// ordered revalidation accept a stale full push and prune a newly-added
+// identity. Retry a bounded number of times and skip this interval when churn
+// never leaves a stable read window; the next periodic push or incremental
+// event will retry without publishing an unsafe snapshot.
+func (k *k8s) snapshotForFullPushWithLoader(load func(providers.CacheIterface) []*sv.Instance) ([]*sv.Instance, uint64, bool, bool) {
+	const maxSnapshotAttempts = 3
+	for attempt := 0; attempt < maxSnapshotAttempts; attempt++ {
+		// Snapshot the cache interface and generation under one lock before
+		// calling List/GetAll. flushInstances can swap the interface, while
+		// ProcessCache advances generation for every incremental event.
+		k.Lock()
+		cache := k.cache
+		observedGeneration := k.generation
+		k.Unlock()
+
+		all := load(cache)
+		k.Lock()
+		if k.generation != observedGeneration {
+			k.Unlock()
+			continue
+		}
+		if all == nil {
+			all = []*sv.Instance{}
+		}
+		if len(all) == 0 {
+			k.emptyConfirmations++
+		} else {
+			k.emptyConfirmations = 0
+		}
+		emptyConfirmed := k.emptyConfirmations >= 3
+		k.Unlock()
+		return all, observedGeneration, true, emptyConfirmed
 	}
-	k.Lock()
-	defer k.Unlock()
-	if all == nil {
-		all = []*sv.Instance{}
-	}
-	if len(all) == 0 {
-		k.emptyConfirmations++
-	} else {
-		k.emptyConfirmations = 0
-	}
-	return all, k.generation, true, k.emptyConfirmations >= 3
+	return nil, 0, false, false
 }
 
 // VerifyInstance checks wether the instance is valid
@@ -752,6 +792,9 @@ func (k *k8s) flushInstances() {
 func (k *k8s) CompareAndFlush() {
 	k.ensureDeps()
 	k.logger.Infof("%s: trying to compare and find diff instances then flush", k.providerName)
+	k.Lock()
+	observedGeneration := k.generation
+	k.Unlock()
 	if all := k.GetAll(); all != nil && len(all) > 0 {
 		// process the cache
 		newCache := providers.NewCache(2)
@@ -762,10 +805,10 @@ func (k *k8s) CompareAndFlush() {
 				onlineCount++
 			}
 		}
-		k.Lock()
-		k.cache = newCache
-		k.generation++
-		k.Unlock()
+		if current, ok := k.replaceCacheIfGeneration(newCache, observedGeneration); !ok {
+			k.logger.Warnf("k8s cache generation changed during CompareAndFlush (started=%d current=%d); discarding stale rebuild", observedGeneration, current)
+			return
+		}
 		// compare diffs and sync incrementally
 		// the worker is exactly what communicates with Atlas (fetch from the discovery center, push data)
 		list, err := k.worker.GetAll([]int32{providers.InstanceStatusOnline, providers.InstanceStatusUnhealthy}, providers.ProviderK8s)

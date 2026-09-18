@@ -265,3 +265,27 @@ func TestObserveUnitWatchSummaryFailsClosedOnMissingMutation(t *testing.T) {
 	close(spotterEvents)
 	close(nacosEvents)
 }
+
+func TestObserveUnitWatchSummaryRejectsReusedBoundary(t *testing.T) {
+	k8sEvents := make(chan k8sWatchEvent, 1)
+	spotterEvents := make(chan spotterWatchEvent, 1)
+	nacosEvents := make(chan nacosWatchEvent, 1)
+	timeline := newWatchTimeline(k8sEvents, spotterEvents, nacosEvents)
+	issued := time.Now().Add(-time.Second)
+	target := &sv.Instance{InstanceId: "pod-a", AppCode: "app-a", Provider: "k8s", SourceKey: "cluster-a/uid-a", SourceCluster: "cluster-a", Reversion: 42, Status: 1, Enabled: true}
+	canonical := domaininstance.CanonicalPayload(target)
+	k8sEvents <- k8sWatchEvent{Type: "MODIFIED", Pod: &v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-a", UID: "uid-a", ResourceVersion: "42"}, Status: v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1", ContainerStatuses: []v1.ContainerStatus{{Ready: true, State: v1.ContainerState{Running: &v1.ContainerStateRunning{}}}}}}, At: issued.Add(100 * time.Millisecond)}
+	spotterEvents <- spotterWatchEvent{Boundary: "provider-output/pre-worker", Operation: "Sync", Origin: "event-cache-applied", InstanceID: "pod-a", SourceKey: "cluster-a/uid-a", Reversion: 42, Status: 1, CanonicalPayload: canonical, TriggerAt: issued.Add(50 * time.Millisecond).Format(time.RFC3339Nano), ObservedAt: issued.Add(200 * time.Millisecond).Format(time.RFC3339Nano)}
+	nacosEvents <- nacosWatchEvent{Service: "app-a", Hosts: []spotternacos.Host{{Metadata: map[string]string{"instanceId": "pod-a", "status": "1", "reversion": "42", "spotter.instance": domaininstance.CompressedCanonicalPayload(target)}}}, At: issued.Add(300 * time.Millisecond)}
+	close(k8sEvents)
+	close(spotterEvents)
+	close(nacosEvents)
+	time.Sleep(10 * time.Millisecond)
+	entry := ledgerEntry{Op: "create", AppCode: "app-a", PodName: "pod-a", IssuedAt: issued}
+	secondEntry := entry
+	secondEntry.Op = "recover"
+	evidence, records := timeline.summarizeMutations([]ledgerEntry{entry, secondEntry}, 1, 1)
+	if evidence.Correlated != 1 || evidence.Missing != 1 || len(records) != 2 || records[1].Missing != "exact boundary reused by another mutation" {
+		t.Fatalf("reused-boundary evidence=%+v records=%+v", evidence, records)
+	}
+}

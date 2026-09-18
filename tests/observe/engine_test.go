@@ -209,6 +209,23 @@ func TestObserveUnitMutationJournalRetainsEveryOperation(t *testing.T) {
 	}
 }
 
+func TestObserveUnitDuplicateDeleteDoesNotInventMutation(t *testing.T) {
+	driver := newChurnDriver("unused", []string{"obs-app-0"}, observePodPrefix)
+	deleted, err := driver.deletePods([]string{"obs-pod-already-gone"}, time.Now())
+	if err != nil {
+		t.Fatalf("duplicate delete should be a no-op: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("duplicate delete count = %d, want 0", deleted)
+	}
+	if journal := driver.mutationJournalSince(time.Time{}); len(journal) != 0 {
+		t.Fatalf("duplicate delete journal = %+v, want no invented mutation", journal)
+	}
+	if driver.applied != 0 {
+		t.Fatalf("applied count = %d, want 0 after duplicate delete", driver.applied)
+	}
+}
+
 // TestObserveUnitInFlightTolerance pins the §3.4 tolerance: a missing
 // expected entry whose source changed at c(e) is tolerated ONLY while
 // t − c(e) ≤ OBS_BOUND; at c(e)+B it is DIVERGENT (tolerance, not
@@ -758,6 +775,41 @@ func TestObserveUnitChurnFailureFailsAcceptance(t *testing.T) {
 	}
 }
 
+func TestObserveUnitFinalPopulationDriftFailsAcceptance(t *testing.T) {
+	run := &observeRun{cfg: observeConfig{BaseInstances: 1000}, tracker: newDivergenceTracker()}
+	pass, failures := run.evaluateAcceptance(runSummary{Ticks: 1, Scale: 1000, FinalSourceCount: 1066, DrainedAtEnd: true})
+	if pass {
+		t.Fatal("acceptance passed with net-neutral population drift")
+	}
+	if got := strings.Join(failures, "; "); !strings.Contains(got, "final source count 1066 != base 1000") {
+		t.Fatalf("acceptance failures = %q, want final population drift", got)
+	}
+}
+
+func TestObserveUnitFinalSnapshotDoesNotDiluteWindowRatios(t *testing.T) {
+	run := &observeRun{
+		tickCount:    19,
+		consistent:   18,
+		obsErr:       1,
+		sourceGEBase: 18,
+		steadyTicks:  19,
+	}
+	run.captureFinalSnapshot(tickRecord{
+		Verdict:        string(verdictConsistent),
+		SnapshotStable: true,
+		ExactEqual:     true,
+		SpotterEqual:   true,
+		Source:         sideCount{Count: 1000},
+	})
+	if run.tickCount != 19 || run.consistent != 18 || run.obsErr != 1 || run.sourceGEBase != 18 || run.steadyTicks != 19 {
+		t.Fatalf("final proof changed window counters: ticks=%d consistent=%d obsErr=%d sourceGEBase=%d steady=%d",
+			run.tickCount, run.consistent, run.obsErr, run.sourceGEBase, run.steadyTicks)
+	}
+	if run.finalSourceCount != 1000 || !run.finalSnapshotExact {
+		t.Fatalf("final proof not captured: count=%d exact=%t", run.finalSourceCount, run.finalSnapshotExact)
+	}
+}
+
 // TestObserveUnitBurstSchedule pins the §4.2 OBS_BURSTS marks: the
 // 100-in-1s storm early (5%) + the 200-instance batches at 25%/50%/75%.
 func TestObserveUnitBurstSchedule(t *testing.T) {
@@ -805,6 +857,24 @@ func TestObserveUnitOwnPodFilter(t *testing.T) {
 	}
 }
 
+func TestObserveUnitChurnExcludesBurstAndCrashOwnedPods(t *testing.T) {
+	r := &observeRun{
+		appCodes:    []string{"obs-app-0"},
+		driver:      newChurnDriver("unused", []string{"obs-app-0"}, observePodPrefix),
+		burstEvents: []burstEvent{{Pods: []string{"obs-pod-burst"}}},
+		crashPod:    "obs-pod-crash",
+	}
+	if r.isChurnCandidate(sourcePod{Name: "obs-pod-burst", AppCode: "obs-app-0", Phase: "Running"}) {
+		t.Fatal("burst-owned Pod was eligible for ordinary churn")
+	}
+	if r.isChurnCandidate(sourcePod{Name: "obs-pod-crash", AppCode: "obs-app-0", Phase: "Running"}) {
+		t.Fatal("crash-owned Pod was eligible for ordinary churn")
+	}
+	if !r.isChurnCandidate(sourcePod{Name: "obs-pod-free", AppCode: "obs-app-0", Phase: "Running"}) {
+		t.Fatal("ordinary running harness Pod was not eligible for churn")
+	}
+}
+
 // TestObserveUnitBurstConvergenceAccounting pins the burst folding: a
 // burst pod absent from a tick's divergence list converges that leg; one
 // present blocks convergence until it clears.
@@ -815,19 +885,29 @@ func TestObserveUnitBurstConvergenceAccounting(t *testing.T) {
 		appCodes: []string{"obs-app-0"},
 	}
 	create := time.Now().Add(-15 * time.Second)
-	delete := time.Now().Add(-15 * time.Second)
 	r.burstEvents = []burstEvent{{
 		Name: "storm-100", Size: 2, Pods: []string{"obs-pod-1", "obs-pod-2"},
-		CreateIssued: create, DeleteIssued: delete,
+		CreateIssued: create,
 	}}
 	tickTS := time.Now()
-	// Both pods clean: both legs converge.
+	// Both pods are present on all three planes: only the UP leg converges.
 	r.checkBurstConvergence(tickRecord{
 		Verdict: string(verdictConsistent), TS: formatTime(tickTS), Divergence: nil,
+		SnapshotStable: true, ExactEqual: true, SpotterEqual: true,
+		SourceIDs: []string{"obs-pod-1", "obs-pod-2"}, SpotterIDs: []string{"obs-pod-1", "obs-pod-2"}, RemoteIDs: []string{"obs-pod-1", "obs-pod-2"},
 	})
 	ev := r.burstEvents[0]
-	if ev.ConvergedUp.IsZero() || ev.ConvergedDown.IsZero() {
-		t.Fatalf("clean tick must converge both legs: %+v", ev)
+	if ev.ConvergedUp.IsZero() || !ev.ConvergedDown.IsZero() {
+		t.Fatalf("present tick must converge only UP: %+v", ev)
+	}
+	// Once delete is issued, all three planes must omit every target before
+	// the DOWN leg converges.
+	r.burstEvents[0].DeleteIssued = time.Now().Add(-15 * time.Second)
+	r.checkBurstConvergence(tickRecord{
+		Verdict: string(verdictConsistent), TS: formatTime(time.Now()), SnapshotStable: true, ExactEqual: true, SpotterEqual: true,
+	})
+	if r.burstEvents[0].ConvergedDown.IsZero() {
+		t.Fatalf("absent tick must converge DOWN: %+v", r.burstEvents[0])
 	}
 	// A divergent pod blocks convergence on a fresh burst.
 	r.burstEvents = []burstEvent{{
@@ -841,8 +921,19 @@ func TestObserveUnitBurstConvergenceAccounting(t *testing.T) {
 	if !r.burstEvents[0].ConvergedUp.IsZero() {
 		t.Fatalf("a divergent burst pod must block up-convergence")
 	}
+	// A source/Nacos-clean tick with a Spotter-only mismatch is not a
+	// three-plane convergence point.
+	r.checkBurstConvergence(tickRecord{
+		Verdict: string(verdictDivergent), TS: formatTime(time.Now()), SnapshotStable: true,
+		ExactEqual: false, SpotterEqual: false,
+	})
+	if !r.burstEvents[0].ConvergedUp.IsZero() {
+		t.Fatal("Spotter-only mismatch incorrectly marked burst converged")
+	}
 	r.checkBurstConvergence(tickRecord{
 		Verdict: string(verdictConsistent), TS: formatTime(time.Now()), Divergence: nil,
+		SnapshotStable: true, ExactEqual: true, SpotterEqual: true,
+		SourceIDs: []string{"obs-pod-3"}, SpotterIDs: []string{"obs-pod-3"}, RemoteIDs: []string{"obs-pod-3"},
 	})
 	if r.burstEvents[0].ConvergedUp.IsZero() {
 		t.Fatalf("the clean tick after the divergence must converge the leg")

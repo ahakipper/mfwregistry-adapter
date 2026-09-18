@@ -418,7 +418,7 @@ func (s *orderedSink) runLocked(trigger int64, items []*instance.Instance, full 
 				continue
 			}
 		}
-		accepted[key] = identityRevision{revision: rev}
+		accepted[key] = identityRevision{revision: rev, tombstone: item.Status == instance.InstanceStatusOffline}
 		filtered = append(filtered, item)
 	}
 	// A regular full push is only a safe prune snapshot when it contains every

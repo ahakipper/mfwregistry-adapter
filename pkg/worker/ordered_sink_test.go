@@ -17,6 +17,36 @@ type gateProbeSink struct {
 	block       <-chan struct{}
 }
 
+func TestOrderedSinkIncrementalOfflineTombstonesSameRevision(t *testing.T) {
+	inner := &countingFullSink{}
+	s := &orderedSink{inner: inner}
+	online := probeInstance("k8s/uid-a")
+	online.Status = instance.InstanceStatusOnline
+	online.Reversion = 7
+	if err := s.Push(1, []*instance.Instance{online}); err != nil {
+		t.Fatalf("seed online push: %v", err)
+	}
+	offline := *online
+	offline.Status = instance.InstanceStatusOffline
+	if err := s.Push(2, []*instance.Instance{&offline}); err != nil {
+		t.Fatalf("incremental offline push: %v", err)
+	}
+	if err := s.Push(3, []*instance.Instance{online}); err != nil {
+		t.Fatalf("same-revision stale online push: %v", err)
+	}
+	if inner.pushCalls != 2 {
+		t.Fatalf("inner push calls = %d, want online+offline only", inner.pushCalls)
+	}
+	newer := *online
+	newer.Reversion = 8
+	if err := s.Push(4, []*instance.Instance{&newer}); err != nil {
+		t.Fatalf("newer online push: %v", err)
+	}
+	if inner.pushCalls != 3 {
+		t.Fatalf("inner push calls = %d, want newer revision accepted", inner.pushCalls)
+	}
+}
+
 func (p *gateProbeSink) Push(int64, []*instance.Instance) error                 { return p.enter() }
 func (p *gateProbeSink) PushAll(int64, []*instance.Instance) error              { return p.enter() }
 func (p *gateProbeSink) GetAll([]int32, string) (*instance.InstanceList, error) { return nil, nil }

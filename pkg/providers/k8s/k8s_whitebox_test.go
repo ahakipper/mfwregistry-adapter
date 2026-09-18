@@ -50,6 +50,30 @@ type fakeRobot struct {
 	mu         sync.Mutex
 }
 
+func TestCacheGenerationFenceRejectsStaleRebuild(t *testing.T) {
+	k := newTestProvider(newFakeRobot(nil, nil, true), &fakeWorker{})
+	online := &sv.Instance{InstanceId: "pod-fenced", SourceKey: "cluster-a/uid-a", Provider: "k8s", Reversion: 10, Status: providers.InstanceStatusOnline}
+	k.ProcessCache(k8srobot.EventAdd, online)
+	k.Lock()
+	observedGeneration := k.generation
+	k.Unlock()
+
+	stale := providers.NewCache(2)
+	stale.ReplaceOrInsert(online)
+	offline := *online
+	offline.Status = providers.InstanceStatusOffline
+	offline.Enabled = false
+	k.ProcessCache(k8srobot.EventDelete, &offline)
+
+	if _, ok := k.replaceCacheIfGeneration(stale, observedGeneration); ok {
+		t.Fatal("stale cache rebuild overwrote a concurrent delete")
+	}
+	got := k.cache.Get(providers.IdentityKey(&offline))
+	if got == nil || got.Status != providers.InstanceStatusOffline {
+		t.Fatalf("cache after rejected rebuild = %#v, want offline tombstone", got)
+	}
+}
+
 // newFakeRobot builds a robot serving byKey from GetByKey and pods from List,
 // with hasSynced as the initial sync state.
 func newFakeRobot(byKey map[string][]interface{}, pods []interface{}, hasSynced bool) *fakeRobot {
@@ -966,6 +990,44 @@ func TestK8sEmptyFullRequiresThreeSuccessfulConfirmations(t *testing.T) {
 	_, _, valid, confirmed := k.snapshotForFullPush()
 	if !valid || !confirmed {
 		t.Fatalf("third empty confirmation = valid:%v confirmed:%v, want confirmed", valid, confirmed)
+	}
+}
+
+func TestK8sFullPushSnapshotRetriesWhenGenerationChangesDuringRead(t *testing.T) {
+	k := newTestProvider(newFakeRobot(nil, nil, false), &fakeWorker{})
+	first := &sv.Instance{InstanceId: "pod-a", SourceKey: "cluster-a/uid-a", Provider: "k8s", Reversion: 1, Status: providers.InstanceStatusOnline}
+	second := &sv.Instance{InstanceId: "pod-b", SourceKey: "cluster-a/uid-b", Provider: "k8s", Reversion: 1, Status: providers.InstanceStatusOnline}
+	k.ProcessCache(k8srobot.EventAdd, first)
+
+	loads := 0
+	all, generation, valid, _ := k.snapshotForFullPushWithLoader(func(cache providers.CacheIterface) []*sv.Instance {
+		loads++
+		result := cache.List()
+		if loads == 1 {
+			// The first loader deliberately returns the old list after the
+			// incremental path has already advanced generation.
+			k.ProcessCache(k8srobot.EventAdd, second)
+		}
+		return result
+	})
+	if !valid {
+		t.Fatal("stable retry was rejected")
+	}
+	if loads != 2 {
+		t.Fatalf("snapshot loads = %d, want one rejected read plus one retry", loads)
+	}
+	byID := make(map[string]bool, len(all))
+	for _, item := range all {
+		byID[item.InstanceId] = true
+	}
+	if !byID[first.InstanceId] || !byID[second.InstanceId] {
+		t.Fatalf("full snapshot = %#v, want both pre-existing and concurrent identities", all)
+	}
+	k.Lock()
+	current := k.generation
+	k.Unlock()
+	if generation != current {
+		t.Fatalf("snapshot generation = %d, current = %d", generation, current)
 	}
 }
 

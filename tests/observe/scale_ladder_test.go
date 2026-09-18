@@ -238,8 +238,10 @@ func TestObserveScaleLadder(t *testing.T) {
 		t.Fatalf("watch warm-up create coverage: %v", err)
 	}
 	warmDeleted := time.Now()
-	if err := driver.deletePods(warmNames, warmDeleted); err != nil {
+	if deleted, err := driver.deletePods(warmNames, warmDeleted); err != nil {
 		t.Fatalf("watch warm-up delete: %v", err)
+	} else if deleted != len(warmNames) {
+		t.Fatalf("watch warm-up delete: deleted %d/%d pods", deleted, len(warmNames))
 	}
 	if _, err := waitLadderExact(t, driver, view, child, nil, appCode, warmNames, warmDeleted, false, 2*time.Minute); err != nil {
 		t.Fatalf("watch warm-up delete convergence: %v", err)
@@ -271,8 +273,13 @@ func TestObserveScaleLadder(t *testing.T) {
 				report.InstanceSamples = append(report.InstanceSamples, ladderInstanceSamplesFromWait(scale, "create", issued, wait)...)
 			}
 			deletedAt := time.Now()
-			if err := driver.deletePods(names, deletedAt); err != nil {
+			deleted, err := driver.deletePods(names, deletedAt)
+			if err != nil {
 				report.Failures = append(report.Failures, fmt.Sprintf("delete scale %d sample %d: %v", scale, i+1, err))
+				continue
+			}
+			if deleted != len(names) {
+				report.Failures = append(report.Failures, fmt.Sprintf("delete scale %d sample %d: deleted %d/%d pods", scale, i+1, deleted, len(names)))
 				continue
 			}
 			wait, err = waitLadderExact(t, driver, view, child, timeline, appCode, names, deletedAt, false, stepTimeout)
@@ -314,8 +321,11 @@ func TestObserveScaleLadder(t *testing.T) {
 			}
 		}
 		cleanupAt := time.Now()
-		if err := driver.deletePods(names, cleanupAt); err != nil {
+		deleted, err := driver.deletePods(names, cleanupAt)
+		if err != nil {
 			report.Failures = append(report.Failures, fmt.Sprintf("crash cleanup delete: %v", err))
+		} else if deleted != len(names) {
+			report.Failures = append(report.Failures, fmt.Sprintf("crash cleanup delete: deleted %d/%d pods", deleted, len(names)))
 		} else if _, err := waitLadderExact(t, driver, view, child, timeline, appCode, names, cleanupAt, false, stepTimeout); err != nil {
 			report.Failures = append(report.Failures, fmt.Sprintf("crash cleanup convergence: %v", err))
 		}
@@ -434,13 +444,13 @@ func waitLadderExact(t *testing.T, driver *churnDriver, view *nacosView, child *
 		boundaryOK := timeline == nil
 		boundaries := map[string]exactWatchBoundary{}
 		if timeline != nil {
-			boundaries, boundaryOK = ladderExactBoundaries(timeline, model, appCode, names, present, issuedAt)
+			boundaries, boundaryOK = ladderExactBoundaries(timeline, model, appCode, names, present, issuedAt, driver.ledgerLookup)
 		}
 		if len(diff.Divergences) == 0 && diff.InFlightCount == 0 && spotterOK && ladderIDsPresent(model, remote["k8s"], appCode, names, present) && boundaryOK {
 			result.Latency = time.Since(issuedAt)
 			if timeline != nil {
 				result.InstanceBoundaries = boundaries
-				summarizeLadderBoundaries(&result, boundaries, issuedAt)
+				summarizeLadderBoundaries(&result, boundaries)
 			}
 			return result, nil
 		}
@@ -451,7 +461,7 @@ func waitLadderExact(t *testing.T, driver *churnDriver, view *nacosView, child *
 	return result, fmt.Errorf("strict equality did not converge within %s (polls=%d mismatches=%d): %s", timeout, result.Polls, result.Mismatches, lastDetail)
 }
 
-func ladderExactBoundaries(timeline *watchTimeline, model *sourceModel, appCode string, names []string, present bool, issuedAt time.Time) (map[string]exactWatchBoundary, bool) {
+func ladderExactBoundaries(timeline *watchTimeline, model *sourceModel, appCode string, names []string, present bool, issuedAt time.Time, ledger func(string) (ledgerEntry, bool)) (map[string]exactWatchBoundary, bool) {
 	boundaries := make(map[string]exactWatchBoundary, len(names))
 	for _, name := range names {
 		status := int32(3)
@@ -472,7 +482,11 @@ func ladderExactBoundaries(timeline *watchTimeline, model *sourceModel, appCode 
 			}
 			canonical = domaininstance.CanonicalPayload(decoded)
 		}
-		boundary, ok := timeline.exactBoundary(name, present, status, canonical, issuedAt)
+		boundaryIssuedAt := issuedAt
+		if entry, ok := ledger(name); ok && !entry.IssuedAt.IsZero() {
+			boundaryIssuedAt = entry.IssuedAt
+		}
+		boundary, ok := timeline.exactBoundary(name, present, status, canonical, boundaryIssuedAt)
 		if !ok {
 			return nil, false
 		}
@@ -481,8 +495,9 @@ func ladderExactBoundaries(timeline *watchTimeline, model *sourceModel, appCode 
 	return boundaries, true
 }
 
-func summarizeLadderBoundaries(result *ladderWaitResult, boundaries map[string]exactWatchBoundary, issuedAt time.Time) {
+func summarizeLadderBoundaries(result *ladderWaitResult, boundaries map[string]exactWatchBoundary) {
 	for _, boundary := range boundaries {
+		issuedAt := boundary.IssuedAt
 		if boundary.SourceSeen.After(result.SourceWatchSeen) {
 			result.SourceWatchSeen = boundary.SourceSeen
 		}
@@ -611,6 +626,10 @@ func ladderInstanceSamplesFromWait(scale int, operation string, issuedAt time.Ti
 	samples := make([]ladderInstanceSample, 0, len(names))
 	for _, name := range names {
 		boundary := wait.InstanceBoundaries[name]
+		boundaryIssuedAt := issuedAt
+		if !boundary.IssuedAt.IsZero() {
+			boundaryIssuedAt = boundary.IssuedAt
+		}
 		spotterQueue := time.Duration(0)
 		if !boundary.SpotterTrigger.IsZero() {
 			spotterQueue = boundary.SpotterSeen.Sub(boundary.SpotterTrigger)
@@ -618,9 +637,9 @@ func ladderInstanceSamplesFromWait(scale int, operation string, issuedAt time.Ti
 		samples = append(samples, ladderInstanceSample{
 			Scale: scale, Operation: operation, InstanceID: name, Reversion: boundary.Reversion,
 			SpotterOperate: boundary.Operation, SpotterOrigin: boundary.Origin,
-			APIToK8sWatchSec: boundary.SourceSeen.Sub(issuedAt).Seconds(), APIToSpotterEventSec: boundary.SpotterSeen.Sub(issuedAt).Seconds(),
+			APIToK8sWatchSec: boundary.SourceSeen.Sub(boundaryIssuedAt).Seconds(), APIToSpotterEventSec: boundary.SpotterSeen.Sub(boundaryIssuedAt).Seconds(),
 			SpotterQueueSec: spotterQueue.Seconds(), SpotterToNacosWatchSec: boundary.NacosSeen.Sub(boundary.SpotterSeen).Seconds(),
-			ExternalK8sToNacosSec: boundary.NacosSeen.Sub(boundary.SourceSeen).Seconds(), APIToNacosWatchSec: boundary.NacosSeen.Sub(issuedAt).Seconds(),
+			ExternalK8sToNacosSec: boundary.NacosSeen.Sub(boundary.SourceSeen).Seconds(), APIToNacosWatchSec: boundary.NacosSeen.Sub(boundaryIssuedAt).Seconds(),
 			SourceWatchObserved: !boundary.SourceSeen.IsZero(), SpotterEventObserved: !boundary.SpotterSeen.IsZero(),
 			NacosSubscribeObserved: !boundary.NacosSeen.IsZero(), CorrelationMode: ladderCorrelationMode(operation),
 		})

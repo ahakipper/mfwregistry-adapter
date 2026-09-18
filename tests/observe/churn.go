@@ -50,6 +50,9 @@ type churnDriver struct {
 	mu              sync.Mutex
 	ledger          map[string]ledgerEntry // podName -> latest mutation
 	mutationJournal []ledgerEntry          // append-only per-operation evidence
+	live            map[string]bool        // driver-owned objects confirmed live
+	deleting        map[string]bool        // atomically claimed by one delete actor
+	latestIssuedAt  time.Time              // latest per-chunk API issue clock
 	mutationSeq     uint64                 // monotonic source-mutation epoch
 	mutationActive  int                    // overlapping source mutation operations
 	counter         int                    // monotonically increasing pod-name suffix
@@ -89,7 +92,7 @@ func (d *churnDriver) patchStatus(name string, issuedAt time.Time, op, patch str
 		entry.AppCode = d.appCodeOf(0)
 	}
 	d.ledger[name] = ledgerEntry{Op: op, PodName: name, AppCode: entry.AppCode, IssuedAt: issuedAt}
-	d.mutationJournal = append(d.mutationJournal, d.ledger[name])
+	d.latestIssuedAt = issuedAt
 	d.mutationSeq++
 	d.mutationActive++
 	d.mu.Unlock()
@@ -97,6 +100,9 @@ func (d *churnDriver) patchStatus(name string, issuedAt time.Time, op, patch str
 	if _, err := d.kubectlStdin(patch, "patch", "pod", name, "--subresource=status", "--type=merge", "-p", patch); err != nil {
 		return fmt.Errorf("patch pod %s status (%s): %w", name, op, err)
 	}
+	d.mu.Lock()
+	d.mutationJournal = append(d.mutationJournal, d.ledger[name])
+	d.mu.Unlock()
 	return nil
 }
 
@@ -110,6 +116,8 @@ func newChurnDriver(kubeconfig string, appCodes []string, prefix string) *churnD
 		appCodes:   codes,
 		prefix:     prefix,
 		ledger:     map[string]ledgerEntry{},
+		live:       map[string]bool{},
+		deleting:   map[string]bool{},
 	}
 }
 
@@ -246,81 +254,124 @@ func (d *churnDriver) applyBatch(count, batchSize int, issuedAt time.Time) ([]st
 		}
 		pods = append(pods, pod{name: name, appCode: d.appCodeOf(idx - 1)})
 	}
-	d.applied += count
-	// Publish the mutation clock before kubectl changes the source. A watch
-	// tick can observe the object immediately after apply returns (or a delete
-	// immediately after the API accepts it); recording the ledger only after
-	// the command created a ledger-before-apply race and lost the tolerance
-	// window for that first tick.
-	for _, p := range pods {
-		d.ledger[p.name] = ledgerEntry{Op: "create", PodName: p.name, AppCode: p.appCode, IssuedAt: issuedAt}
-		d.mutationJournal = append(d.mutationJournal, d.ledger[p.name])
-	}
-	d.mutationSeq++
 	d.mutationActive++
 	d.mu.Unlock()
 	defer d.finishMutation()
+	appliedNames := make([]string, 0, len(pods))
 
 	for start := 0; start < len(pods); start += batchSize {
 		end := start + batchSize
 		if end > len(pods) {
 			end = len(pods)
 		}
+		chunkIssued := time.Now()
+		if start == 0 && !issuedAt.IsZero() {
+			chunkIssued = issuedAt
+		}
+		// Publish this chunk's clock immediately before its API call. A large
+		// operation is several serial requests; one batch-start timestamp makes
+		// later chunks look older than they really are.
+		d.mu.Lock()
+		for _, p := range pods[start:end] {
+			d.ledger[p.name] = ledgerEntry{Op: "create", PodName: p.name, AppCode: p.appCode, IssuedAt: chunkIssued}
+		}
+		d.latestIssuedAt = chunkIssued
+		d.mutationSeq++
+		d.mu.Unlock()
 		var b strings.Builder
 		b.WriteString("apiVersion: v1\nkind: List\nitems:\n")
 		for _, p := range pods[start:end] {
 			b.WriteString(podListItem(d.podManifest(p.appCode, p.name)))
 		}
 		if _, err := d.kubectlStdin(b.String(), "apply", "-f", "-"); err != nil {
-			return nil, fmt.Errorf("apply batch (%d pods): %w", end-start, err)
+			d.mu.Lock()
+			for _, p := range pods[start:end] {
+				delete(d.ledger, p.name)
+			}
+			d.mu.Unlock()
+			sort.Strings(appliedNames)
+			return appliedNames, fmt.Errorf("apply batch (%d pods): %w", end-start, err)
 		}
+		d.mu.Lock()
+		for _, p := range pods[start:end] {
+			d.live[p.name] = true
+			d.applied++
+			d.mutationJournal = append(d.mutationJournal, d.ledger[p.name])
+			appliedNames = append(appliedNames, p.name)
+		}
+		d.mu.Unlock()
 	}
-	names := make([]string, 0, len(pods))
-	for _, p := range pods {
-		names = append(names, p.name)
-	}
-	sort.Strings(names)
-	return names, nil
+	sort.Strings(appliedNames)
+	return appliedNames, nil
 }
 
-// deletePods deletes the named pods, recording each in the ledger.
-func (d *churnDriver) deletePods(names []string, issuedAt time.Time) error {
+// deletePods deletes the named pods, recording each successful source
+// mutation in the ledger. The returned count is deliberately separate from
+// len(names): a duplicate/no-op request is not a successful mutation and must
+// never be reported as one by the harness.
+func (d *churnDriver) deletePods(names []string, issuedAt time.Time) (int, error) {
 	if len(names) == 0 {
-		return nil
+		return 0, nil
 	}
-	// Publish delete clocks before issuing the API call so a concurrent
-	// observation cannot see the remote extra without its in-flight ledger
-	// entry. The entry remains useful even if kubectl reports an error; the
-	// caller aborts the run and the forensic record retains the attempted time.
+	// Ignore duplicate rollback attempts for objects already deleted by another
+	// harness actor. `--ignore-not-found` succeeds for them, but no source
+	// mutation occurred and the evidence journal must not invent one.
 	d.mu.Lock()
+	actual := make([]string, 0, len(names))
 	for _, name := range names {
-		appCode := d.ledger[name].AppCode
-		if appCode == "" {
-			appCode = d.appCodeOf(0)
+		if d.live[name] && !d.deleting[name] {
+			actual = append(actual, name)
+			d.deleting[name] = true
 		}
-		d.ledger[name] = ledgerEntry{Op: "delete", PodName: name, AppCode: appCode, IssuedAt: issuedAt}
-		d.mutationJournal = append(d.mutationJournal, d.ledger[name])
 	}
-	d.mutationSeq++
+	if len(actual) == 0 {
+		d.mu.Unlock()
+		return 0, nil
+	}
 	d.mutationActive++
 	d.mu.Unlock()
 	defer d.finishMutation()
-	for start := 0; start < len(names); start += 100 {
+	deleted := 0
+	for start := 0; start < len(actual); start += 100 {
 		end := start + 100
-		if end > len(names) {
-			end = len(names)
+		if end > len(actual) {
+			end = len(actual)
 		}
-		args := append([]string{"delete", "pod", "--ignore-not-found=true", "--wait=false", "--"}, names[start:end]...)
+		chunkIssued := time.Now()
+		if start == 0 && !issuedAt.IsZero() {
+			chunkIssued = issuedAt
+		}
+		d.mu.Lock()
+		for _, name := range actual[start:end] {
+			appCode := d.ledger[name].AppCode
+			if appCode == "" {
+				appCode = d.appCodeOf(0)
+			}
+			d.ledger[name] = ledgerEntry{Op: "delete", PodName: name, AppCode: appCode, IssuedAt: chunkIssued}
+		}
+		d.latestIssuedAt = chunkIssued
+		d.mutationSeq++
+		d.mu.Unlock()
+		args := append([]string{"delete", "pod", "--ignore-not-found=true", "--wait=false", "--"}, actual[start:end]...)
 		if _, err := d.kubectlStdin("", args...); err != nil {
-			return fmt.Errorf("delete pods (%d): %w", end-start, err)
+			d.mu.Lock()
+			for _, name := range actual[start:] {
+				delete(d.deleting, name)
+			}
+			d.mu.Unlock()
+			return deleted, fmt.Errorf("delete pods (%d): %w", end-start, err)
 		}
+		d.mu.Lock()
+		for _, name := range actual[start:end] {
+			delete(d.live, name)
+			delete(d.deleting, name)
+			d.applied--
+			d.mutationJournal = append(d.mutationJournal, d.ledger[name])
+		}
+		d.mu.Unlock()
+		deleted += end - start
 	}
-	d.mu.Lock()
-	for range names {
-		d.applied--
-	}
-	d.mu.Unlock()
-	return nil
+	return deleted, nil
 }
 
 // ledgerLookup returns the latest ledger entry of a pod (ok=false when the
@@ -368,6 +419,12 @@ func (d *churnDriver) mutationState() (uint64, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.mutationSeq, d.mutationActive > 0
+}
+
+func (d *churnDriver) latestMutationIssuedAt() time.Time {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.latestIssuedAt
 }
 
 func (d *churnDriver) finishMutation() {

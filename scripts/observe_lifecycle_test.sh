@@ -58,6 +58,16 @@ export OBS_KWOK_KUBECONFIG="$tmp/owned-kubeconfig"
 
 assert_fail() { set +e; "$@" >/dev/null 2>&1; rc=$?; set -e; [[ $rc -ne 0 ]] || { echo "expected failure: $*" >&2; exit 1; }; }
 
+# A terminal RUN_ID is immutable. A launchd replacement must not overwrite the
+# status or start another stack while asynchronous label removal catches up.
+guard_id=20990101-000000
+guard_status="$root/build/observe/observe-$guard_id.status"
+printf 'EXIT_CODE=2\n' >"$guard_status"
+PATH="$fake:/usr/bin:/bin" OBS_LAUNCH_LABEL= /bin/bash "$root/scripts/observe-runner.sh" observe "$guard_id"
+grep -qx 'EXIT_CODE=2' "$guard_status" || { echo "terminal runner status was overwritten" >&2; exit 1; }
+[[ ! -e "$root/build/observe/observe-$guard_id.pid" ]] || { echo "terminal runner created a pid file" >&2; exit 1; }
+rm -f "$guard_status"
+
 # Missing prerequisite must be classified as EnvError and leave no state.
 assert_fail env PATH="/usr/bin:/bin" OBS_KWOK_CLUSTER=dsca-observe-test /bin/bash "$root/scripts/observe-up.sh"
 

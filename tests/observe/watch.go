@@ -267,6 +267,7 @@ type planeWatchObservation struct {
 }
 
 type exactWatchBoundary struct {
+	IssuedAt       time.Time
 	SourceSeen     time.Time
 	SpotterTrigger time.Time
 	SpotterSeen    time.Time
@@ -534,7 +535,7 @@ func (t *watchTimeline) exactBoundary(name string, present bool, status int32, c
 			continue
 		}
 		return exactWatchBoundary{
-			SourceSeen: sourceAt, SpotterTrigger: spotter.TriggerAt, SpotterSeen: spotter.At,
+			IssuedAt: issuedAt, SourceSeen: sourceAt, SpotterTrigger: spotter.TriggerAt, SpotterSeen: spotter.At,
 			NacosSeen: nacosAt, Reversion: spotter.Reversion, Operation: spotter.Operation, Origin: spotter.Origin,
 		}, true
 	}
@@ -592,6 +593,7 @@ func (t *watchTimeline) summarizeMutations(entries []ledgerEntry, subscriptionsW
 	evidence.Errors = append(evidence.Errors, t.errorsSnapshot()...)
 	evidence.Errors = append(evidence.Errors, t.healthErrors()...)
 	values := map[string]*watchLatencyValues{}
+	consumed := map[string]struct{}{}
 	records := make([]watchMutationRecord, 0, len(entries))
 	for _, entry := range entries {
 		record := watchMutationRecord{
@@ -605,6 +607,15 @@ func (t *watchTimeline) summarizeMutations(entries []ledgerEntry, subscriptionsW
 			records = append(records, record)
 			continue
 		}
+		boundaryKey := fmt.Sprintf("%s\x00%d\x00%d\x00%d", entry.PodName,
+			boundary.SourceSeen.UnixNano(), boundary.SpotterSeen.UnixNano(), boundary.NacosSeen.UnixNano())
+		if _, reused := consumed[boundaryKey]; reused {
+			record.Missing = "exact boundary reused by another mutation"
+			evidence.Missing++
+			records = append(records, record)
+			continue
+		}
+		consumed[boundaryKey] = struct{}{}
 		evidence.Correlated++
 		record.K8sWatchAt = boundary.SourceSeen.UTC().Format(time.RFC3339Nano)
 		record.SpotterAt = boundary.SpotterSeen.UTC().Format(time.RFC3339Nano)

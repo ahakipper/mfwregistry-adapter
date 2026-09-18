@@ -277,6 +277,49 @@ func spotterSideCount(instances []*instance.Instance, appCodes []string) sideCou
 	return result
 }
 
+func sourceModelIDs(model *sourceModel) []string {
+	if model == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	for _, entries := range model.Entries {
+		for id := range entries {
+			seen[id] = struct{}{}
+		}
+	}
+	return sortedIdentitySet(seen)
+}
+
+func spotterProjectionIDs(instances []*instance.Instance, appCodes []string) []string {
+	seen := map[string]struct{}{}
+	for _, ins := range instances {
+		if ins == nil || ins.Provider != "k8s" || !isObservedAppCode(ins.AppCode, appCodes) || ins.Status == instance.InstanceStatusOffline {
+			continue
+		}
+		seen[ins.InstanceId] = struct{}{}
+	}
+	return sortedIdentitySet(seen)
+}
+
+func remoteProjectionIDs(remote map[string][]remoteEntry) []string {
+	seen := map[string]struct{}{}
+	for _, entries := range remote {
+		for _, entry := range entries {
+			seen[entry.ID] = struct{}{}
+		}
+	}
+	return sortedIdentitySet(seen)
+}
+
+func sortedIdentitySet(seen map[string]struct{}) []string {
+	ids := make([]string, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 // remoteViewFingerprint is the audit hash for the complete Nacos view read at
 // one tick. It includes every wire field and the full metadata map (including
 // the compressed canonical Instance payload), while retaining the Nacos-owned

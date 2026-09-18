@@ -176,7 +176,7 @@ func TestObserveConsistency(t *testing.T) {
 	lastMutationSequence := driver.mutationSequence()
 	lastSourceFingerprint := ""
 	for time.Since(started) < 10*time.Minute {
-		record := runTick(t, cfg, driver, view, metrics, child, records, harnessLog, 0, started, lastMutationSequence, lastSourceFingerprint, false)
+		record := runTick(t, cfg, driver, view, metrics, child, records, harnessLog, 0, started, lastMutationSequence, lastSourceFingerprint, false, "cold-attach")
 		lastMutationSequence = record.MutationSequence
 		if record.SourceFingerprint != "" {
 			lastSourceFingerprint = record.SourceFingerprint
@@ -316,6 +316,8 @@ type observeRun struct {
 	obsErr                   int
 	sourceGEBase             int
 	minSource                int
+	finalSourceCount         int
+	finalSnapshotExact       bool
 	maxInFlight              int
 	maxRetryDepth            int
 	maxRobotDepth            int
@@ -349,11 +351,12 @@ type observeRun struct {
 	envDivergentTicks     int
 
 	// Churn accounting.
-	churnStatsMu  sync.Mutex
-	churnCreates  int
-	churnDeletes  int
-	churnErrors   int
-	churnQuiesced time.Time
+	churnStatsMu     sync.Mutex
+	mutationDriverMu sync.Mutex // serializes churn/burst/crash ownership decisions
+	churnCreates     int
+	churnDeletes     int
+	churnErrors      int
+	churnQuiesced    time.Time
 
 	// Sub-tick churn fraction accumulator (small-scale runs).
 	fractionAcc float64
@@ -440,11 +443,13 @@ func (r *observeRun) runBursts(stop <-chan struct{}) {
 			}
 		}
 		r.log.event("burst %s: applying %d pods", b.id, b.n)
+		r.mutationDriverMu.Lock()
 		issued := time.Now()
 		pods, err := r.driver.applyBatch(b.n, 100, issued)
 		if err != nil {
-			r.addChurnStats(0, 0, 1)
-			r.log.event("burst %s: apply failed: %v", b.id, err)
+			r.mutationDriverMu.Unlock()
+			r.addChurnStats(len(pods), 0, 1)
+			r.log.event("burst %s: apply failed after %d/%d pods: %v", b.id, len(pods), b.n, err)
 			continue
 		}
 		r.burstMu.Lock()
@@ -452,6 +457,7 @@ func (r *observeRun) runBursts(stop <-chan struct{}) {
 			Name: b.id, Size: b.n, Pods: pods, CreateIssued: issued,
 		})
 		r.burstMu.Unlock()
+		r.mutationDriverMu.Unlock()
 		r.addChurnStats(b.n, 0, 0)
 		r.log.event("burst %s: %d pods applied (ledger create@%s)", b.id, b.n, formatTime(issued))
 		// The settle: one OBS_BOUND + one tick, so the up-convergence is
@@ -462,10 +468,19 @@ func (r *observeRun) runBursts(stop <-chan struct{}) {
 			return
 		case <-time.After(r.cfg.obsBound() + r.cfg.Tick):
 		}
+		r.mutationDriverMu.Lock()
 		delIssued := time.Now()
-		if err := r.driver.deletePods(pods, delIssued); err != nil {
-			r.addChurnStats(0, 0, 1)
-			r.log.event("burst %s: delete failed: %v", b.id, err)
+		deleted, err := r.driver.deletePods(pods, delIssued)
+		if err != nil {
+			r.mutationDriverMu.Unlock()
+			r.addChurnStats(0, deleted, 1)
+			r.log.event("burst %s: delete failed after %d/%d pods: %v", b.id, deleted, len(pods), err)
+			continue
+		}
+		r.mutationDriverMu.Unlock()
+		if deleted != len(pods) {
+			r.addChurnStats(0, deleted, 1)
+			r.log.event("burst %s: delete ownership violation: deleted %d of %d requested pods", b.id, deleted, len(pods))
 			continue
 		}
 		r.burstMu.Lock()
@@ -491,8 +506,10 @@ func (r *observeRun) runCrashCycle(stop <-chan struct{}) {
 		return
 	case <-time.After(wait):
 	}
+	r.mutationDriverMu.Lock()
 	pods, err := r.driver.liveSourcePods("app-code")
 	if err != nil {
+		r.mutationDriverMu.Unlock()
 		r.addChurnStats(0, 0, 1)
 		r.log.event("crash cycle: source read failed: %v", err)
 		return
@@ -505,6 +522,7 @@ func (r *observeRun) runCrashCycle(stop <-chan struct{}) {
 		}
 	}
 	if candidate == "" {
+		r.mutationDriverMu.Unlock()
 		r.addChurnStats(0, 0, 1)
 		r.log.event("crash cycle: no running harness pod available")
 		return
@@ -519,10 +537,12 @@ func (r *observeRun) runCrashCycle(stop <-chan struct{}) {
 	}()
 	crashAt := time.Now()
 	if err := r.driver.patchCrash(candidate, crashAt); err != nil {
+		r.mutationDriverMu.Unlock()
 		r.addChurnStats(0, 0, 1)
 		r.log.event("crash cycle: CrashLoopBackOff patch failed for %s: %v", candidate, err)
 		return
 	}
+	r.mutationDriverMu.Unlock()
 	r.log.event("crash cycle: %s entered CrashLoopBackOff (ledger crash@%s)", candidate, formatTime(crashAt))
 	settle := 20 * time.Second
 	if bound := r.cfg.obsBound() / 2; bound < settle {
@@ -533,12 +553,15 @@ func (r *observeRun) runCrashCycle(stop <-chan struct{}) {
 		return
 	case <-time.After(settle):
 	}
+	r.mutationDriverMu.Lock()
 	recoverAt := time.Now()
 	if err := r.driver.patchRecovered(candidate, recoverAt); err != nil {
+		r.mutationDriverMu.Unlock()
 		r.addChurnStats(0, 0, 1)
 		r.log.event("crash cycle: recovery patch failed for %s: %v", candidate, err)
 		return
 	}
+	r.mutationDriverMu.Unlock()
 	r.log.event("crash cycle: %s recovered (ledger recover@%s)", candidate, formatTime(recoverAt))
 }
 
@@ -550,7 +573,7 @@ func (r *observeRun) runCrashCycle(stop <-chan struct{}) {
 // unconverged down-pod surfaces). OBSERR ticks carry no divergence
 // evidence and are skipped.
 func (r *observeRun) checkBurstConvergence(record tickRecord) {
-	if record.Verdict == string(verdictObsErr) {
+	if record.Verdict != string(verdictConsistent) || !record.SnapshotStable || !record.ExactEqual || !record.SpotterEqual {
 		return
 	}
 	r.burstMu.Lock()
@@ -562,16 +585,16 @@ func (r *observeRun) checkBurstConvergence(record tickRecord) {
 	if err != nil {
 		return
 	}
-	divIDs := map[string]bool{}
-	for _, d := range record.Divergence {
-		divIDs[d.ID] = true
-	}
+	sourceIDs := stringSet(record.SourceIDs)
+	spotterIDs := stringSet(record.SpotterIDs)
+	remoteIDs := stringSet(record.RemoteIDs)
 	for i := range r.burstEvents {
 		ev := &r.burstEvents[i]
-		if ev.ConvergedUp.IsZero() && tickTS.After(ev.CreateIssued) {
+		if ev.ConvergedUp.IsZero() && tickTS.After(ev.CreateIssued) &&
+			(ev.DeleteIssued.IsZero() || tickTS.Before(ev.DeleteIssued)) {
 			converged := true
 			for _, pod := range ev.Pods {
-				if divIDs[pod] {
+				if !sourceIDs[pod] || !spotterIDs[pod] || !remoteIDs[pod] {
 					converged = false
 					break
 				}
@@ -585,7 +608,7 @@ func (r *observeRun) checkBurstConvergence(record tickRecord) {
 			tickTS.After(ev.DeleteIssued.Add(r.cfg.Tick)) {
 			converged := true
 			for _, pod := range ev.Pods {
-				if divIDs[pod] {
+				if sourceIDs[pod] || spotterIDs[pod] || remoteIDs[pod] {
 					converged = false
 					break
 				}
@@ -596,6 +619,14 @@ func (r *observeRun) checkBurstConvergence(record tickRecord) {
 			}
 		}
 	}
+}
+
+func stringSet(values []string) map[string]bool {
+	result := make(map[string]bool, len(values))
+	for _, value := range values {
+		result[value] = true
+	}
+	return result
 }
 
 // runWindow runs the churn + observation window: the churn on its cadence,
@@ -669,6 +700,8 @@ func (r *observeRun) runWindow(t *testing.T) {
 // replacement of rate/100 * base * (churnEvery/minute) pods. The ledger
 // records every mutation with its issue time (the in-flight clock).
 func (r *observeRun) churnOnce() {
+	r.mutationDriverMu.Lock()
+	defer r.mutationDriverMu.Unlock()
 	exact := r.churnPerTickExact()
 	r.fractionAcc += exact
 	if r.fractionAcc < 1 {
@@ -690,7 +723,7 @@ func (r *observeRun) churnOnce() {
 	}
 	candidates := make([]string, 0, len(pods))
 	for _, pod := range pods {
-		if pod.Phase == "Running" && r.isOwnPod(pod) && !r.isCrashProtected(pod.Name) {
+		if r.isChurnCandidate(pod) {
 			candidates = append(candidates, pod.Name)
 		}
 	}
@@ -706,20 +739,32 @@ func (r *observeRun) churnOnce() {
 	createIssued := time.Now()
 	if len(victims) > 0 {
 		// CREATE first (net-neutral: the population never drops below base).
-		if _, err := r.driver.applyBatch(len(victims), 100, createIssued); err != nil {
-			r.addChurnStats(0, 0, 1)
-			r.log.event("churn: create failed: %v", err)
-		} else {
-			r.addChurnStats(len(victims), 0, 0)
+		created, err := r.driver.applyBatch(len(victims), 100, createIssued)
+		if err != nil {
+			r.addChurnStats(len(created), 0, 1)
+			r.log.event("churn: create failed after %d/%d pods: %v", len(created), len(victims), err)
+			return
 		}
+		r.addChurnStats(len(created), 0, 0)
 		deleteIssued := time.Now()
-		if err := r.driver.deletePods(victims, deleteIssued); err != nil {
-			r.addChurnStats(0, 0, 1)
-			r.log.event("churn: delete failed: %v", err)
-		} else {
-			r.addChurnStats(0, len(victims), 0)
+		deleted, err := r.driver.deletePods(victims, deleteIssued)
+		if err != nil {
+			r.addChurnStats(0, deleted, 1)
+			r.log.event("churn: delete failed after %d/%d pods: %v", deleted, len(victims), err)
+			return
 		}
+		if deleted != len(victims) {
+			r.addChurnStats(0, deleted, 1)
+			r.log.event("churn: delete ownership violation: deleted %d of %d requested pods", deleted, len(victims))
+			return
+		}
+		r.addChurnStats(0, deleted, 0)
 	}
+}
+
+func (r *observeRun) isChurnCandidate(pod sourcePod) bool {
+	return pod.Phase == "Running" && r.isOwnPod(pod) &&
+		!r.isCrashProtected(pod.Name) && !r.isBurstPod(pod.Name)
 }
 
 func (r *observeRun) isCrashProtected(name string) bool {
@@ -774,7 +819,7 @@ func pickVictims(candidates []string, n int) []string {
 // continuity tracker (the §4.3 step-7 ledger: firstSeen pins the true
 // age), and returns the tick record.
 func (r *observeRun) observeTick(t *testing.T, tickNo int) tickRecord {
-	record := runTick(t, r.cfg, r.driver, r.view, r.metrics, r.child, r.records, r.log, tickNo, r.windowStart, r.lastMutationSequence, r.lastSourceFingerprint, r.lastTransitional)
+	record := runTick(t, r.cfg, r.driver, r.view, r.metrics, r.child, r.records, r.log, tickNo, r.windowStart, r.lastMutationSequence, r.lastSourceFingerprint, r.lastTransitional, "window")
 	r.lastMutationSequence = record.MutationSequence
 	r.lastTransitional = tickIsTransitional(record)
 	if record.SourceFingerprint != "" {
@@ -923,6 +968,24 @@ func (r *observeRun) drainCheck(t *testing.T) {
 		}
 	}
 	r.lastDrainZero = true
+	// This terminal proof is deliberately outside the window aggregates. If it
+	// changed tickCount/ratio denominators, one post-window success could turn a
+	// 94.7% scale ratio or exactly-5% OBSERR window into a false PASS.
+	finalRecord := runTick(t, r.cfg, r.driver, r.view, r.metrics, r.child, r.records, r.log,
+		r.tickCount+1, r.windowStart, r.lastMutationSequence, r.lastSourceFingerprint, r.lastTransitional, "post-quiescence")
+	r.captureFinalSnapshot(finalRecord)
+	if !r.finalSnapshotExact {
+		r.drainBreach = true
+		r.log.event("final three-plane snapshot failed: verdict=%s stable=%t exact=%t spotter=%t", finalRecord.Verdict, finalRecord.SnapshotStable, finalRecord.ExactEqual, finalRecord.SpotterEqual)
+	}
+}
+
+// captureFinalSnapshot stores the post-quiescence proof without folding it
+// into the fixed-duration window. It must never change tick or ratio counters.
+func (r *observeRun) captureFinalSnapshot(record tickRecord) {
+	r.finalSourceCount = record.Source.Count
+	r.finalSnapshotExact = record.Verdict == string(verdictConsistent) &&
+		record.SnapshotStable && record.ExactEqual && record.SpotterEqual
 }
 
 // evaluate folds the aggregates into the §5.2 acceptance verdict.
@@ -943,6 +1006,8 @@ func (r *observeRun) evaluate(t *testing.T, stamp string, windowElapsed time.Dur
 		ObsErr:                   r.obsErr,
 		TicksSourceGEBase:        r.sourceGEBase,
 		MinSourceCount:           r.minSource,
+		FinalSourceCount:         r.finalSourceCount,
+		FinalSnapshotExact:       r.finalSnapshotExact,
 		MaxInFlight:              r.maxInFlight,
 		MaxRetryDepth:            r.maxRetryDepth,
 		MaxRobotDepth:            r.maxRobotDepth,
@@ -1081,6 +1146,12 @@ func (r *observeRun) evaluateAcceptance(s runSummary) (bool, []string) {
 		fails = append(fails, fmt.Sprintf("scale: source >= %d on only %.4f of ticks (< 0.95; min observed %d)",
 			s.Scale, s.TicksSourceGEBaseRatio, s.MinSourceCount))
 	}
+	if s.Ticks > 0 && s.FinalSourceCount != s.Scale {
+		fails = append(fails, fmt.Sprintf("population: final source count %d != base %d (net-neutral churn/burst rollback drift)", s.FinalSourceCount, s.Scale))
+	}
+	if s.Ticks > 0 && !s.FinalSnapshotExact {
+		fails = append(fails, "final snapshot: post-quiescence K8s/Spotter/Nacos projection was not stably exact")
+	}
 	// The core requirement: zero product-divergent ticks.
 	if s.ProductDivergentTicks > 0 {
 		fails = append(fails, fmt.Sprintf("consistency: %d product-divergent ticks (requirement: zero; see the forensics)", s.ProductDivergentTicks))
@@ -1179,9 +1250,11 @@ func (r *observeRun) evaluateAcceptance(s runSummary) (bool, []string) {
 // immediately and remain failures.
 func runTick(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosView,
 	metrics *metricsView, child *spotterChild, records *recordWriter, log *harnessLog,
-	tickNo int, windowStart time.Time, previousMutationSequence uint64, previousSourceFingerprint string, previousTransitional bool) tickRecord {
+	tickNo int, windowStart time.Time, previousMutationSequence uint64, previousSourceFingerprint string, previousTransitional bool, scope string) tickRecord {
 	started := time.Now()
-	deadline := started.Add(cfg.obsBound())
+	bound := cfg.obsBound()
+	deadline := started.Add(bound)
+	hardDeadline := started.Add(2 * bound)
 	attempts := 0
 	var attemptHistory []snapshotAttemptEvidence
 	var record tickRecord
@@ -1195,6 +1268,19 @@ func runTick(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosVi
 			InFlight: record.InFlight, Divergences: len(record.Divergence),
 			SourceCount: record.Source.Count, RemoteCount: record.Remote.Count,
 		})
+		// Serial API chunks have distinct causal clocks. Extend this tick only
+		// up to one bound after the latest chunk issued while it was observing,
+		// with a hard two-bound ceiling so sustained churn cannot hold one tick
+		// open forever.
+		if latest := driver.latestMutationIssuedAt(); !latest.IsZero() {
+			extended := latest.Add(bound)
+			if extended.After(deadline) {
+				if extended.After(hardDeadline) {
+					extended = hardDeadline
+				}
+				deadline = extended
+			}
+		}
 		if !snapshotRetryable(record) || time.Now().After(deadline) {
 			break
 		}
@@ -1203,6 +1289,7 @@ func runTick(t *testing.T, cfg observeConfig, driver *churnDriver, view *nacosVi
 	record.SnapshotAttempts = attempts
 	record.SnapshotWaitMS = time.Since(started).Milliseconds()
 	record.AttemptHistory = attemptHistory
+	record.Scope = scope
 	if snapshotRetryable(record) && time.Now().After(deadline) {
 		// The bounded retry window expired with a complete but non-exact
 		// result. Do not report this as a successful transitional tick.
@@ -1240,6 +1327,7 @@ func runTickRaw(t *testing.T, cfg observeConfig, driver *churnDriver, view *naco
 		return record
 	}
 	model := buildSourceModel(pods, driver.appCodes)
+	record.SourceIDs = sourceModelIDs(model)
 	record.SourceFingerprint = sourceMutationFingerprint(pods, driver.appCodes)
 	record.Source = sideCount{
 		Count:     model.Count,
@@ -1272,6 +1360,7 @@ func runTickRaw(t *testing.T, cfg observeConfig, driver *churnDriver, view *naco
 		}
 		spotterBefore = spotterSnapshot
 		record.Spotter = spotterSideCount(spotterSnapshot.Instances, driver.appCodes)
+		record.SpotterIDs = spotterProjectionIDs(spotterSnapshot.Instances, driver.appCodes)
 		record.SpotterFingerprint = spotterProjectionFingerprint(spotterSnapshot.Instances, driver.appCodes)
 		record.SpotterEqual = spotterProjectionMatches(pods, driver.appCodes, spotterSnapshot.Instances, spotterSnapshot.CanonicalPayload)
 	}
@@ -1357,6 +1446,7 @@ func runTickRaw(t *testing.T, cfg observeConfig, driver *churnDriver, view *naco
 	}
 	record.SnapshotStable = true
 	record.RemoteFingerprint = remoteViewFingerprint(remoteAll)
+	record.RemoteIDs = remoteProjectionIDs(remoteAll)
 	remoteCount, remoteOnline, remoteDisabled, remoteServices := 0, 0, 0, 0
 	for _, entries := range remoteAll {
 		if len(entries) > 0 {
