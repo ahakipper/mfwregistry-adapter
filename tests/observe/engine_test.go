@@ -940,6 +940,102 @@ func TestObserveUnitBurstConvergenceAccounting(t *testing.T) {
 	}
 }
 
+func TestObserveUnitBurstWatchResultUsesFinalStableBoundaryAndChunkClocks(t *testing.T) {
+	base := time.Now().Add(-time.Minute)
+	observation := func(at time.Duration, present bool, status int32, key string) planeWatchObservation {
+		return planeWatchObservation{
+			At: base.Add(at), Present: present, Status: status, SourceKey: key,
+			Operation: "Sync", Origin: "event-cache-applied", Reversion: 7,
+			CanonicalPayload: "canonical",
+		}
+	}
+	timeline := &watchTimeline{
+		sourceHistory: map[string][]planeWatchObservation{
+			"pod-a": {observation(2*time.Second, false, 3, "uid-a"), observation(5*time.Second, true, 1, "uid-a"), observation(20*time.Second, false, 3, "uid-a"), observation(8*time.Second, true, 1, "uid-a")},
+			"pod-b": {observation(30*time.Second, false, 3, "uid-b")},
+		},
+		spotterHistory: map[string][]planeWatchObservation{
+			"pod-a": {observation(3*time.Second, false, 3, "cluster/uid-a"), observation(6*time.Second, true, 1, "cluster/uid-a"), observation(21*time.Second, false, 3, "cluster/uid-a"), observation(9*time.Second, true, 1, "cluster/uid-a")},
+			"pod-b": {observation(31*time.Second, false, 3, "cluster/uid-b")},
+		},
+		nacosHistory: map[string][]planeWatchObservation{
+			"pod-a": {observation(4*time.Second, false, 3, "cluster/uid-a"), observation(7*time.Second, true, 1, "cluster/uid-a"), observation(22*time.Second, false, 3, "cluster/uid-a"), observation(10*time.Second, true, 1, "cluster/uid-a")},
+			"pod-b": {observation(40*time.Second, false, 3, "cluster/uid-b")},
+		},
+	}
+	driver := newChurnDriver("unused", []string{"obs-app-0"}, observePodPrefix)
+	driver.mutationJournal = []ledgerEntry{
+		{Op: "delete", PodName: "pod-a", AppCode: "obs-app-0", IssuedAt: base},
+		{Op: "delete", PodName: "pod-b", AppCode: "obs-app-0", IssuedAt: base.Add(10 * time.Second)},
+	}
+	run := &observeRun{driver: driver, timeline: timeline, windowStart: base.Add(-time.Second)}
+	result, ok := run.burstWatchResult([]string{"pod-a", "pod-b"}, "delete", base.Add(50*time.Second))
+	if !ok {
+		t.Fatal("final stable burst boundary was not found")
+	}
+	if !result.FirstIssued.Equal(base) || !result.ConvergedAt.Equal(base.Add(40*time.Second)) {
+		t.Fatalf("burst result = %+v, want first=%s converged=%s", result, base, base.Add(40*time.Second))
+	}
+	if result.MaxPerItem != 30*time.Second {
+		t.Fatalf("max per-item = %s, want 30s from pod-b's own chunk clock", result.MaxPerItem)
+	}
+	if _, ok := run.burstWatchResult([]string{"pod-a", "pod-missing"}, "delete", base.Add(50*time.Second)); ok {
+		t.Fatal("burst result passed with one target missing its exact boundary")
+	}
+	run.burstEvents = []burstEvent{{Name: "batch", Pods: []string{"pod-a", "pod-b"}, DeleteIssued: base}}
+	run.refreshBurstWatchConvergence(base.Add(50 * time.Second))
+	if !run.burstEvents[0].ConvergedDown.IsZero() {
+		t.Fatal("watch-only result bypassed the stable-cut membership proof")
+	}
+	run.burstEvents[0].DownMembershipProven = true
+	run.refreshBurstWatchConvergence(base.Add(50 * time.Second))
+	if !run.burstEvents[0].ConvergedDown.Equal(base.Add(40 * time.Second)) {
+		t.Fatalf("membership-proven convergence = %s, want %s", run.burstEvents[0].ConvergedDown, base.Add(40*time.Second))
+	}
+}
+
+func TestObserveUnitBurstBoundUsesUnroundedDuration(t *testing.T) {
+	run := &observeRun{cfg: observeConfig{Duration: 20 * time.Minute, Bursts: true}, tracker: newDivergenceTracker()}
+	bursts := make([]burstSummary, len(burstSchedule(run.cfg.Duration)))
+	for i := range bursts {
+		bursts[i] = burstSummary{
+			Name: "burst", CreateIssued: "issued", ConvergedUp: "seen", UpConvergence: time.Minute.String(),
+			DeleteIssued: "issued", ConvergedDown: "seen", DownConvergence: time.Minute.String(),
+		}
+	}
+	bursts[0].DownConvergence = (time.Minute + 400*time.Millisecond).String()
+	_, failures := run.evaluateAcceptance(runSummary{Bursts: bursts, DrainedAtEnd: true})
+	if got := strings.Join(failures, "; "); !strings.Contains(got, "DOWN convergence 1m0.4s exceeds OBS_BOUND 1m0s") {
+		t.Fatalf("failures=%q, want the unrounded 60.4s burst rejection", got)
+	}
+	bursts[0].DownConvergence = time.Minute.String()
+	_, failures = run.evaluateAcceptance(runSummary{Bursts: bursts, DrainedAtEnd: true})
+	if got := strings.Join(failures, "; "); strings.Contains(got, "burst burst: DOWN convergence") {
+		t.Fatalf("exactly-60s burst was rejected: %q", got)
+	}
+}
+
+func TestObserveUnitBurstSummaryPreservesNanosecondTimestamps(t *testing.T) {
+	base := time.Date(2026, 9, 19, 3, 30, 35, 603755000, time.FixedZone("SGT", 8*60*60))
+	summary := burstSummaryFromEvent(burstEvent{
+		Name: "batch", Size: 200,
+		CreateIssued: base, ConvergedUp: base.Add(4*time.Second + 123*time.Microsecond),
+		DeleteIssued:  base.Add(time.Minute + 7*time.Nanosecond),
+		ConvergedDown: base.Add(time.Minute + 51*time.Second + 47293000*time.Nanosecond),
+	})
+	for name, value := range map[string]string{
+		"createIssued": summary.CreateIssued, "convergedUp": summary.ConvergedUp,
+		"deleteIssued": summary.DeleteIssued, "convergedDown": summary.ConvergedDown,
+	} {
+		if !strings.Contains(value, ".") {
+			t.Fatalf("%s=%q lost its fractional timestamp", name, value)
+		}
+		if _, err := time.Parse(time.RFC3339Nano, value); err != nil {
+			t.Fatalf("%s=%q is not RFC3339Nano: %v", name, value, err)
+		}
+	}
+}
+
 // mustHarnessLog builds a scratch harness log for unit tests.
 func mustHarnessLog(t *testing.T) *harnessLog {
 	t.Helper()

@@ -559,6 +559,73 @@ func (t *watchTimeline) mutationBoundary(entry ledgerEntry) (exactWatchBoundary,
 	return t.exactBoundary(entry.PodName, present, status, "", entry.IssuedAt)
 }
 
+// finalMutationBoundary returns the final stable three-plane state for one
+// mutation at the supplied horizon. Unlike exactBoundary (the first matching
+// transition used for ordinary per-mutation latency), this uses the last
+// observation on every plane and therefore cannot under-report a
+// delete→resurrect→delete sequence as converged at the first delete.
+func (t *watchTimeline) finalMutationBoundary(entry ledgerEntry, horizon time.Time) (exactWatchBoundary, bool) {
+	if t == nil {
+		return exactWatchBoundary{}, false
+	}
+	present := true
+	status := int32(1)
+	switch entry.Op {
+	case "delete":
+		present = false
+		status = 3
+	case "crash":
+		status = 2
+	case "create", "recover":
+		status = 1
+	default:
+		return exactWatchBoundary{}, false
+	}
+	inWindow := func(at time.Time) bool {
+		if at.Before(entry.IssuedAt) {
+			return false
+		}
+		return horizon.IsZero() || !at.After(horizon)
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var source, spotter, nacos planeWatchObservation
+	for _, observation := range t.sourceHistory[entry.PodName] {
+		if inWindow(observation.At) && (source.At.IsZero() || observation.At.After(source.At)) {
+			source = observation
+		}
+	}
+	for _, observation := range t.spotterHistory[entry.PodName] {
+		if observation.Operation == "Sync" && observation.Origin == "event-cache-applied" &&
+			inWindow(observation.At) && (spotter.At.IsZero() || observation.At.After(spotter.At)) {
+			spotter = observation
+		}
+	}
+	for _, observation := range t.nacosHistory[entry.PodName] {
+		if inWindow(observation.At) && (nacos.At.IsZero() || observation.At.After(nacos.At)) {
+			nacos = observation
+		}
+	}
+	if source.At.IsZero() || spotter.At.IsZero() || nacos.At.IsZero() ||
+		source.Present != present || spotter.Present != present || nacos.Present != present ||
+		source.Status != status || spotter.Status != status || nacos.Status != status {
+		return exactWatchBoundary{}, false
+	}
+	if present {
+		if spotter.CanonicalPayload == "" || source.Reversion != spotter.Reversion ||
+			nacos.Reversion != spotter.Reversion || nacos.CanonicalPayload != spotter.CanonicalPayload {
+			return exactWatchBoundary{}, false
+		}
+	} else if !deleteSourceIdentityMatches(source, spotter) || !deleteNacosIdentityMatches(nacos, spotter) {
+		return exactWatchBoundary{}, false
+	}
+	return exactWatchBoundary{
+		IssuedAt: entry.IssuedAt, SourceSeen: source.At, SpotterTrigger: spotter.TriggerAt,
+		SpotterSeen: spotter.At, NacosSeen: nacos.At, Reversion: spotter.Reversion,
+		Operation: spotter.Operation, Origin: spotter.Origin,
+	}, true
+}
+
 func (t *watchTimeline) waitForMutationCoverage(entries []ledgerEntry, timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
 	for {

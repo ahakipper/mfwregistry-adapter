@@ -380,17 +380,21 @@ type observeRun struct {
 
 // burstEvent is one §4.2 burst's record: the storm (n=100, one apply,
 // ~1s) or a batch (n=200, two 100-pod applies). ConvergedUp/Down are
-// stamped by the tick loop (a burst pod not appearing in a tick's
-// divergence list is converged on that side — missing/extra entries are
-// exactly how an unconverged burst pod surfaces).
+// stamped from exact K8s/Spotter/Nacos watch boundaries once a stable-cut tick
+// proves target membership. Tick time remains an equality gate, never the
+// product propagation clock.
 type burstEvent struct {
-	Name          string
-	Size          int
-	Pods          []string
-	CreateIssued  time.Time
-	DeleteIssued  time.Time
-	ConvergedUp   time.Time
-	ConvergedDown time.Time
+	Name                 string
+	Size                 int
+	Pods                 []string
+	CreateIssued         time.Time
+	DeleteIssued         time.Time
+	ConvergedUp          time.Time
+	ConvergedDown        time.Time
+	UpMaxPerItem         time.Duration
+	DownMaxPerItem       time.Duration
+	UpMembershipProven   bool
+	DownMembershipProven bool
 }
 
 func (r *observeRun) addChurnStats(created, deleted, failed int) {
@@ -616,8 +620,19 @@ func (r *observeRun) checkBurstConvergence(record tickRecord) {
 				}
 			}
 			if converged {
-				ev.ConvergedUp = tickTS
-				r.log.event("burst %s: UP-converged after %s", ev.Name, tickTS.Sub(ev.CreateIssued).Round(time.Second))
+				ev.UpMembershipProven = true
+				convergedAt := tickTS
+				if result, ok := r.burstWatchResult(ev.Pods, "create", time.Now()); r.timeline != nil && r.driver != nil {
+					if !ok {
+						continue
+					}
+					convergedAt = result.ConvergedAt
+					ev.CreateIssued = result.FirstIssued
+					ev.UpMaxPerItem = result.MaxPerItem
+				}
+				ev.ConvergedUp = convergedAt
+				r.log.event("burst %s: UP-converged after %s (max per-item %s)", ev.Name,
+					convergedAt.Sub(ev.CreateIssued).Round(time.Second), ev.UpMaxPerItem.Round(time.Second))
 			}
 		}
 		if !ev.DeleteIssued.IsZero() && ev.ConvergedDown.IsZero() &&
@@ -630,8 +645,104 @@ func (r *observeRun) checkBurstConvergence(record tickRecord) {
 				}
 			}
 			if converged {
-				ev.ConvergedDown = tickTS
-				r.log.event("burst %s: DOWN-converged after %s", ev.Name, tickTS.Sub(ev.DeleteIssued).Round(time.Second))
+				ev.DownMembershipProven = true
+				convergedAt := tickTS
+				if result, ok := r.burstWatchResult(ev.Pods, "delete", time.Now()); r.timeline != nil && r.driver != nil {
+					if !ok {
+						continue
+					}
+					convergedAt = result.ConvergedAt
+					ev.DeleteIssued = result.FirstIssued
+					ev.DownMaxPerItem = result.MaxPerItem
+				}
+				ev.ConvergedDown = convergedAt
+				r.log.event("burst %s: DOWN-converged after %s (max per-item %s)", ev.Name,
+					convergedAt.Sub(ev.DeleteIssued).Round(time.Second), ev.DownMaxPerItem.Round(time.Second))
+			}
+		}
+	}
+}
+
+type burstWatchResult struct {
+	FirstIssued time.Time
+	ConvergedAt time.Time
+	MaxPerItem  time.Duration
+}
+
+func (r *observeRun) burstWatchResult(pods []string, operation string, horizon time.Time) (burstWatchResult, bool) {
+	if r.timeline == nil || r.driver == nil || len(pods) == 0 {
+		return burstWatchResult{}, false
+	}
+	wanted := make(map[string]bool, len(pods))
+	for _, pod := range pods {
+		wanted[pod] = true
+	}
+	entries := make(map[string]ledgerEntry, len(pods))
+	for _, entry := range r.driver.mutationJournalSince(r.windowStart) {
+		if entry.Op == operation && wanted[entry.PodName] {
+			entries[entry.PodName] = entry
+		}
+	}
+	result := burstWatchResult{}
+	for _, pod := range pods {
+		entry, ok := entries[pod]
+		if !ok {
+			return burstWatchResult{}, false
+		}
+		boundary, ok := r.timeline.finalMutationBoundary(entry, horizon)
+		if !ok {
+			return burstWatchResult{}, false
+		}
+		completedAt := boundary.NacosSeen
+		if boundary.SourceSeen.After(completedAt) {
+			completedAt = boundary.SourceSeen
+		}
+		if boundary.SpotterSeen.After(completedAt) {
+			completedAt = boundary.SpotterSeen
+		}
+		if result.FirstIssued.IsZero() || entry.IssuedAt.Before(result.FirstIssued) {
+			result.FirstIssued = entry.IssuedAt
+		}
+		if completedAt.After(result.ConvergedAt) {
+			result.ConvergedAt = completedAt
+		}
+		if elapsed := completedAt.Sub(entry.IssuedAt); elapsed > result.MaxPerItem {
+			result.MaxPerItem = elapsed
+		}
+	}
+	return result, true
+}
+
+func (r *observeRun) refreshBurstWatchConvergence(horizon time.Time) {
+	if r.timeline == nil || r.driver == nil {
+		return
+	}
+	r.burstMu.Lock()
+	defer r.burstMu.Unlock()
+	for i := range r.burstEvents {
+		event := &r.burstEvents[i]
+		upHorizon := horizon
+		if !event.DeleteIssued.IsZero() {
+			upHorizon = event.DeleteIssued
+		}
+		if !event.UpMembershipProven {
+			event.ConvergedUp = time.Time{}
+		} else if result, ok := r.burstWatchResult(event.Pods, "create", upHorizon); ok {
+			event.CreateIssued = result.FirstIssued
+			event.ConvergedUp = result.ConvergedAt
+			event.UpMaxPerItem = result.MaxPerItem
+		} else {
+			event.ConvergedUp = time.Time{}
+		}
+		if !event.DeleteIssued.IsZero() {
+			if !event.DownMembershipProven {
+				event.ConvergedDown = time.Time{}
+			} else if result, ok := r.burstWatchResult(event.Pods, "delete", horizon); ok {
+				event.DeleteIssued = result.FirstIssued
+				event.ConvergedDown = result.ConvergedAt
+				event.DownMaxPerItem = result.MaxPerItem
+			} else {
+				event.ConvergedDown = time.Time{}
 			}
 		}
 	}
@@ -1006,6 +1117,12 @@ func (r *observeRun) captureFinalSnapshot(record tickRecord) {
 
 // evaluate folds the aggregates into the §5.2 acceptance verdict.
 func (r *observeRun) evaluate(t *testing.T, stamp string, windowElapsed time.Duration) runSummary {
+	var mutations []ledgerEntry
+	if r.timeline != nil {
+		mutations = r.driver.mutationJournalSince(r.windowStart)
+		r.timeline.waitForMutationCoverage(mutations, 10*time.Second)
+		r.refreshBurstWatchConvergence(time.Now())
+	}
 	churnCreates, churnDeletes, churnErrors := r.churnStats()
 	summary := runSummary{
 		Stamp:                    stamp,
@@ -1047,21 +1164,7 @@ func (r *observeRun) evaluate(t *testing.T, stamp string, windowElapsed time.Dur
 	// convergence times, judged against OBS_BOUND by the acceptance below.
 	r.burstMu.Lock()
 	for _, ev := range r.burstEvents {
-		b := burstSummary{
-			Name:         ev.Name,
-			Size:         ev.Size,
-			CreateIssued: formatTime(ev.CreateIssued),
-			DeleteIssued: formatTime(ev.DeleteIssued),
-		}
-		if !ev.ConvergedUp.IsZero() {
-			b.ConvergedUp = formatTime(ev.ConvergedUp)
-			b.UpConvergence = ev.ConvergedUp.Sub(ev.CreateIssued).Round(time.Second).String()
-		}
-		if !ev.ConvergedDown.IsZero() {
-			b.ConvergedDown = formatTime(ev.ConvergedDown)
-			b.DownConvergence = ev.ConvergedDown.Sub(ev.DeleteIssued).Round(time.Second).String()
-		}
-		summary.Bursts = append(summary.Bursts, b)
+		summary.Bursts = append(summary.Bursts, burstSummaryFromEvent(ev))
 	}
 	r.burstMu.Unlock()
 	if r.tickCount > 0 {
@@ -1124,8 +1227,6 @@ func (r *observeRun) evaluate(t *testing.T, stamp string, windowElapsed time.Dur
 		summary.Fails = append(summary.Fails, fmt.Sprintf("%d divergent ticks overlapped environment windows (separated per §4.5; see envWindows)", r.envDivergentTicks))
 	}
 	if r.timeline != nil {
-		mutations := r.driver.mutationJournalSince(r.windowStart)
-		r.timeline.waitForMutationCoverage(mutations, 10*time.Second)
 		var records []watchMutationRecord
 		summary.Watch, records = r.timeline.summarizeMutations(mutations, r.subscriptionsWanted, r.subscriptionsStarted)
 		eventsPath, err := writeWatchMutationFile(r.cfg.ResultsDir, stamp, records)
@@ -1140,6 +1241,24 @@ func (r *observeRun) evaluate(t *testing.T, stamp string, windowElapsed time.Dur
 	summary.Pass = pass && len(summary.Fails) == 0
 	summary.Fails = append(summary.Fails, fails...)
 	return summary
+}
+
+func burstSummaryFromEvent(ev burstEvent) burstSummary {
+	b := burstSummary{
+		Name: ev.Name, Size: ev.Size,
+		CreateIssued: formatTimeNano(ev.CreateIssued), DeleteIssued: formatTimeNano(ev.DeleteIssued),
+	}
+	if !ev.ConvergedUp.IsZero() {
+		b.ConvergedUp = formatTimeNano(ev.ConvergedUp)
+		b.UpConvergence = ev.ConvergedUp.Sub(ev.CreateIssued).String()
+		b.UpMaxPerItem = ev.UpMaxPerItem.String()
+	}
+	if !ev.ConvergedDown.IsZero() {
+		b.ConvergedDown = formatTimeNano(ev.ConvergedDown)
+		b.DownConvergence = ev.ConvergedDown.Sub(ev.DeleteIssued).String()
+		b.DownMaxPerItem = ev.DownMaxPerItem.String()
+	}
+	return b
 }
 
 // evaluateAcceptance checks every §5.2 criterion (the definitive-run

@@ -268,18 +268,20 @@ type watchRunEvidence struct {
 	EventsFile           string                           `json:"eventsFile,omitempty"`
 }
 
-// burstSummary is one burst event's measured record: the issue times and
-// the tick-stamped convergence of BOTH legs (up: pods visible in nacos;
-// down: pods gone from nacos), each must land within OBS_BOUND.
+// burstSummary is one burst event's exact three-watch convergence record.
+// Batch wall clock starts at the first chunk issue; max-per-item uses each
+// instance's own chunk issue time.
 type burstSummary struct {
 	Name            string `json:"name"`
 	Size            int    `json:"size"`
 	CreateIssued    string `json:"createIssued"`
 	ConvergedUp     string `json:"convergedUp"`
 	UpConvergence   string `json:"upConvergence"`
+	UpMaxPerItem    string `json:"upMaxPerItem"`
 	DeleteIssued    string `json:"deleteIssued"`
 	ConvergedDown   string `json:"convergedDown"`
 	DownConvergence string `json:"downConvergence"`
+	DownMaxPerItem  string `json:"downMaxPerItem"`
 }
 
 // UpConvergenceOrNever renders the up leg (never-converged marker when 0).
@@ -362,8 +364,9 @@ func renderSummaryMarkdown(s runSummary) string {
 	if len(s.Bursts) > 0 {
 		b.WriteString("\n## Burst events (OBS_BURSTS)\n\n")
 		for _, burst := range s.Bursts {
-			b.WriteString(fmt.Sprintf("- %s (n=%d): create@%s -> up-converged %s; delete@%s -> down-converged %s\n",
-				burst.Name, burst.Size, burst.CreateIssued, burst.UpConvergenceOrNever(), burst.DeleteIssuedOrNone(), burst.DownConvergenceOrNever()))
+			b.WriteString(fmt.Sprintf("- %s (n=%d): create@%s -> up-converged %s (max/item %s); delete@%s -> down-converged %s (max/item %s)\n",
+				burst.Name, burst.Size, burst.CreateIssued, burst.UpConvergenceOrNever(), burst.UpMaxPerItem,
+				burst.DeleteIssuedOrNone(), burst.DownConvergenceOrNever(), burst.DownMaxPerItem))
 		}
 	}
 	if len(s.Forensics) > 0 {
@@ -453,4 +456,11 @@ func formatTime(t time.Time) string {
 		return ""
 	}
 	return t.Format(time.RFC3339)
+}
+
+func formatTimeNano(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339Nano)
 }
