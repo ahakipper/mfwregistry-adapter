@@ -92,6 +92,8 @@ Nacos 服务端自行维护的 wire `Healthy` 位只记录、不作为 Spotter d
 
 诊断结论：**PASS**。零 watcher error；Create/Crash/Recovery 使用 revision-status-canonical，Delete 使用 uid-sourcekey-offline-removal；四类场景均完成 stable-cut 全字段一致性。实际 Spotter origin 均为 `event-cache-applied`。由于每个场景只有 1 个样本，这些数值只是测试方法诊断，不能解释为正式 P90/P95/P99。
 
+随后完成了最终源码版本的短 sustained-observe 工具验证：`tests/observe/results/20260918-2202-summary.json`。窗口为 20 Pods / 2 应用 / 1 分钟，13/13 stable snapshots exact，2/2 Nacos subscriptions ready，66 个 K8s Watch 事件、62 个 Spotter 事件、5 个 Nacos 事件，2/2 mutation 关联，0 missing、0 watcher error、0 divergence、0 dropped event，retry queue drained。runner 只运行一次并以 `EXIT_CODE=0` 结束，launchd label 已移除。该窗口验证的是两小时测试工具，不是两小时可靠性结论。summary SHA256 为 `8da23a2931b8c875c24b30c2251395da6b004a46353138f174fd48f9db0961e6`，events SHA256 为 `c3c9da5fa8a4c5a5ca7fdcae9cc184e0c8c6646dbca084eaa49bd99bc7485948`，ticks SHA256 为 `ac1c7d3c6ba148fa4299a1949d7b7c053ebe1e8e703ee880f369486c6a7c5bdf`。
+
 ## 下一步正式门禁
 
 1. 使用修正后的方法重跑 1/10/100/500/1000 Pod Create/Delete 全规模阶梯。

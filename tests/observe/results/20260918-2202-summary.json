@@ -1,0 +1,143 @@
+{
+  "stamp": "20260918-2202",
+  "duration": "1m1s",
+  "scale": 20,
+  "services": 2,
+  "churnRatePctPerMin": 10,
+  "obsBound": "1m0s",
+  "pushIntervalSecs": 60,
+  "reconcileSource": "nacos",
+  "ticks": 13,
+  "consistent": 13,
+  "divergent": 0,
+  "obserr": 0,
+  "consistencyRatio": 1,
+  "exactEqualTicks": 13,
+  "transitionalTicks": 0,
+  "steadyTicks": 12,
+  "steadyExactTicks": 12,
+  "spotterEqualTicks": 13,
+  "spotterMismatchTicks": 0,
+  "snapshotAttempts": 15,
+  "unstableSnapshotAttempts": 2,
+  "obserrRatio": 0,
+  "maxObserrStreak": 0,
+  "ticksSourceGeBase": 13,
+  "ticksSourceGeBaseRatio": 1,
+  "minSourceCount": 20,
+  "productDivergentTicks": 0,
+  "maxHeal": "0s",
+  "maxInFlight": 0,
+  "maxRetryDepth": 0,
+  "maxRobotDepth": 0,
+  "droppedTotal": 0,
+  "drainedAtEnd": true,
+  "latency": {
+    "p50": 0.005,
+    "p90": 0.005,
+    "p95": 0.005,
+    "p99": 0.005,
+    "count": 2
+  },
+  "watch": {
+    "subscriptionsWanted": 2,
+    "subscriptionsStarted": 2,
+    "k8sEvents": 66,
+    "spotterEvents": 62,
+    "nacosEvents": 5,
+    "mutations": 2,
+    "correlated": 2,
+    "missing": 0,
+    "byOperation": {
+      "create": {
+        "apiToK8s": {
+          "samples": 1,
+          "p50": 0.084752834,
+          "p90": 0.084752834,
+          "p95": 0.084752834,
+          "p99": 0.084752834,
+          "max": 0.084752834
+        },
+        "apiToSpotter": {
+          "samples": 1,
+          "p50": 0.084825,
+          "p90": 0.084825,
+          "p95": 0.084825,
+          "p99": 0.084825,
+          "max": 0.084825
+        },
+        "spotterProviderTriggerToWorker": {
+          "samples": 1,
+          "p50": 0.000128,
+          "p90": 0.000128,
+          "p95": 0.000128,
+          "p99": 0.000128,
+          "max": 0.000128
+        },
+        "spotterToNacos": {
+          "samples": 1,
+          "p50": 0.576919,
+          "p90": 0.576919,
+          "p95": 0.576919,
+          "p99": 0.576919,
+          "max": 0.576919
+        },
+        "apiToNacos": {
+          "samples": 1,
+          "p50": 0.661740125,
+          "p90": 0.661740125,
+          "p95": 0.661740125,
+          "p99": 0.661740125,
+          "max": 0.661740125
+        }
+      },
+      "delete": {
+        "apiToK8s": {
+          "samples": 1,
+          "p50": 0.047104541,
+          "p90": 0.047104541,
+          "p95": 0.047104541,
+          "p99": 0.047104541,
+          "max": 0.047104541
+        },
+        "apiToSpotter": {
+          "samples": 1,
+          "p50": 0.040395,
+          "p90": 0.040395,
+          "p95": 0.040395,
+          "p99": 0.040395,
+          "max": 0.040395
+        },
+        "spotterProviderTriggerToWorker": {
+          "samples": 1,
+          "p50": 0.000092,
+          "p90": 0.000092,
+          "p95": 0.000092,
+          "p99": 0.000092,
+          "max": 0.000092
+        },
+        "spotterToNacos": {
+          "samples": 1,
+          "p50": 0.54878,
+          "p90": 0.54878,
+          "p95": 0.54878,
+          "p99": 0.54878,
+          "max": 0.54878
+        },
+        "apiToNacos": {
+          "samples": 1,
+          "p50": 0.589170666,
+          "p90": 0.589170666,
+          "p95": 0.589170666,
+          "p99": 0.589170666,
+          "max": 0.589170666
+        }
+      }
+    },
+    "eventsFile": "20260918-2202-events.jsonl"
+  },
+  "churnCreates": 1,
+  "churnDeletes": 1,
+  "churnErrors": 0,
+  "pass": true
+}

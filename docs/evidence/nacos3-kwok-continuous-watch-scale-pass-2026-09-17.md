@@ -13,10 +13,11 @@ Raw artifacts:
 - SHA256 JSON: `d821b92e11ddfab50929340fe3aa2eba646d0542f7f83f29869c01f2a4f8ef37`
 - SHA256 Markdown: `2a78df2ae7ff2d23f386b921cf89b73d5bc142aea1158e4cb47fc7d8a476d7a7`
 
-Short sustained-observe validation (20 Pods / 2 services / 1 minute) is also
-tracked: summary SHA256 `a103d883a4d76536c6da7204a50d7400935ecb8445460b4641f80f5feef61460`,
-events SHA256 `c969b6618fc4b1c499afd6b7db3df41cc08c5de52b862515ab94f1254f893ab9`,
-and ticks SHA256 `dcf45d4f62e119aea30e0a768a6a15911d34dfd14f8c00d124c761c86249dfa9`.
+Final-source short sustained-observe validation (20 Pods / 2 services / 1
+minute) is also tracked: summary SHA256
+`8da23a2931b8c875c24b30c2251395da6b004a46353138f174fd48f9db0961e6`, events
+SHA256 `c3c9da5fa8a4c5a5ca7fdcae9cc184e0c8c6646dbca084eaa49bd99bc7485948`,
+and ticks SHA256 `ac1c7d3c6ba148fa4299a1949d7b7c053ebe1e8e703ee880f369486c6a7c5bdf`.
 
 ## Coverage and verdict
 
