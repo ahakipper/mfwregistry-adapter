@@ -1,0 +1,232 @@
+{
+  "stamp": "20260919-0229",
+  "duration": "10m2s",
+  "scale": 1000,
+  "services": 20,
+  "churnRatePctPerMin": 5,
+  "obsBound": "1m0s",
+  "pushIntervalSecs": 60,
+  "reconcileSource": "nacos",
+  "ticks": 41,
+  "consistent": 41,
+  "divergent": 0,
+  "obserr": 0,
+  "consistencyRatio": 1,
+  "exactEqualTicks": 41,
+  "transitionalTicks": 0,
+  "steadyTicks": 16,
+  "steadyExactTicks": 16,
+  "spotterEqualTicks": 41,
+  "spotterMismatchTicks": 0,
+  "snapshotAttempts": 107,
+  "unstableSnapshotAttempts": 66,
+  "obserrRatio": 0,
+  "maxObserrStreak": 0,
+  "ticksSourceGeBase": 41,
+  "ticksSourceGeBaseRatio": 1,
+  "minSourceCount": 1000,
+  "finalSourceCount": 1000,
+  "finalSnapshotExact": true,
+  "productDivergentTicks": 0,
+  "maxHeal": "0s",
+  "maxInFlight": 0,
+  "maxRetryDepth": 1,
+  "maxRobotDepth": 0,
+  "droppedTotal": 0,
+  "drainedAtEnd": true,
+  "latency": {
+    "p50": 0.025,
+    "p90": 10,
+    "p95": 10,
+    "p99": 10,
+    "count": 2811
+  },
+  "watch": {
+    "subscriptionsWanted": 20,
+    "subscriptionsStarted": 20,
+    "k8sEvents": 10284,
+    "spotterEvents": 15592,
+    "nacosEvents": 8089,
+    "mutations": 2368,
+    "correlated": 2366,
+    "missing": 2,
+    "byOperation": {
+      "crash": {
+        "apiToK8s": {
+          "samples": 1,
+          "p50": 0.126748083,
+          "p90": 0.126748083,
+          "p95": 0.126748083,
+          "p99": 0.126748083,
+          "max": 0.126748083
+        },
+        "apiToSpotter": {
+          "samples": 1,
+          "p50": 0.134615,
+          "p90": 0.134615,
+          "p95": 0.134615,
+          "p99": 0.134615,
+          "max": 0.134615
+        },
+        "spotterProviderTriggerToWorker": {
+          "samples": 1,
+          "p50": 0.00245,
+          "p90": 0.00245,
+          "p95": 0.00245,
+          "p99": 0.00245,
+          "max": 0.00245
+        },
+        "spotterToNacos": {
+          "samples": 1,
+          "p50": 0.547466,
+          "p90": 0.547466,
+          "p95": 0.547466,
+          "p99": 0.547466,
+          "max": 0.547466
+        },
+        "apiToNacos": {
+          "samples": 1,
+          "p50": 0.682072083,
+          "p90": 0.682072083,
+          "p95": 0.682072083,
+          "p99": 0.682072083,
+          "max": 0.682072083
+        }
+      },
+      "create": {
+        "apiToK8s": {
+          "samples": 1183,
+          "p50": 0.875280208,
+          "p90": 2.235659,
+          "p95": 3.06327325,
+          "p99": 4.871077958,
+          "max": 6.120251333
+        },
+        "apiToSpotter": {
+          "samples": 1183,
+          "p50": 0.875343,
+          "p90": 2.235787,
+          "p95": 3.063442,
+          "p99": 4.871373,
+          "max": 6.120485
+        },
+        "spotterProviderTriggerToWorker": {
+          "samples": 1183,
+          "p50": 0.000178,
+          "p90": 0.000837,
+          "p95": 0.002058,
+          "p99": 0.010569,
+          "max": 0.042472
+        },
+        "spotterToNacos": {
+          "samples": 1183,
+          "p50": 0.534124,
+          "p90": 0.62069,
+          "p95": 0.656265,
+          "p99": 3.500376,
+          "max": 3.6206329999999998
+        },
+        "apiToNacos": {
+          "samples": 1183,
+          "p50": 1.340677917,
+          "p90": 2.896288791,
+          "p95": 3.639060667,
+          "p99": 5.836341083,
+          "max": 6.633156708
+        }
+      },
+      "delete": {
+        "apiToK8s": {
+          "samples": 1182,
+          "p50": 1.538329667,
+          "p90": 14.971598208,
+          "p95": 16.676851166,
+          "p99": 18.050996417,
+          "max": 18.660432709
+        },
+        "apiToSpotter": {
+          "samples": 1182,
+          "p50": 1.529298,
+          "p90": 14.968697,
+          "p95": 16.666905,
+          "p99": 18.043018,
+          "max": 18.646839
+        },
+        "spotterProviderTriggerToWorker": {
+          "samples": 1182,
+          "p50": 0.000245,
+          "p90": 0.001789,
+          "p95": 0.00432,
+          "p99": 0.016392,
+          "max": 0.186745
+        },
+        "spotterToNacos": {
+          "samples": 1182,
+          "p50": 0.551535,
+          "p90": 2.817315,
+          "p95": 5.963184,
+          "p99": 10.2083,
+          "max": 12.410484
+        },
+        "apiToNacos": {
+          "samples": 1182,
+          "p50": 3.507110875,
+          "p90": 16.223044,
+          "p95": 18.223655417,
+          "p99": 23.087885417,
+          "max": 23.089912667
+        }
+      }
+    },
+    "eventsFile": "20260919-0229-events.jsonl"
+  },
+  "churnCreates": 1183,
+  "churnDeletes": 1183,
+  "churnErrors": 0,
+  "bursts": [
+    {
+      "name": "storm-100",
+      "size": 100,
+      "createIssued": "2026-09-19T02:30:53+08:00",
+      "convergedUp": "2026-09-19T02:31:09+08:00",
+      "upConvergence": "16s",
+      "deleteIssued": "2026-09-19T02:32:09+08:00",
+      "convergedDown": "2026-09-19T02:32:31+08:00",
+      "downConvergence": "22s"
+    },
+    {
+      "name": "batch-200@25%",
+      "size": 200,
+      "createIssued": "2026-09-19T02:32:53+08:00",
+      "convergedUp": "2026-09-19T02:32:59+08:00",
+      "upConvergence": "6s",
+      "deleteIssued": "2026-09-19T02:34:08+08:00",
+      "convergedDown": "2026-09-19T02:34:56+08:00",
+      "downConvergence": "48s"
+    },
+    {
+      "name": "batch-200@50%",
+      "size": 200,
+      "createIssued": "2026-09-19T02:35:25+08:00",
+      "convergedUp": "2026-09-19T02:35:32+08:00",
+      "upConvergence": "6s",
+      "deleteIssued": "2026-09-19T02:36:39+08:00",
+      "convergedDown": "2026-09-19T02:37:26+08:00",
+      "downConvergence": "46s"
+    },
+    {
+      "name": "batch-200@75%",
+      "size": 200,
+      "createIssued": "2026-09-19T02:37:53+08:00",
+      "convergedUp": "2026-09-19T02:37:58+08:00",
+      "upConvergence": "5s",
+      "deleteIssued": "2026-09-19T02:39:06+08:00",
+      "convergedDown": "2026-09-19T02:39:50+08:00",
+      "downConvergence": "44s"
+    }
+  ],
+  "pass": false,
+  "fails": [
+    "continuous watch: correlated 2366/2368 mutations, missing 2"
+  ]
+}

@@ -1,0 +1,323 @@
+{
+  "stamp": "20260919-0125",
+  "duration": "10m45s",
+  "scale": 1000,
+  "services": 20,
+  "churnRatePctPerMin": 5,
+  "obsBound": "1m0s",
+  "pushIntervalSecs": 60,
+  "reconcileSource": "nacos",
+  "ticks": 36,
+  "consistent": 35,
+  "divergent": 1,
+  "obserr": 0,
+  "consistencyRatio": 0.9722222222222222,
+  "exactEqualTicks": 35,
+  "transitionalTicks": 0,
+  "steadyTicks": 11,
+  "steadyExactTicks": 11,
+  "spotterEqualTicks": 36,
+  "spotterMismatchTicks": 0,
+  "snapshotAttempts": 148,
+  "unstableSnapshotAttempts": 81,
+  "obserrRatio": 0,
+  "maxObserrStreak": 0,
+  "ticksSourceGeBase": 36,
+  "ticksSourceGeBaseRatio": 1,
+  "minSourceCount": 1000,
+  "finalSourceCount": 1000,
+  "finalSnapshotExact": false,
+  "productDivergentTicks": 1,
+  "maxHeal": "0s",
+  "forensics": [
+    {
+      "key": "obs-app-10/k8s/obs-pod-2171/missing",
+      "appCode": "obs-app-10",
+      "cluster": "k8s",
+      "podUid": "obs-pod-2171",
+      "podName": "obs-pod-2171",
+      "instanceId": "",
+      "kind": "missing",
+      "firstSeen": "2026-09-19T01:36:34+08:00",
+      "ageMs": 62396,
+      "ledgerOp": "create",
+      "ledgerAt": "2026-09-19T01:35:30+08:00",
+      "logSlice": [
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-19T01:36:31.204+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"k8s match much id: obs-pod-2171 , status : 1 \\n\"}"
+      ]
+    },
+    {
+      "key": "obs-app-11/k8s/obs-pod-2172/missing",
+      "appCode": "obs-app-11",
+      "cluster": "k8s",
+      "podUid": "obs-pod-2172",
+      "podName": "obs-pod-2172",
+      "instanceId": "",
+      "kind": "missing",
+      "firstSeen": "2026-09-19T01:36:34+08:00",
+      "ageMs": 71340,
+      "ledgerOp": "create",
+      "ledgerAt": "2026-09-19T01:35:30+08:00",
+      "logSlice": [
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-19T01:36:31.204+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"k8s match much id: obs-pod-2172 , status : 1 \\n\"}"
+      ]
+    },
+    {
+      "key": "obs-app-13/k8s/obs-pod-2174/missing",
+      "appCode": "obs-app-13",
+      "cluster": "k8s",
+      "podUid": "obs-pod-2174",
+      "podName": "obs-pod-2174",
+      "instanceId": "",
+      "kind": "missing",
+      "firstSeen": "2026-09-19T01:36:34+08:00",
+      "ageMs": 254114,
+      "ledgerOp": "create",
+      "ledgerAt": "2026-09-19T01:35:30+08:00",
+      "logSlice": [
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-19T01:36:31.204+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"k8s match much id: obs-pod-2174 , status : 1 \\n\"}"
+      ]
+    },
+    {
+      "key": "obs-app-8/k8s/obs-pod-2169/missing",
+      "appCode": "obs-app-8",
+      "cluster": "k8s",
+      "podUid": "obs-pod-2169",
+      "podName": "obs-pod-2169",
+      "instanceId": "",
+      "kind": "missing",
+      "firstSeen": "2026-09-19T01:36:34+08:00",
+      "ageMs": 268746,
+      "ledgerOp": "create",
+      "ledgerAt": "2026-09-19T01:35:30+08:00",
+      "logSlice": [
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-19T01:36:31.204+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"k8s match much id: obs-pod-2169 , status : 1 \\n\"}"
+      ]
+    },
+    {
+      "key": "obs-app-9/k8s/obs-pod-2170/missing",
+      "appCode": "obs-app-9",
+      "cluster": "k8s",
+      "podUid": "obs-pod-2170",
+      "podName": "obs-pod-2170",
+      "instanceId": "",
+      "kind": "missing",
+      "firstSeen": "2026-09-19T01:36:34+08:00",
+      "ageMs": 451338,
+      "ledgerOp": "create",
+      "ledgerAt": "2026-09-19T01:35:30+08:00",
+      "logSlice": [
+        "{\"level\":\"INFO\",\"ts\":\"2026-09-19T01:36:31.204+0800\",\"caller\":\"logging/logging.go:193\",\"msg\":\"k8s match much id: obs-pod-2170 , status : 1 \\n\"}"
+      ]
+    }
+  ],
+  "maxInFlight": 0,
+  "maxRetryDepth": 1,
+  "maxRobotDepth": 0,
+  "droppedTotal": 0,
+  "drainedAtEnd": false,
+  "latency": {
+    "p50": 0.025,
+    "p90": 5,
+    "p95": 10,
+    "p99": 10,
+    "count": 2817
+  },
+  "watch": {
+    "subscriptionsWanted": 20,
+    "subscriptionsStarted": 20,
+    "k8sEvents": 12302,
+    "spotterEvents": 24795,
+    "nacosEvents": 10730,
+    "mutations": 2368,
+    "correlated": 2364,
+    "missing": 4,
+    "byOperation": {
+      "crash": {
+        "apiToK8s": {
+          "samples": 1,
+          "p50": 0.217891583,
+          "p90": 0.217891583,
+          "p95": 0.217891583,
+          "p99": 0.217891583,
+          "max": 0.217891583
+        },
+        "apiToSpotter": {
+          "samples": 1,
+          "p50": 0.218931,
+          "p90": 0.218931,
+          "p95": 0.218931,
+          "p99": 0.218931,
+          "max": 0.218931
+        },
+        "spotterProviderTriggerToWorker": {
+          "samples": 1,
+          "p50": 0.000401,
+          "p90": 0.000401,
+          "p95": 0.000401,
+          "p99": 0.000401,
+          "max": 0.000401
+        },
+        "spotterToNacos": {
+          "samples": 1,
+          "p50": 0.37201,
+          "p90": 0.37201,
+          "p95": 0.37201,
+          "p99": 0.37201,
+          "max": 0.37201
+        },
+        "apiToNacos": {
+          "samples": 1,
+          "p50": 0.590937333,
+          "p90": 0.590937333,
+          "p95": 0.590937333,
+          "p99": 0.590937333,
+          "max": 0.590937333
+        }
+      },
+      "create": {
+        "apiToK8s": {
+          "samples": 1183,
+          "p50": 0.879606917,
+          "p90": 2.549784541,
+          "p95": 4.060536291,
+          "p99": 5.5197336660000005,
+          "max": 5.7448464999999995
+        },
+        "apiToSpotter": {
+          "samples": 1183,
+          "p50": 0.881158,
+          "p90": 2.548554,
+          "p95": 4.060827,
+          "p99": 5.520301,
+          "max": 5.745157
+        },
+        "spotterProviderTriggerToWorker": {
+          "samples": 1183,
+          "p50": 0.000149,
+          "p90": 0.000783,
+          "p95": 0.001588,
+          "p99": 0.011622,
+          "max": 0.073038
+        },
+        "spotterToNacos": {
+          "samples": 1183,
+          "p50": 0.567764,
+          "p90": 1.6472820000000001,
+          "p95": 3.215704,
+          "p99": 5.921518,
+          "max": 6.348276
+        },
+        "apiToNacos": {
+          "samples": 1183,
+          "p50": 1.403608584,
+          "p90": 4.611833958,
+          "p95": 5.810928958,
+          "p99": 8.260934875,
+          "max": 8.345063125
+        }
+      },
+      "delete": {
+        "apiToK8s": {
+          "samples": 1180,
+          "p50": 1.5489754169999999,
+          "p90": 14.891867958,
+          "p95": 16.6363185,
+          "p99": 18.005761291,
+          "max": 18.481658583
+        },
+        "apiToSpotter": {
+          "samples": 1180,
+          "p50": 1.5411350000000001,
+          "p90": 14.904327,
+          "p95": 16.624871,
+          "p99": 17.995777,
+          "max": 18.47668
+        },
+        "spotterProviderTriggerToWorker": {
+          "samples": 1180,
+          "p50": 0.000223,
+          "p90": 0.001167,
+          "p95": 0.003394,
+          "p99": 0.021382,
+          "max": 0.097874
+        },
+        "spotterToNacos": {
+          "samples": 1180,
+          "p50": 0.563042,
+          "p90": 3.761969,
+          "p95": 6.258473,
+          "p99": 10.22013,
+          "max": 11.623861
+        },
+        "apiToNacos": {
+          "samples": 1180,
+          "p50": 4.619360209,
+          "p90": 15.673314416,
+          "p95": 17.788631291,
+          "p99": 24.991700917,
+          "max": 25.099233917
+        }
+      }
+    },
+    "errors": [
+      "k8s watch error: \u0026Status{ListMeta:ListMeta{SelfLink:,ResourceVersion:,Continue:,RemainingItemCount:nil,},Status:Failure,Message:an error on the server (\"unable to decode an event from the watch stream: http2: client connection lost\") has prevented the request from succeeding,Reason:InternalError,Details:\u0026StatusDetails{Name:,Group:,Kind:,Causes:[]StatusCause{StatusCause{Type:UnexpectedServerResponse,Message:unable to decode an event from the watch stream: http2: client connection lost,Field:,},StatusCause{Type:ClientWatchDecoding,Message:unable to decode an event from the watch stream: http2: client connection lost,Field:,},},RetryAfterSeconds:0,UID:,},Code:500,}",
+      "spotter event watch: Get \"http://127.0.0.1:19998/debug/spotter/events?after=21779\u0026wait=5s\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "k8s watch error: \u0026Status{ListMeta:ListMeta{SelfLink:,ResourceVersion:,Continue:,RemainingItemCount:nil,},Status:Failure,Message:an error on the server (\"unable to decode an event from the watch stream: http2: client connection lost\") has prevented the request from succeeding,Reason:InternalError,Details:\u0026StatusDetails{Name:,Group:,Kind:,Causes:[]StatusCause{StatusCause{Type:UnexpectedServerResponse,Message:unable to decode an event from the watch stream: http2: client connection lost,Field:,},StatusCause{Type:ClientWatchDecoding,Message:unable to decode an event from the watch stream: http2: client connection lost,Field:,},},RetryAfterSeconds:0,UID:,},Code:500,}"
+    ],
+    "eventsFile": "20260919-0125-events.jsonl"
+  },
+  "churnCreates": 1183,
+  "churnDeletes": 1183,
+  "churnErrors": 0,
+  "bursts": [
+    {
+      "name": "storm-100",
+      "size": 100,
+      "createIssued": "2026-09-19T01:26:19+08:00",
+      "convergedUp": "2026-09-19T01:26:22+08:00",
+      "upConvergence": "2s",
+      "deleteIssued": "2026-09-19T01:27:32+08:00",
+      "convergedDown": "2026-09-19T01:27:57+08:00",
+      "downConvergence": "25s"
+    },
+    {
+      "name": "batch-200@25%",
+      "size": 200,
+      "createIssued": "2026-09-19T01:28:19+08:00",
+      "convergedUp": "2026-09-19T01:28:22+08:00",
+      "upConvergence": "2s",
+      "deleteIssued": "2026-09-19T01:29:35+08:00",
+      "convergedDown": "2026-09-19T01:30:19+08:00",
+      "downConvergence": "43s"
+    },
+    {
+      "name": "batch-200@50%",
+      "size": 200,
+      "createIssued": "2026-09-19T01:30:52+08:00",
+      "convergedUp": "2026-09-19T01:31:01+08:00",
+      "upConvergence": "9s",
+      "deleteIssued": "2026-09-19T01:32:12+08:00",
+      "convergedDown": "2026-09-19T01:32:55+08:00",
+      "downConvergence": "42s"
+    },
+    {
+      "name": "batch-200@75%",
+      "size": 200,
+      "createIssued": "2026-09-19T01:33:19+08:00",
+      "convergedUp": "2026-09-19T01:33:23+08:00",
+      "upConvergence": "3s",
+      "deleteIssued": "2026-09-19T01:34:32+08:00",
+      "convergedDown": "2026-09-19T01:35:15+08:00",
+      "downConvergence": "42s"
+    }
+  ],
+  "pass": false,
+  "fails": [
+    "final snapshot: post-quiescence K8s/Spotter/Nacos projection was not stably exact",
+    "consistency: 1 product-divergent ticks (requirement: zero; see the forensics)",
+    "retry queue: not drained at window end (max depth 1)",
+    "continuous watch: 3 watcher errors (k8s watch error: \u0026Status{ListMeta:ListMeta{SelfLink:,ResourceVersion:,Continue:,RemainingItemCount:nil,},Status:Failure,Message:an error on the server (\"unable to decode an event from the watch stream: http2: client connection lost\") has prevented the request from succeeding,Reason:InternalError,Details:\u0026StatusDetails{Name:,Group:,Kind:,Causes:[]StatusCause{StatusCause{Type:UnexpectedServerResponse,Message:unable to decode an event from the watch stream: http2: client connection lost,Field:,},StatusCause{Type:ClientWatchDecoding,Message:unable to decode an event from the watch stream: http2: client connection lost,Field:,},},RetryAfterSeconds:0,UID:,},Code:500,}; spotter event watch: Get \"http://127.0.0.1:19998/debug/spotter/events?after=21779\u0026wait=5s\": context deadline exceeded (Client.Timeout exceeded while awaiting headers); k8s watch error: \u0026Status{ListMeta:ListMeta{SelfLink:,ResourceVersion:,Continue:,RemainingItemCount:nil,},Status:Failure,Message:an error on the server (\"unable to decode an event from the watch stream: http2: client connection lost\") has prevented the request from succeeding,Reason:InternalError,Details:\u0026StatusDetails{Name:,Group:,Kind:,Causes:[]StatusCause{StatusCause{Type:UnexpectedServerResponse,Message:unable to decode an event from the watch stream: http2: client connection lost,Field:,},StatusCause{Type:ClientWatchDecoding,Message:unable to decode an event from the watch stream: http2: client connection lost,Field:,},},RetryAfterSeconds:0,UID:,},Code:500,})",
+    "continuous watch: correlated 2364/2368 mutations, missing 4"
+  ]
+}

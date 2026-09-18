@@ -22,6 +22,7 @@ the discovery center ("Atlas") over gRPC.
 | [observation-method-validation-2026-09-17.md](observation-method-validation-2026-09-17.md) | Corrected K8s Watch → Spotter internal-cache/pre-worker → Nacos Subscribe observation model, stable-cut equality oracle, percentile semantics, and current diagnostic evidence. |
 | [evidence/nacos3-kwok-continuous-watch-scale-pass-2026-09-17.md](evidence/nacos3-kwok-continuous-watch-scale-pass-2026-09-17.md) | Full 1/10/100/500/1000 KWOK continuous-watch scale evidence with 10,220 per-instance samples and strict batch min/median/max. |
 | [evidence/nacos3-kwok-20m-root-cause-2026-09-19.md](evidence/nacos3-kwok-20m-root-cause-2026-09-19.md) | Failed 20-minute/1000-Pod run root cause: harness no-op deletes, K8s cache resurrection race, remediation evidence, and the mandatory revalidation gate. |
+| [evidence/nacos3-kwok-reconcile-race-closure-2026-09-19.md](evidence/nacos3-kwok-reconcile-race-closure-2026-09-19.md) | Three-run fail/find/fix closure for mixed-time reconcile deletion and crash/recovery ownership, ending in a clean 10-minute/1000-Pod collision PASS. |
 | [superpowers/plans/2026-09-15-remaining-closure.md](superpowers/plans/2026-09-15-remaining-closure.md) | Remaining in-scope closure plan: legacy deletion, two-hour burst gate, status reconciliation, and safe historical commit-message rewrite. |
 
 Start with [architecture.md](architecture.md) for the big picture; see the

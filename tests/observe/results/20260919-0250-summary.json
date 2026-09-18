@@ -1,0 +1,271 @@
+{
+  "stamp": "20260919-0250",
+  "duration": "10m1s",
+  "scale": 1000,
+  "services": 20,
+  "churnRatePctPerMin": 5,
+  "obsBound": "1m0s",
+  "pushIntervalSecs": 60,
+  "reconcileSource": "nacos",
+  "ticks": 38,
+  "consistent": 38,
+  "divergent": 0,
+  "obserr": 0,
+  "consistencyRatio": 1,
+  "exactEqualTicks": 38,
+  "transitionalTicks": 0,
+  "steadyTicks": 12,
+  "steadyExactTicks": 12,
+  "spotterEqualTicks": 38,
+  "spotterMismatchTicks": 0,
+  "snapshotAttempts": 118,
+  "unstableSnapshotAttempts": 78,
+  "obserrRatio": 0,
+  "maxObserrStreak": 0,
+  "ticksSourceGeBase": 38,
+  "ticksSourceGeBaseRatio": 1,
+  "minSourceCount": 1000,
+  "finalSourceCount": 1000,
+  "finalSnapshotExact": true,
+  "productDivergentTicks": 0,
+  "maxHeal": "0s",
+  "maxInFlight": 0,
+  "maxRetryDepth": 1,
+  "maxRobotDepth": 0,
+  "droppedTotal": 0,
+  "drainedAtEnd": true,
+  "latency": {
+    "p50": 0.025,
+    "p90": 10,
+    "p95": 10,
+    "p99": 10,
+    "count": 2784
+  },
+  "watch": {
+    "subscriptionsWanted": 20,
+    "subscriptionsStarted": 20,
+    "k8sEvents": 10301,
+    "spotterEvents": 15612,
+    "nacosEvents": 8526,
+    "mutations": 2368,
+    "correlated": 2368,
+    "missing": 0,
+    "byOperation": {
+      "crash": {
+        "apiToK8s": {
+          "samples": 1,
+          "p50": 0.088220959,
+          "p90": 0.088220959,
+          "p95": 0.088220959,
+          "p99": 0.088220959,
+          "max": 0.088220959
+        },
+        "apiToSpotter": {
+          "samples": 1,
+          "p50": 0.090091,
+          "p90": 0.090091,
+          "p95": 0.090091,
+          "p99": 0.090091,
+          "max": 0.090091
+        },
+        "spotterProviderTriggerToWorker": {
+          "samples": 1,
+          "p50": 0.001233,
+          "p90": 0.001233,
+          "p95": 0.001233,
+          "p99": 0.001233,
+          "max": 0.001233
+        },
+        "spotterToNacos": {
+          "samples": 1,
+          "p50": 0.297165,
+          "p90": 0.297165,
+          "p95": 0.297165,
+          "p99": 0.297165,
+          "max": 0.297165
+        },
+        "apiToNacos": {
+          "samples": 1,
+          "p50": 0.3872535,
+          "p90": 0.3872535,
+          "p95": 0.3872535,
+          "p99": 0.3872535,
+          "max": 0.3872535
+        }
+      },
+      "create": {
+        "apiToK8s": {
+          "samples": 1183,
+          "p50": 0.743874917,
+          "p90": 3.9874213750000003,
+          "p95": 5.244296584,
+          "p99": 6.1101535,
+          "max": 6.618292667
+        },
+        "apiToSpotter": {
+          "samples": 1183,
+          "p50": 0.749719,
+          "p90": 3.98762,
+          "p95": 5.244422,
+          "p99": 6.121846,
+          "max": 6.6280339999999995
+        },
+        "spotterProviderTriggerToWorker": {
+          "samples": 1183,
+          "p50": 0.000138,
+          "p90": 0.000848,
+          "p95": 0.002718,
+          "p99": 0.072675,
+          "max": 0.513185
+        },
+        "spotterToNacos": {
+          "samples": 1183,
+          "p50": 0.544904,
+          "p90": 5.407304,
+          "p95": 6.568298,
+          "p99": 10.35721,
+          "max": 10.754309
+        },
+        "apiToNacos": {
+          "samples": 1183,
+          "p50": 1.166046666,
+          "p90": 7.840066542,
+          "p95": 12.559517958,
+          "p99": 12.67452075,
+          "max": 12.699395833
+        }
+      },
+      "delete": {
+        "apiToK8s": {
+          "samples": 1183,
+          "p50": 2.135006583,
+          "p90": 15.252954041,
+          "p95": 16.897797667,
+          "p99": 18.499123667,
+          "max": 20.410447084
+        },
+        "apiToSpotter": {
+          "samples": 1183,
+          "p50": 2.133592,
+          "p90": 15.21961,
+          "p95": 16.897289,
+          "p99": 18.433588,
+          "max": 20.400553
+        },
+        "spotterProviderTriggerToWorker": {
+          "samples": 1183,
+          "p50": 0.00022,
+          "p90": 0.001602,
+          "p95": 0.004139,
+          "p99": 0.028524,
+          "max": 0.095101
+        },
+        "spotterToNacos": {
+          "samples": 1183,
+          "p50": 0.559021,
+          "p90": 3.209565,
+          "p95": 5.39622,
+          "p99": 8.507173,
+          "max": 10.9044
+        },
+        "apiToNacos": {
+          "samples": 1183,
+          "p50": 3.955134,
+          "p90": 16.923061292,
+          "p95": 18.642056208,
+          "p99": 18.878876416,
+          "max": 20.989018167
+        }
+      },
+      "recover": {
+        "apiToK8s": {
+          "samples": 1,
+          "p50": 0.130553167,
+          "p90": 0.130553167,
+          "p95": 0.130553167,
+          "p99": 0.130553167,
+          "max": 0.130553167
+        },
+        "apiToSpotter": {
+          "samples": 1,
+          "p50": 0.130787,
+          "p90": 0.130787,
+          "p95": 0.130787,
+          "p99": 0.130787,
+          "max": 0.130787
+        },
+        "spotterProviderTriggerToWorker": {
+          "samples": 1,
+          "p50": 0.000108,
+          "p90": 0.000108,
+          "p95": 0.000108,
+          "p99": 0.000108,
+          "max": 0.000108
+        },
+        "spotterToNacos": {
+          "samples": 1,
+          "p50": 0.555592,
+          "p90": 0.555592,
+          "p95": 0.555592,
+          "p99": 0.555592,
+          "max": 0.555592
+        },
+        "apiToNacos": {
+          "samples": 1,
+          "p50": 0.686367459,
+          "p90": 0.686367459,
+          "p95": 0.686367459,
+          "p99": 0.686367459,
+          "max": 0.686367459
+        }
+      }
+    },
+    "eventsFile": "20260919-0250-events.jsonl"
+  },
+  "churnCreates": 1183,
+  "churnDeletes": 1183,
+  "churnErrors": 0,
+  "bursts": [
+    {
+      "name": "storm-100",
+      "size": 100,
+      "createIssued": "2026-09-19T02:51:47+08:00",
+      "convergedUp": "2026-09-19T02:51:50+08:00",
+      "upConvergence": "2s",
+      "deleteIssued": "2026-09-19T02:53:00+08:00",
+      "convergedDown": "2026-09-19T02:53:22+08:00",
+      "downConvergence": "22s"
+    },
+    {
+      "name": "batch-200@25%",
+      "size": 200,
+      "createIssued": "2026-09-19T02:53:47+08:00",
+      "convergedUp": "2026-09-19T02:53:55+08:00",
+      "upConvergence": "7s",
+      "deleteIssued": "2026-09-19T02:55:30+08:00",
+      "convergedDown": "2026-09-19T02:56:16+08:00",
+      "downConvergence": "45s"
+    },
+    {
+      "name": "batch-200@50%",
+      "size": 200,
+      "createIssued": "2026-09-19T02:56:19+08:00",
+      "convergedUp": "2026-09-19T02:56:28+08:00",
+      "upConvergence": "8s",
+      "deleteIssued": "2026-09-19T02:57:31+08:00",
+      "convergedDown": "2026-09-19T02:58:15+08:00",
+      "downConvergence": "43s"
+    },
+    {
+      "name": "batch-200@75%",
+      "size": 200,
+      "createIssued": "2026-09-19T02:58:47+08:00",
+      "convergedUp": "2026-09-19T02:59:06+08:00",
+      "upConvergence": "18s",
+      "deleteIssued": "2026-09-19T03:00:10+08:00",
+      "convergedDown": "2026-09-19T03:00:54+08:00",
+      "downConvergence": "44s"
+    }
+  ],
+  "pass": true
+}
