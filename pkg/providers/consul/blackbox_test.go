@@ -700,6 +700,31 @@ func TestBlackboxConsulEmptyFullRequiresThreeSuccessfulConfirmations(t *testing.
 	}
 }
 
+func TestBlackboxConsulEmptyConfirmationAdvancesOncePerEmit(t *testing.T) {
+	w := &fakeWorker{}
+	c := &consul{cache: providers.NewCache(8), worker: w, ctx: context.Background()}
+	for emit := 1; emit <= 3; emit++ {
+		c.emitSyncAll()
+		events := w.syncAllEvents()
+		if len(events) != emit {
+			t.Fatalf("after emit %d SyncAll events=%d", emit, len(events))
+		}
+		event := events[len(events)-1]
+		if event.EmptyConfirmed != (emit == 3) {
+			t.Fatalf("emit %d EmptyConfirmed=%t, want %t", emit, event.EmptyConfirmed, emit == 3)
+		}
+		if _, ok := event.Revalidate(); !ok {
+			t.Fatal("first revalidation failed")
+		}
+		if _, ok := event.Revalidate(); !ok {
+			t.Fatal("second revalidation failed")
+		}
+		if got := c.emptyConfirmations; got != uint32(emit) {
+			t.Fatalf("emit %d confirmations=%d, revalidation advanced the producer counter", emit, got)
+		}
+	}
+}
+
 // flippingMonitor is a Monitor double whose GetServices error state can be
 // flipped concurrently: it alternates between answering an empty catalog
 // (legit empty) and a connection-shaped error (source read failure). It

@@ -246,3 +246,97 @@ func TestOrderedSinkTrustedFullTombstoneAllowsLaterCompleteSnapshot(t *testing.T
 		t.Fatalf("new revision Push calls = %d, want 1", inner.pushCalls)
 	}
 }
+
+func TestOrderedSinkTrustedFullCanCorrectEqualRevisionTombstone(t *testing.T) {
+	inner := &countingFullSink{}
+	s := &orderedSink{inner: inner}
+	online := probeInstance("k8s/uid-a")
+	online.Provider = "k8s"
+	online.Status = instance.InstanceStatusOnline
+	online.Reversion = 7
+	if err := s.Push(1, []*instance.Instance{online}); err != nil {
+		t.Fatalf("seed online: %v", err)
+	}
+	offline := *online
+	offline.Status = instance.InstanceStatusOffline
+	if err := s.Push(2, []*instance.Instance{&offline}); err != nil {
+		t.Fatalf("seed equal-revision tombstone: %v", err)
+	}
+	if err := s.PushAllOperation(ports.RetryOperation{
+		Sink: "nacos", Operate: ports.OperateTypeSyncAll, Scope: "k8s", BatchID: "k8s-heal",
+		Trigger: 3, Instances: []*instance.Instance{online},
+		Revalidate: func() ([]*instance.Instance, bool) { return []*instance.Instance{online}, true },
+	}); err != nil {
+		t.Fatalf("trusted complete heal: %v", err)
+	}
+	if inner.fullCalls != 1 {
+		t.Fatalf("trusted complete full calls = %d, want 1", inner.fullCalls)
+	}
+	s.latestMu.Lock()
+	state := s.latest[instance.IdentityKey(online)]
+	s.latestMu.Unlock()
+	if state.tombstone || state.revision != online.Reversion {
+		t.Fatalf("latest state = %+v, want online revision %d", state, online.Reversion)
+	}
+}
+
+func TestOrderedSinkScopedFullWithoutRevalidateCannotCorrectEqualRevisionTombstone(t *testing.T) {
+	inner := &countingFullSink{}
+	s := &orderedSink{inner: inner}
+	online := probeInstance("k8s/uid-a")
+	online.Provider = "k8s"
+	online.Status = instance.InstanceStatusOnline
+	online.Reversion = 7
+	if err := s.Push(1, []*instance.Instance{online}); err != nil {
+		t.Fatalf("seed online: %v", err)
+	}
+	offline := *online
+	offline.Status = instance.InstanceStatusOffline
+	if err := s.Push(2, []*instance.Instance{&offline}); err != nil {
+		t.Fatalf("seed tombstone: %v", err)
+	}
+	err := s.PushAllOperation(ports.RetryOperation{
+		Sink: "nacos", Operate: ports.OperateTypeSyncAll, Scope: "k8s", BatchID: "stale",
+		Trigger: 3, Instances: []*instance.Instance{online},
+	})
+	if !errors.Is(err, errStaleFullPush) {
+		t.Fatalf("scoped full without revalidation error = %v, want errStaleFullPush", err)
+	}
+	if inner.fullCalls != 0 {
+		t.Fatalf("stale scoped full reached sink %d times", inner.fullCalls)
+	}
+}
+
+func TestOrderedSinkUnconfirmedEmptyIsLedgerNoop(t *testing.T) {
+	inner := &countingFullSink{}
+	s := &orderedSink{inner: inner}
+	online := probeInstance("k8s/uid-a")
+	online.Provider = "k8s"
+	online.Status = instance.InstanceStatusOnline
+	online.Reversion = 7
+	if err := s.Push(1, []*instance.Instance{online}); err != nil {
+		t.Fatalf("seed online: %v", err)
+	}
+	if err := s.PushAllOperation(ports.RetryOperation{
+		Sink: "nacos", Operate: ports.OperateTypeSyncAll, Scope: "k8s", BatchID: "empty-unconfirmed",
+		Trigger: 2, EmptyConfirmed: false,
+		Revalidate: func() ([]*instance.Instance, bool) { return nil, true },
+	}); err != nil {
+		t.Fatalf("unconfirmed empty operation: %v", err)
+	}
+	s.latestMu.Lock()
+	state := s.latest[instance.IdentityKey(online)]
+	s.latestMu.Unlock()
+	if state.tombstone {
+		t.Fatalf("unconfirmed empty tombstoned latest: %+v", state)
+	}
+	if inner.fullCalls != 0 {
+		t.Fatalf("unconfirmed empty reached inner full sink %d times", inner.fullCalls)
+	}
+	if err := s.Push(3, []*instance.Instance{online}); err != nil {
+		t.Fatalf("same-revision online after unconfirmed empty: %v", err)
+	}
+	if inner.pushCalls != 2 {
+		t.Fatalf("same-revision online push calls=%d, want seed+retry", inner.pushCalls)
+	}
+}

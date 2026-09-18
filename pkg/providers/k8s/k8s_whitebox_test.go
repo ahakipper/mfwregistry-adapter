@@ -260,6 +260,7 @@ type fakeWorker struct {
 	getAllResponse *sv.InstanceList
 	getAllErr      error
 	getAllCalls    int
+	getAllHook     func()
 }
 
 // observingWorker records the provider-to-worker boundary while delegating to
@@ -302,9 +303,13 @@ func (w *fakeWorker) ProcessUnsynced() {}
 
 func (w *fakeWorker) GetAll(enable []int32, provider string) (*sv.InstanceList, error) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	w.getAllCalls++
-	return w.getAllResponse, w.getAllErr
+	response, err, hook := w.getAllResponse, w.getAllErr, w.getAllHook
+	w.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return response, err
 }
 
 // getAllCallCount returns the number of GetAll calls (locked read).
@@ -966,12 +971,12 @@ func TestK8sSyncAllRevalidateReturnsCompleteConcurrentCache(t *testing.T) {
 	for _, ins := range latest {
 		byID[ins.InstanceId] = ins
 	}
-	for _, id := range []string{"a", "b", "c"} {
+	for _, id := range []string{"a", "b"} {
 		if byID[id] == nil {
 			t.Fatalf("Revalidate() missing %q from complete cache: %#v", id, latest)
 		}
 	}
-	if byID["a"].Reversion != 2 || byID["c"].Status != providers.InstanceStatusOffline {
+	if byID["a"].Reversion != 2 || byID["c"] != nil {
 		t.Fatalf("Revalidate() returned stale/partial values: %#v", byID)
 	}
 	if k.generation != initialGeneration+3 {
@@ -993,41 +998,73 @@ func TestK8sEmptyFullRequiresThreeSuccessfulConfirmations(t *testing.T) {
 	}
 }
 
-func TestK8sFullPushSnapshotRetriesWhenGenerationChangesDuringRead(t *testing.T) {
-	k := newTestProvider(newFakeRobot(nil, nil, false), &fakeWorker{})
-	first := &sv.Instance{InstanceId: "pod-a", SourceKey: "cluster-a/uid-a", Provider: "k8s", Reversion: 1, Status: providers.InstanceStatusOnline}
-	second := &sv.Instance{InstanceId: "pod-b", SourceKey: "cluster-a/uid-b", Provider: "k8s", Reversion: 1, Status: providers.InstanceStatusOnline}
-	k.ProcessCache(k8srobot.EventAdd, first)
-
-	loads := 0
-	all, generation, valid, _ := k.snapshotForFullPushWithLoader(func(cache providers.CacheIterface) []*sv.Instance {
-		loads++
-		result := cache.List()
-		if loads == 1 {
-			// The first loader deliberately returns the old list after the
-			// incremental path has already advanced generation.
-			k.ProcessCache(k8srobot.EventAdd, second)
+func TestK8sEmptyConfirmationAdvancesOncePerEmitNotPerRevalidate(t *testing.T) {
+	w := &fakeWorker{}
+	k := newTestProvider(newFakeRobot(nil, nil, false), w)
+	for emit := 1; emit <= 3; emit++ {
+		k.emitSyncAll()
+		events := findSyncAllEvents(w.handleSnapshot())
+		if len(events) != emit {
+			t.Fatalf("after emit %d SyncAll events=%d", emit, len(events))
 		}
-		return result
-	})
-	if !valid {
-		t.Fatal("stable retry was rejected")
+		event := events[len(events)-1]
+		if event.EmptyConfirmed != (emit == 3) {
+			t.Fatalf("emit %d EmptyConfirmed=%t, want %t", emit, event.EmptyConfirmed, emit == 3)
+		}
+		if event.Revalidate == nil {
+			t.Fatal("SyncAll event has no revalidation callback")
+		}
+		if _, ok := event.Revalidate(); !ok {
+			t.Fatal("first sink revalidation failed")
+		}
+		if _, ok := event.Revalidate(); !ok {
+			t.Fatal("second sink revalidation failed")
+		}
+		if got := k.emptyConfirmations; got != uint32(emit) {
+			t.Fatalf("emit %d confirmations=%d, revalidation advanced the producer counter", emit, got)
+		}
 	}
-	if loads != 2 {
-		t.Fatalf("snapshot loads = %d, want one rejected read plus one retry", loads)
+}
+
+func TestK8sFullPushSnapshotUsesProcessedCacheInsteadOfRawRobotList(t *testing.T) {
+	// The informer store and the provider's processed cache advance on
+	// different clocks. A destructive full push must use the cache that has
+	// already crossed the provider boundary, not a raw List which can be at a
+	// different point in the watch stream.
+	k := newTestProvider(newFakeRobot(nil, nil, true), &fakeWorker{})
+	processed := &sv.Instance{
+		InstanceId: "pod-processed", SourceKey: "cluster-a/uid-processed", Provider: "k8s",
+		AppCode: "pay-user", Ip: "10.0.0.9", Ports: []*sv.PortInfo{{Port: 7096}},
+		EnvType: "test", Reversion: 42, Status: providers.InstanceStatusOnline, Enabled: true,
 	}
-	byID := make(map[string]bool, len(all))
-	for _, item := range all {
-		byID[item.InstanceId] = true
+	k.ProcessCache(k8srobot.EventAdd, processed)
+
+	all, _, valid, _ := k.snapshotForFullPush()
+	if !valid || len(all) != 1 || all[0].InstanceId != processed.InstanceId {
+		t.Fatalf("full snapshot = %#v valid=%t, want the processed cache identity", all, valid)
 	}
-	if !byID[first.InstanceId] || !byID[second.InstanceId] {
-		t.Fatalf("full snapshot = %#v, want both pre-existing and concurrent identities", all)
+}
+
+func TestK8sFullPushSnapshotFiltersOfflineTombstonesAndConfirmsEmpty(t *testing.T) {
+	k := newTestProvider(newFakeRobot(nil, nil, false), &fakeWorker{})
+	online := &sv.Instance{
+		InstanceId: "pod-a", SourceKey: "cluster-a/uid-a", Provider: "k8s",
+		AppCode: "pay-user", Ip: "10.0.0.1", Ports: []*sv.PortInfo{{Port: 7096}},
+		EnvType: "test", Reversion: 7, Status: providers.InstanceStatusOnline, Enabled: true,
 	}
-	k.Lock()
-	current := k.generation
-	k.Unlock()
-	if generation != current {
-		t.Fatalf("snapshot generation = %d, current = %d", generation, current)
+	k.ProcessCache(k8srobot.EventAdd, online)
+	offline := *online
+	offline.Status = providers.InstanceStatusOffline
+	offline.Enabled = false
+	k.ProcessCache(k8srobot.EventDelete, &offline)
+	for attempt := 1; attempt <= 3; attempt++ {
+		all, _, valid, confirmed := k.snapshotForFullPush()
+		if !valid || len(all) != 0 {
+			t.Fatalf("attempt %d snapshot=%#v valid=%t, want empty active snapshot", attempt, all, valid)
+		}
+		if confirmed != (attempt == 3) {
+			t.Fatalf("attempt %d emptyConfirmed=%t, want %t", attempt, confirmed, attempt == 3)
+		}
 	}
 }
 
@@ -1177,7 +1214,7 @@ func TestCompareAndFlushEmptyRemoteListPushesAll(t *testing.T) {
 	}
 }
 
-func TestCompareAndFlushNacosReconcileEmptyRemoteUsesOneFullSnapshot(t *testing.T) {
+func TestNacosStartupReconcileEmptyRemoteUsesOneFullSnapshot(t *testing.T) {
 	podA := newValidPod("msp", "pod-a")
 	podB := newValidPod("msp", "pod-b")
 	robot := newFakeRobot(nil, []interface{}{podA, podB}, false)
@@ -1186,12 +1223,42 @@ func TestCompareAndFlushNacosReconcileEmptyRemoteUsesOneFullSnapshot(t *testing.
 	k.SetNacosReconcileSource(true)
 
 	k.CompareAndFlush()
+	k.emitSyncAll()
 	events := w.waitForHandles(t, 1)
 	if len(events) != 1 {
 		t.Fatalf("events = %d, want one full snapshot event", len(events))
 	}
 	if events[0].Operate != worker.OperateTypeSyncAll || len(events[0].Data) != 2 {
 		t.Fatalf("event = operate=%q data=%d, want SyncAll with two instances", events[0].Operate, len(events[0].Data))
+	}
+}
+
+func TestCompareAndFlushRuntimeNeverReplacesProcessedCacheFromRawInformer(t *testing.T) {
+	k := newTestProvider(newFakeRobot(nil, nil, true), &fakeWorker{})
+	a := &sv.Instance{InstanceId: "pod-a", SourceKey: "cluster-a/uid-a", Provider: "k8s", AppCode: "pay-user", Ip: "10.0.0.1", Ports: []*sv.PortInfo{{Port: 7096}}, EnvType: "test", Reversion: 7, Status: providers.InstanceStatusOnline, Enabled: true}
+	b := &sv.Instance{InstanceId: "pod-b", SourceKey: "cluster-a/uid-b", Provider: "k8s", AppCode: "pay-user", Ip: "10.0.0.2", Ports: []*sv.PortInfo{{Port: 7096}}, EnvType: "test", Reversion: 8, Status: providers.InstanceStatusOnline, Enabled: true}
+	k.ProcessCache(k8srobot.EventAdd, a)
+	k.ProcessCache(k8srobot.EventAdd, b)
+	w := k.worker.(*fakeWorker)
+	w.mu.Lock()
+	w.getAllResponse = &sv.InstanceList{Instance: []*sv.Instance{nacosViewInstance(a), nacosViewInstance(b)}}
+	w.mu.Unlock()
+
+	// The synced fake robot deliberately returns an empty raw List. Runtime
+	// reconcile must retain the two processed identities.
+	k.CompareAndFlush()
+	if got := k.cache.List(); len(got) != 2 {
+		t.Fatalf("processed cache after runtime compare = %#v, want two identities", got)
+	}
+	k.emitSyncAll()
+	events := w.waitForHandles(t, 1)
+	full := findSyncAllEvents(events)
+	if len(full) != 1 || full[0].Revalidate == nil {
+		t.Fatalf("full events = %#v, want one revalidatable snapshot", full)
+	}
+	latest, ok := full[0].Revalidate()
+	if !ok || len(latest) != 2 {
+		t.Fatalf("revalidated processed snapshot = %#v ok=%t, want two identities", latest, ok)
 	}
 }
 
@@ -2713,7 +2780,7 @@ func TestCompareAndFlushNacosReconcileAddLocalOnlyPushes(t *testing.T) {
 
 	k.CompareAndFlush()
 
-	events := w.waitForHandles(t, 2)
+	events := w.waitForHandles(t, 1)
 	if e := findEvent(t, events, "pod-new"); e == nil {
 		t.Fatalf("no push for the local-only instance pod-new; events = %#v", events)
 	} else if e.Data[0].Status != providers.InstanceStatusOnline {
@@ -2721,13 +2788,55 @@ func TestCompareAndFlushNacosReconcileAddLocalOnlyPushes(t *testing.T) {
 	}
 }
 
-// TestCompareAndFlushNacosReconcileDeleteRemoteOnlyDeregisters: the DELETE
-// case — the nacos view has an instance the local list lacks (deleted while
-// spotter was down, or a mid-flight delete lost): case 3 pushes the
-// remote-sourced instance with Status=3/State=terminated/Enabled=false, and
-// the push carries the reconstruction's own ip so the nacos sink's
-// deregister by composite id is well-formed.
-func TestCompareAndFlushNacosReconcileDeleteRemoteOnlyDeregisters(t *testing.T) {
+func TestCompareAndFlushDropsStaleAttemptWhenGenerationChangesDuringRemoteRead(t *testing.T) {
+	pod := newValidPod("msp", "pod-steady")
+	pod.ResourceVersion = "100"
+	steady := instanceFromPod(t, pod)
+	late := *steady
+	late.InstanceId = "pod-late"
+	late.Hostname = "pod-late"
+	late.SourceKey = "cluster-a/uid-late"
+	late.Ip = "10.42.0.77"
+	late.Reversion = 101
+
+	remoteReadStarted := make(chan struct{})
+	releaseRemoteRead := make(chan struct{})
+	w := &fakeWorker{
+		getAllResponse: &sv.InstanceList{Instance: []*sv.Instance{nacosViewInstance(steady), nacosViewInstance(&late)}},
+		getAllHook: func() {
+			close(remoteReadStarted)
+			<-releaseRemoteRead
+		},
+	}
+	k := newTestProvider(newFakeRobot(nil, []interface{}{pod}, false), w)
+	k.SetNacosReconcileSource(true)
+	done := make(chan struct{})
+	go func() {
+		k.CompareAndFlush()
+		close(done)
+	}()
+	<-remoteReadStarted
+	// Reproduce the 0125 failure: a new source event completes while the
+	// remote read is in flight, so the returned remote view is newer than the
+	// local list captured at the beginning of CompareAndFlush.
+	k.ProcessCache(k8srobot.EventAdd, &late)
+	close(releaseRemoteRead)
+	<-done
+	time.Sleep(100 * time.Millisecond)
+	for _, event := range w.handleSnapshot() {
+		for _, item := range event.Data {
+			if item.InstanceId == late.InstanceId && item.Status == providers.InstanceStatusOffline {
+				t.Fatalf("stale compare emitted an offline delete for the concurrent identity: %#v", event)
+			}
+		}
+	}
+}
+
+// TestCompareAndFlushNacosReconcileDefersRemoteOnlyDeleteToFullSnapshot pins
+// the destructive-delete ownership boundary: Compare may observe a remote
+// ghost, but only the following revalidated full snapshot is allowed to prune
+// it under the ordered sink's exclusive full gate.
+func TestCompareAndFlushNacosReconcileDefersRemoteOnlyDeleteToFullSnapshot(t *testing.T) {
 	pod := newValidPod("msp", "pod-a")
 	ghost := remoteInstance("pod-ghost", providers.InstanceStatusOnline, 9)
 	ghost.Ip = "10.42.0.99" // the reconstruction's own host ip
@@ -2738,23 +2847,23 @@ func TestCompareAndFlushNacosReconcileDeleteRemoteOnlyDeregisters(t *testing.T) 
 
 	k.CompareAndFlush()
 
-	events := w.waitForHandles(t, 2)
-	e := findEvent(t, events, "pod-ghost")
-	if e == nil {
-		t.Fatalf("no push for the remote-only ghost; events = %#v", events)
+	events := w.waitForHandles(t, 1)
+	if e := findEvent(t, events, "pod-ghost"); e != nil {
+		t.Fatalf("remote-only ghost was emitted as an unsafe incremental delete: %#v", e)
 	}
-	got := e.Data[0]
-	if got.Status != providers.InstanceStatusOffline {
-		t.Fatalf("remote-only instance status = %d, want %d (deregister)", got.Status, providers.InstanceStatusOffline)
+	if e := findEvent(t, events, "pod-a"); e == nil || e.Data[0].Status != providers.InstanceStatusOnline {
+		t.Fatalf("local-only pod was not repaired online: events=%#v", events)
 	}
-	if got.State != providers.InstanceStateTerminated {
-		t.Fatalf("remote-only instance state = %q, want %q", got.State, providers.InstanceStateTerminated)
+
+	k.emitSyncAll()
+	events = w.waitForHandles(t, 2)
+	syncAll := findSyncAllEvents(events)
+	if len(syncAll) != 1 || syncAll[0].Revalidate == nil {
+		t.Fatalf("revalidated full prune event = %#v, want exactly one", syncAll)
 	}
-	if got.Enabled {
-		t.Fatal("remote-only instance enabled = true, want false")
-	}
-	if got.Ip != "10.42.0.99" {
-		t.Fatalf("remote-only instance ip = %q, want the reconstruction's own ip (a well-formed composite id)", got.Ip)
+	latest, ok := syncAll[0].Revalidate()
+	if !ok || len(latest) != 1 || latest[0].InstanceId != "pod-a" {
+		t.Fatalf("full prune snapshot = %#v ok=%t, want only pod-a", latest, ok)
 	}
 }
 
@@ -2802,17 +2911,12 @@ func TestCompareAndFlushAtlasModeGetAllErrorStillPushesAll(t *testing.T) {
 	}
 }
 
-// TestCompareAndFlushNacosBootHealsDowntimeDrift: the boot-reconcile proof
-// of dsca-3 §4.2 — with the nacos view as the diff source, the boot
-// CompareAndFlush heals downtime drift with NO code change beyond the
-// source routing: nacos state holds a ghost (a pod deleted while spotter
-// was down — the remembered map died with the process, the catalog did
-// not), the freshly synced local list lacks it, and the provider's own
-// existing case-3 path deregisters it. The catalog replaces the in-memory
-// remembered memory as the boot-time ownership record. Driven through
-// exactly the boot path's shape: robot synced (GetAll non-empty), one
-// synchronous CompareAndFlush, no interval tick.
-func TestCompareAndFlushNacosBootHealsDowntimeDrift(t *testing.T) {
+// TestCompareAndFlushNacosBootDefersGhostToRevalidatedFullPush proves that a
+// restart-time remote ghost is preserved until a complete provider snapshot
+// reaches the sink. The real Nacos PushAll tests pin that this snapshot prunes
+// the ghost; this provider test pins that no unsafe incremental tombstone is
+// emitted first.
+func TestCompareAndFlushNacosBootDefersGhostToRevalidatedFullPush(t *testing.T) {
 	// The local list after HasSynced: one live pod of pay-user.
 	live := newValidPod("msp", "pod-live")
 	live.ResourceVersion = "100"
@@ -2835,35 +2939,20 @@ func TestCompareAndFlushNacosBootHealsDowntimeDrift(t *testing.T) {
 	k := newTestProvider(robot, w)
 	k.SetNacosReconcileSource(true)
 
-	// The boot path: one synchronous CompareAndFlush after HasSynced. The
-	// pushes ride the provider's ants pool (buildAndSendEvent submits
-	// asynchronously), so wait a bounded time for the ghost's deregister.
 	k.CompareAndFlush()
+	time.Sleep(100 * time.Millisecond)
+	if events := w.handleSnapshot(); len(events) != 0 {
+		t.Fatalf("boot compare emitted incremental events before a trusted snapshot: %#v", events)
+	}
 
-	deadline := time.Now().Add(3 * time.Second)
-	var events []*worker.Event
-	for time.Now().Before(deadline) {
-		events = w.handleSnapshot()
-		if findEvent(t, events, "pod-gone") != nil {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
+	k.emitSyncAll()
+	events := w.waitForHandles(t, 1)
+	syncAll := findSyncAllEvents(events)
+	if len(syncAll) != 1 || syncAll[0].Revalidate == nil {
+		t.Fatalf("boot full-push events = %#v, want one revalidatable SyncAll", events)
 	}
-	// The ghost is deregistered (case 3): the boot heal.
-	e := findEvent(t, events, "pod-gone")
-	if e == nil {
-		t.Fatalf("no deregister push for the vanished-while-down ghost; events = %#v (the boot-time heal)", events)
-	} else if e.Data[0].Status != providers.InstanceStatusOffline {
-		t.Fatalf("ghost push status = %d, want %d (deregister)", e.Data[0].Status, providers.InstanceStatusOffline)
-	}
-	// The live pod is steady against its own reconstruction: no push for
-	// it — the ONLY event of this compare is the ghost's deregister (the
-	// degenerate push-all of the empty-Atlas world is gone with the
-	// nacos-source routing).
-	if e := findEvent(t, events, "pod-live"); e != nil {
-		t.Fatalf("unexpected push for the steady live pod; events = %#v", events)
-	}
-	if len(events) != 1 {
-		t.Fatalf("pushed events = %d, want exactly 1 (the ghost's deregister; the live pod is steady)", len(events))
+	latest, ok := syncAll[0].Revalidate()
+	if !ok || len(latest) != 1 || latest[0].InstanceId != "pod-live" {
+		t.Fatalf("boot full snapshot = %#v ok=%t, want only pod-live", latest, ok)
 	}
 }

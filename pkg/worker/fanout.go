@@ -279,14 +279,16 @@ func (s *orderedSink) PushAllWithRevalidate(trigger int64, items []*instance.Ins
 	if s.closed {
 		return errors.New("worker: sink is closed")
 	}
+	revalidated := false
 	if revalidate != nil {
 		fresh, ok := revalidate()
 		if !ok {
 			return nil
 		}
 		items = fresh
+		revalidated = true
 	}
-	return s.runLocked(trigger, items, true, true, nil)
+	return s.runLocked(trigger, items, true, true, revalidated, nil)
 }
 
 func (s *orderedSink) PushAllOperation(op ports.RetryOperation) error {
@@ -295,12 +297,21 @@ func (s *orderedSink) PushAllOperation(op ports.RetryOperation) error {
 	if s.closed {
 		return errors.New("worker: sink is closed")
 	}
+	revalidated := false
 	if op.Revalidate != nil {
 		fresh, ok := op.Revalidate()
 		if !ok {
 			return nil
 		}
 		op.Instances = fresh
+		revalidated = true
+	}
+	// An empty source is destructive only after the producer's independent
+	// confirmation gate. Before that point both the inner sink and this
+	// ordering ledger must remain a strict no-op: tombstoning latest here would
+	// suppress a same-revision incremental even though Nacos deleted nothing.
+	if op.Scope != "" && len(op.Instances) == 0 && !op.EmptyConfirmed {
+		return nil
 	}
 	s.lastFullScope = op.Scope
 	s.lastFullBatchID = op.BatchID
@@ -308,7 +319,8 @@ func (s *orderedSink) PushAllOperation(op ports.RetryOperation) error {
 	// explicit. Treat a missing scope as an untrusted full push: it may still
 	// update present identities, but it must not tombstone every identity from
 	// another provider.
-	return s.runLocked(op.Trigger, op.Instances, true, op.Scope != "", &op)
+	destructiveAuthorized := op.Scope != "" && (len(op.Instances) > 0 || op.EmptyConfirmed)
+	return s.runLocked(op.Trigger, op.Instances, true, destructiveAuthorized, revalidated, &op)
 }
 
 func (s *orderedSink) GetAll(statuses []int32, provider string) (*instance.InstanceList, error) {
@@ -319,14 +331,14 @@ func (s *orderedSink) run(trigger int64, items []*instance.Instance, full bool) 
 	if full {
 		s.fullGate.Lock()
 		defer s.fullGate.Unlock()
-		return s.runLocked(trigger, items, true, false, nil)
+		return s.runLocked(trigger, items, true, false, false, nil)
 	}
 	s.fullGate.RLock()
 	defer s.fullGate.RUnlock()
 	keys := identityKeys(items)
 	unlock := s.lockKeys(keys)
 	defer unlock()
-	return s.runLocked(trigger, items, false, false, nil)
+	return s.runLocked(trigger, items, false, false, false, nil)
 }
 
 func identityKeys(items []*instance.Instance) []string {
@@ -381,7 +393,7 @@ func (s *orderedSink) lockKeys(keys []string) func() {
 	}
 }
 
-func (s *orderedSink) runLocked(trigger int64, items []*instance.Instance, full bool, trustedComplete bool, operation *ports.RetryOperation) error {
+func (s *orderedSink) runLocked(trigger int64, items []*instance.Instance, full bool, trustedComplete, revalidated bool, operation *ports.RetryOperation) error {
 	if s.closed {
 		return errors.New("worker: sink is closed")
 	}
@@ -413,7 +425,10 @@ func (s *orderedSink) runLocked(trigger int64, items []*instance.Instance, full 
 			rev = trigger
 		}
 		if previous, ok := s.latest[key]; ok {
-			if (previous.tombstone && rev <= previous.revision) || (!previous.tombstone && rev < previous.revision) {
+			staleRevision := (previous.tombstone && rev <= previous.revision) || (!previous.tombstone && rev < previous.revision)
+			trustedEqualRevisionHeal := full && trustedComplete && revalidated && previous.tombstone &&
+				rev == previous.revision && item.Status != instance.InstanceStatusOffline
+			if staleRevision && !trustedEqualRevisionHeal {
 				stale = true
 				continue
 			}

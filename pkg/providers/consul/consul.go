@@ -589,19 +589,24 @@ func (c *consul) emitSyncAll() {
 		Sequence:       generation,
 		EmptyConfirmed: emptyConfirmed,
 		Revalidate: func() ([]*v2.Instance, bool) {
-			latest, current, ok, _ := c.snapshotForFullPush()
+			latest, _, ok, _ := c.snapshotForFullPushReadOnly()
 			if !ok {
 				return nil, false
 			}
-			if current != generation {
-				return latest, true
-			}
-			return all, true
+			return latest, true
 		},
 	})
 }
 
 func (c *consul) snapshotForFullPush() ([]*v2.Instance, uint64, bool, bool) {
+	return c.snapshotForFullPushMode(true)
+}
+
+func (c *consul) snapshotForFullPushReadOnly() ([]*v2.Instance, uint64, bool, bool) {
+	return c.snapshotForFullPushMode(false)
+}
+
+func (c *consul) snapshotForFullPushMode(advanceEmptyConfirmation bool) ([]*v2.Instance, uint64, bool, bool) {
 	c.Lock()
 	defer c.Unlock()
 	all := c.cache.List()
@@ -614,9 +619,9 @@ func (c *consul) snapshotForFullPush() ([]*v2.Instance, uint64, bool, bool) {
 	if all == nil {
 		all = []*v2.Instance{}
 	}
-	if len(all) == 0 {
+	if len(all) == 0 && advanceEmptyConfirmation {
 		c.emptyConfirmations++
-	} else {
+	} else if len(all) > 0 {
 		c.emptyConfirmations = 0
 	}
 	return all, c.generation, true, c.emptyConfirmations >= 3

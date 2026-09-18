@@ -771,10 +771,14 @@ func TestBlackboxSinkPushAllPruneToleratesCatalogNotFound(t *testing.T) {
 	const notFoundBody = `{"status":500,"message":"service pay-user is not found!","data":null,"code":500,"serverIp":"127.0.0.1"}`
 	var catalogCalls int
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/nacos/v1/ns/catalog/instances" {
+		switch request.URL.Path {
+		case "/nacos/v1/ns/catalog/instances":
 			catalogCalls++
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = io.WriteString(w, notFoundBody)
+			return
+		case "/nacos/v1/ns/service/list":
+			writeJSON(w, http.StatusOK, map[string]interface{}{"count": 1, "doms": []string{"pay-user"}})
 			return
 		}
 		// The register path answers success so Push completes.
@@ -790,8 +794,8 @@ func TestBlackboxSinkPushAllPruneToleratesCatalogNotFound(t *testing.T) {
 	if err := sink.PushAll(7, pushed); err != nil {
 		t.Fatalf("PushAll(prune catalog not-found 500) error = %v, want nil (treated as an empty list)", err)
 	}
-	if catalogCalls != 1 {
-		t.Fatalf("catalog calls = %d, want 1", catalogCalls)
+	if catalogCalls != 2 {
+		t.Fatalf("catalog calls = %d, want 2 (owned-pair discovery plus pair prune)", catalogCalls)
 	}
 }
 
@@ -1363,6 +1367,82 @@ func TestBlackboxSinkPushAllVanishedServicePrunedSameCluster(t *testing.T) {
 	}
 }
 
+func TestBlackboxSinkFreshProcessPrunesOwnedWholeServiceGhost(t *testing.T) {
+	sink, server := newSinkAt(t)
+	// Simulate a persistent registration left by an earlier Spotter process.
+	// The newly constructed sink has an empty remembered map.
+	server.SetInstances([]nacosmock.Host{{
+		InstanceID: "10.0.0.9#8080#k8s#DEFAULT_GROUP@@pay-gone",
+		IP:         "10.0.0.9", Port: 8080, ClusterName: "k8s", Enabled: true,
+		Metadata: map[string]string{
+			"spotterOwner": "spotter", "instanceId": "pod-gone", "status": "1", "reversion": "7",
+		},
+	}}, "DEFAULT_GROUP", "pay-gone", "k8s")
+
+	live := []*instance.Instance{
+		domainInstance("pod-live", "pay-live", "10.0.0.1", 8080, "k8s", 1),
+	}
+	if err := sink.PushAll(1, live); err != nil {
+		t.Fatalf("fresh-process PushAll: %v", err)
+	}
+	if got := len(server.Instances("pay-gone", "k8s")); got != 0 {
+		t.Fatalf("whole-service ghost after fresh-process full push = %d, want 0; state=%v", got, server.Instances("pay-gone", "k8s"))
+	}
+	if deregisterRequest(server, "10.0.0.9", 8080) == nil {
+		t.Fatalf("fresh process did not deregister the owned ghost; requests=%v", server.Requests())
+	}
+	if got := len(server.Instances("pay-live", "k8s")); got != 1 {
+		t.Fatalf("live service instances = %d, want 1", got)
+	}
+}
+
+func TestBlackboxSinkConfirmedEmptyFreshProcessPrunesOnlyOwnedScope(t *testing.T) {
+	sink, server := newSinkAt(t)
+	server.SetInstances([]nacosmock.Host{{
+		InstanceID: "10.0.0.9#8080#k8s#DEFAULT_GROUP@@pay-owned", IP: "10.0.0.9", Port: 8080,
+		ClusterName: "k8s", Enabled: true,
+		Metadata: map[string]string{"spotterOwner": "spotter", "instanceId": "pod-owned", "status": "1", "reversion": "7"},
+	}}, "DEFAULT_GROUP", "pay-owned", "k8s")
+	server.SetInstances([]nacosmock.Host{{
+		InstanceID: "10.0.0.8#8080#k8s#DEFAULT_GROUP@@pay-foreign", IP: "10.0.0.8", Port: 8080,
+		ClusterName: "k8s", Enabled: true,
+		Metadata: map[string]string{"spotterOwner": "other", "instanceId": "pod-foreign", "status": "1", "reversion": "7"},
+	}}, "DEFAULT_GROUP", "pay-foreign", "k8s")
+	server.SetInstances([]nacosmock.Host{{
+		InstanceID: "10.0.0.7#8080#ecs#DEFAULT_GROUP@@pay-ecs", IP: "10.0.0.7", Port: 8080,
+		ClusterName: "ecs", Enabled: true,
+		Metadata: map[string]string{"spotterOwner": "spotter", "instanceId": "srv-owned", "status": "1", "reversion": "7"},
+	}}, "DEFAULT_GROUP", "pay-ecs", "ecs")
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := sink.PushAllOperation(ports.RetryOperation{
+			Operate: ports.OperateTypeSyncAll, Scope: "k8s", BatchID: "empty-k8s-unconfirmed",
+			Trigger: int64(attempt), EmptyConfirmed: false,
+		}); err != nil {
+			t.Fatalf("unconfirmed empty attempt %d: %v", attempt, err)
+		}
+		if got := len(server.Instances("pay-owned", "k8s")); got != 1 {
+			t.Fatalf("unconfirmed attempt %d removed owned k8s ghost", attempt)
+		}
+	}
+	err := sink.PushAllOperation(ports.RetryOperation{
+		Operate: ports.OperateTypeSyncAll, Scope: "k8s", BatchID: "empty-k8s",
+		Trigger: time.Now().UnixNano(), EmptyConfirmed: true,
+	})
+	if err != nil {
+		t.Fatalf("confirmed-empty full operation: %v", err)
+	}
+	if got := len(server.Instances("pay-owned", "k8s")); got != 0 {
+		t.Fatalf("owned k8s ghost count = %d, want 0", got)
+	}
+	if got := len(server.Instances("pay-foreign", "k8s")); got != 1 {
+		t.Fatalf("foreign k8s count = %d, want 1", got)
+	}
+	if got := len(server.Instances("pay-ecs", "ecs")); got != 1 {
+		t.Fatalf("owned ecs count = %d, want 1", got)
+	}
+}
+
 // TestBlackboxSinkPushAllOfflineMarkerPrunesPair (the offline-marker heal):
 // the provider's CompareAndFlush case-3 route for a vanished service — an
 // offline (Status 3) marker instance whose Provider field keeps the pair
@@ -1634,6 +1714,39 @@ func TestBlackboxSinkGetAllExcludesForeignAndUnowned(t *testing.T) {
 		if req.Method == "DELETE" {
 			t.Fatalf("GetAll issued destructive DELETE: %+v", req)
 		}
+	}
+}
+
+func TestBlackboxSinkGetAllRejectsCrossClusterCatalogLeak(t *testing.T) {
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/nacos/v1/ns/service/list":
+			writeJSON(w, http.StatusOK, map[string]interface{}{"count": 1, "doms": []string{"pay-user"}})
+		case "/nacos/v1/ns/catalog/instances":
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"count": 1,
+				"list": []map[string]interface{}{{
+					"instanceId": "10.0.0.9#8080#ecs#DEFAULT_GROUP@@pay-user",
+					"ip":         "10.0.0.9", "port": 8080, "enabled": true, "healthy": true,
+					"clusterName": "ecs", "serviceName": "DEFAULT_GROUP@@pay-user",
+					"metadata": map[string]string{"spotterOwner": "spotter", "instanceId": "srv-ecs", "status": "1", "reversion": "7"},
+				}},
+			})
+		default:
+			writeStubOK(w)
+		}
+	}))
+	defer stub.Close()
+	sink, err := nacos.NewHTTPCompatSink(stub.URL, &fakes.FakeLogger{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := sink.GetAll(nil, "k8s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list == nil || len(list.Instance) != 0 {
+		t.Fatalf("cross-cluster GetAll result = %#v, want empty", list)
 	}
 }
 

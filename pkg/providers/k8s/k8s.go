@@ -406,23 +406,36 @@ func (k *k8s) monitor() {
 		}
 	}
 	k.logger.Infof("the robot has finished synced of all the k8s data, start to compare and sync instanes")
-	k.runWG.Add(2)
-	go func() {
-		defer k.runWG.Done()
-		k.ProcessIntervalFullPush()
-	}()
 	// The queueDepth gauge's publication ticker (dsca-1 DS-1-1 fix item 1):
 	// every queueDepthReportInterval the provider reads the robot's
 	// coalescing-queue depth (a read-only distinct-key count, race-safe by
 	// the queue's mutex) and hands it to the recorder installed through
 	// SetQueueDepthReporter. Runs even when no recorder is installed (the
 	// per-tick call is a nil check and a map-length read).
+	k.runWG.Add(1)
 	go func() {
 		defer k.runWG.Done()
 		k.reportQueueDepthLoop()
 	}()
-	// start with full update(CompareAndFlush()),then do incremental update,and every 6 hours to full push(ProcessIntervalFullPush())
+	// Bootstrap the processed cache once from the synced informer store, then
+	// reconcile and publish one revalidated full snapshot before consuming the
+	// queued incremental events. Runtime compare/full paths never read the raw
+	// informer store again.
 	k.CompareAndFlush()
+	k.Lock()
+	nacosReconcile := k.nacosReconcile
+	k.Unlock()
+	if nacosReconcile {
+		k.emitSyncAll()
+	}
+	// Start the interval only after bootstrap reconciliation completes. A
+	// large cold attach can take longer than one interval; starting the ticker
+	// earlier lets a second Compare/SyncAll overlap the bootstrap operation.
+	k.runWG.Add(1)
+	go func() {
+		defer k.runWG.Done()
+		k.ProcessIntervalFullPush()
+	}()
 	// fork a goroutine to monitor pod change
 	popDone = make(chan struct{})
 	go func() {
@@ -528,58 +541,65 @@ func (k *k8s) isStopped() bool {
 }
 
 func (k *k8s) snapshotForFullPush() ([]*sv.Instance, uint64, bool, bool) {
-	return k.snapshotForFullPushWithLoader(func(cache providers.CacheIterface) []*sv.Instance {
-		var all []*sv.Instance
-		if cache != nil {
-			all = cache.List()
-		}
-		if k.robot != nil && k.robot.HasSynced() {
-			if source := k.GetAll(); source != nil {
-				all = source
-			}
-		}
-		return all
-	})
+	return k.snapshotForFullPushMode(true)
 }
 
-// snapshotForFullPushWithLoader binds a full snapshot to exactly the cache
-// generation that surrounded its read. A concurrent informer event can make
-// the source reader return an older list after ProcessCache has already moved
-// generation forward; pairing that list with the newer generation would let
-// ordered revalidation accept a stale full push and prune a newly-added
-// identity. Retry a bounded number of times and skip this interval when churn
-// never leaves a stable read window; the next periodic push or incremental
-// event will retry without publishing an unsafe snapshot.
-func (k *k8s) snapshotForFullPushWithLoader(load func(providers.CacheIterface) []*sv.Instance) ([]*sv.Instance, uint64, bool, bool) {
-	const maxSnapshotAttempts = 3
-	for attempt := 0; attempt < maxSnapshotAttempts; attempt++ {
-		// Snapshot the cache interface and generation under one lock before
-		// calling List/GetAll. flushInstances can swap the interface, while
-		// ProcessCache advances generation for every incremental event.
-		k.Lock()
-		cache := k.cache
-		observedGeneration := k.generation
-		k.Unlock()
+func (k *k8s) snapshotForFullPushReadOnly() ([]*sv.Instance, uint64, bool, bool) {
+	return k.snapshotForFullPushMode(false)
+}
 
-		all := load(cache)
-		k.Lock()
-		if k.generation != observedGeneration {
-			k.Unlock()
-			continue
+func (k *k8s) snapshotForFullPushMode(advanceEmptyConfirmation bool) ([]*sv.Instance, uint64, bool, bool) {
+	// Destructive full-push pruning is authorized only by the provider cache:
+	// this is the state that has crossed pod2Instance/ProcessCache and shares
+	// the same lock and generation. The raw informer store advances on a
+	// different clock and can form a mixed snapshot while its callbacks are
+	// still queued; using GetAll here caused newly registered instances to be
+	// pruned by an older full view during the 20260919-0125 run.
+	k.Lock()
+	defer k.Unlock()
+	all := []*sv.Instance{}
+	if k.cache != nil {
+		if cached := k.cache.List(); cached != nil {
+			for _, item := range cached {
+				if item != nil && item.Status != providers.InstanceStatusOffline {
+					all = append(all, item)
+				}
+			}
 		}
-		if all == nil {
-			all = []*sv.Instance{}
-		}
-		if len(all) == 0 {
-			k.emptyConfirmations++
-		} else {
-			k.emptyConfirmations = 0
-		}
-		emptyConfirmed := k.emptyConfirmations >= 3
-		k.Unlock()
-		return all, observedGeneration, true, emptyConfirmed
 	}
-	return nil, 0, false, false
+	if len(all) == 0 && advanceEmptyConfirmation {
+		k.emptyConfirmations++
+	} else if len(all) > 0 {
+		k.emptyConfirmations = 0
+	}
+	return all, k.generation, true, k.emptyConfirmations >= 3
+}
+
+// bootstrapCacheFromSource is the only path allowed to copy a raw informer
+// List into the processed provider cache. monitor calls CompareAndFlush before
+// starting its Pop consumer, so generation is still zero on normal startup.
+// Tests and embedders that already processed an event keep their cache: a raw
+// source snapshot can never overwrite live processed state at runtime.
+func (k *k8s) bootstrapCacheFromSource() bool {
+	k.Lock()
+	observedGeneration := k.generation
+	k.Unlock()
+	if observedGeneration != 0 {
+		return true
+	}
+	all := k.GetAll()
+	if len(all) == 0 {
+		return false
+	}
+	newCache := providers.NewCache(2)
+	for _, item := range all {
+		newCache.ReplaceOrInsert(item)
+	}
+	if current, ok := k.replaceCacheIfGeneration(newCache, observedGeneration); !ok {
+		k.logger.Warnf("k8s cache generation changed during bootstrap (started=%d current=%d); keeping processed cache", observedGeneration, current)
+		return true
+	}
+	return true
 }
 
 // VerifyInstance checks wether the instance is valid
@@ -753,61 +773,27 @@ func (k *k8s) obj2InstanceId(obj k8srobot.QueueObject) string {
 
 // flush all instances
 func (k *k8s) flushInstances() {
-	// The guard on an empty list is intentionally KEPT here (unlike
-	// emitSyncAll, AUDIT-B-4): flushInstances also owns the local cache
-	// refill, and flushing the cache to empty on a transiently-empty source
-	// would drop every cached instance only to re-add them one event at a
-	// time. The vanished-service reconcile is emitSyncAll's job on the
-	// interval tick; flushInstances is the startup path where an empty
-	// source means "not synced yet" far more often than "everything died".
-	if all := k.GetAll(); all != nil && len(all) > 0 {
-		// flush the original cache and fill it
-		before := time.Now()
-		newCache := providers.NewCache(2)
-		for _, ins := range all {
-			newCache.ReplaceOrInsert(ins)
-		}
-		k.Lock()
-		k.cache = newCache
-		k.generation++
-		generation := k.generation
-		k.Unlock()
-		k.logger.Infof("flush k8s cache spend time: %s", unit.RelTime(before, time.Now(), "", ""))
-		// push all. Origin is tick-time (time.Now at Event construction),
-		// not CreateAt — the documented full-push origin semantics of
-		// dsca-2 §6; UnixNano per the same unit widening.
-		event := &worker.Event{
-			Trigger:  time.Now().UnixNano(),
-			Data:     all,
-			Operate:  worker.OperateTypeSyncAll,
-			Scope:    "k8s",
-			BatchID:  worker.FullBatchID("k8s", all),
-			Sequence: generation,
-		}
-		k.handleWorkerEvent(event, "startup-syncall-cache-snapshot")
+	before := time.Now()
+	if !k.bootstrapCacheFromSource() {
+		return
 	}
+	k.logger.Infof("flush k8s cache spend time: %s", unit.RelTime(before, time.Now(), "", ""))
+	k.emitSyncAll()
 }
 
 // CompareAndFlush compare and find diff instances then flush
 func (k *k8s) CompareAndFlush() {
 	k.ensureDeps()
 	k.logger.Infof("%s: trying to compare and find diff instances then flush", k.providerName)
-	k.Lock()
-	observedGeneration := k.generation
-	k.Unlock()
-	if all := k.GetAll(); all != nil && len(all) > 0 {
-		// process the cache
-		newCache := providers.NewCache(2)
+	if !k.bootstrapCacheFromSource() {
+		return
+	}
+	if all, snapshotGeneration, valid, _ := k.snapshotForFullPushReadOnly(); valid && len(all) > 0 {
 		onlineCount := 0
 		for _, item := range all {
-			newCache.ReplaceOrInsert(item)
 			if item.Status == 1 {
 				onlineCount++
 			}
-		}
-		if current, ok := k.replaceCacheIfGeneration(newCache, observedGeneration); !ok {
-			k.logger.Warnf("k8s cache generation changed during CompareAndFlush (started=%d current=%d); discarding stale rebuild", observedGeneration, current)
-			return
 		}
 		// compare diffs and sync incrementally
 		// the worker is exactly what communicates with Atlas (fetch from the discovery center, push data)
@@ -830,15 +816,24 @@ func (k *k8s) CompareAndFlush() {
 			}
 			k.logger.Errorf("get all instances from atlas failed")
 		}
+		// The remote read is not instantaneous. If an informer event advanced
+		// the processed cache while GetAll was in flight, the local list above
+		// and the returned remote list describe different times. Discard the
+		// entire attempt before emitting any correction; in particular, never
+		// interpret a newly registered remote identity as a local deletion.
+		k.Lock()
+		currentGeneration := k.generation
+		k.Unlock()
+		if currentGeneration != snapshotGeneration {
+			k.logger.Warnf("k8s cache generation changed during reconcile remote read (snapshot=%d current=%d); discarding mixed-time compare", snapshotGeneration, currentGeneration)
+			return
+		}
 		if list == nil || list.Instance == nil || len(list.Instance) == 0 {
 			if k.nacosReconcile {
-				// A Nacos-backed cold start must use the complete snapshot
-				// path. Emitting one incremental event per Pod here lets a
-				// large informer burst overflow the bounded event queue before
-				// the sink can apply its application-scoped batches. The full
-				// event carries the same generation/revalidation barrier used
-				// by periodic SyncAll and therefore preserves prune safety.
-				k.emitSyncAll()
+				// The startup and periodic callers own the one revalidated full
+				// push. Do not emit it from CompareAndFlush as well: keeping
+				// compare and publish separate prevents duplicate 1000-instance
+				// batches and makes the destructive boundary explicit.
 				return
 			}
 			for _, ins := range all {
@@ -867,7 +862,6 @@ func (k *k8s) CompareAndFlush() {
 		// bothExist,k8sExist two flag to notice
 		bothExist := false
 		k8sExist := false
-		registryExist := false
 		for k8sKey, k8sIns := range k8sMap {
 			// case1: instance is both in K8s and the discovery center.
 			// Instance data information to be pushed, subject to the data in K8s
@@ -927,18 +921,27 @@ func (k *k8s) CompareAndFlush() {
 		// case3: instance is not is K8s, but in the discovery center.
 		// Then instances should not be exists in the discovery center, just delete it.
 		if len(servMap) > 0 {
-			k.logger.Infof("atlas server pre delete instance size :%d \n", len(servMap))
-			for _, servIns := range servMap {
-				servIns.Enabled = false
-				servIns.Status = 3
-				servIns.State = providers.InstanceStateTerminated
-				registryExist = true
-				k.buildAndSendEvent(servIns)
-
-			}
-			// case 3 notice
-			if registryExist {
-				k.notifier.Notify("Instance data inconsistency", "Full push: data inconsistency between the discovery center and the K8s clusters, the instances differ between the discovery center and the K8s clusters, some instances exist in the discovery center but not in the K8s clusters")
+			if k.nacosReconcile {
+				// Nacos deletions are destructive and an incremental conditional
+				// delete cannot be made atomic with a concurrently arriving source
+				// event. Defer remote-only cleanup to the revalidated SyncAll which
+				// follows this compare on every interval and executes under the
+				// ordered sink's exclusive full gate.
+				k.logger.Infof("nacos reconcile observed %d remote-only instances; deferring deletion to revalidated full-push prune", len(servMap))
+			} else {
+				k.logger.Infof("atlas server pre delete instance size :%d \n", len(servMap))
+				registryExist := false
+				for _, servIns := range servMap {
+					servIns.Enabled = false
+					servIns.Status = 3
+					servIns.State = providers.InstanceStateTerminated
+					registryExist = true
+					k.buildAndSendEvent(servIns)
+				}
+				// case 3 notice
+				if registryExist {
+					k.notifier.Notify("Instance data inconsistency", "Full push: data inconsistency between the discovery center and the K8s clusters, the instances differ between the discovery center and the K8s clusters, some instances exist in the discovery center but not in the K8s clusters")
+				}
 			}
 		}
 	}
@@ -1088,14 +1091,14 @@ func (k *k8s) emitSyncAll() {
 		Sequence:       generation,
 		EmptyConfirmed: emptyConfirmed,
 		Revalidate: func() ([]*sv.Instance, bool) {
-			latest, current, ok, _ := k.snapshotForFullPush()
+			latest, _, ok, _ := k.snapshotForFullPushReadOnly()
 			if !ok {
 				return nil, false
 			}
-			if current != generation {
-				return latest, true
-			}
-			return all, true
+			// Always return the snapshot taken under the sink's exclusive full
+			// gate. Returning the event's originally captured list merely because
+			// generation happened to match discarded fresher cache contents.
+			return latest, true
 		},
 	}, "syncall-cache-snapshot")
 }

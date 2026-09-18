@@ -227,8 +227,8 @@ var _ ports.InstanceSink = (*Sink)(nil)
 var _ ports.FullOperationSink = (*Sink)(nil)
 
 // PushAllOperation is the metadata-aware full retry boundary. A confirmed
-// empty snapshot is converted into offline markers for only the owning
-// provider scope; an unconfirmed empty source remains a safe no-op.
+// empty snapshot authorizes owned-pair discovery and pruning for only the
+// explicit provider scope; an unconfirmed empty source remains a safe no-op.
 func (s *Sink) PushAllOperation(op ports.RetryOperation) error {
 	if len(op.Instances) > 0 {
 		return s.PushAll(op.Trigger, op.Instances)
@@ -236,21 +236,11 @@ func (s *Sink) PushAllOperation(op ports.RetryOperation) error {
 	if !op.EmptyConfirmed || op.Scope == "" {
 		return nil
 	}
-	s.rememberedMu.Lock()
-	markers := make([]*instance.Instance, 0)
-	for key := range s.remembered {
-		if key.cluster == op.Scope {
-			markers = append(markers, &instance.Instance{
-				AppCode: key.service, Provider: key.cluster,
-				Status: instance.InstanceStatusOffline, Enabled: false,
-			})
-		}
-	}
-	s.rememberedMu.Unlock()
-	if len(markers) == 0 {
-		return nil
-	}
-	return s.prune(markers)
+	// A confirmed empty typed snapshot still carries provider authority. Enter
+	// scoped remote discovery even when this fresh process remembers no pairs;
+	// this is how a completely vanished K8s source removes registrations left
+	// by an earlier process. Plain PushAll(nil) remains a conservative no-op.
+	return s.pruneScoped(nil, []string{op.Scope})
 }
 
 // NewSink creates a Nacos sink bound to addr. A nil logger is defaulted.
@@ -354,8 +344,10 @@ func (s *Sink) PushAll(triggerTime int64, instances []*instance.Instance) error 
 // THIS PUSH are swept with their (possibly empty) desired set — the
 // vanished-service reconcile of AUDIT-B-4, correctly scoped: the cluster
 // name is the provider tag, so a k8s push sweeps k8s pairs only, never the
-// ecs pairs the consul provider owns. An empty push carries no cluster, so
-// it sweeps nothing remembered.
+// ecs pairs the consul provider owns. A plain empty push carries no cluster
+// and sweeps nothing. The sole exception is PushAllOperation with
+// EmptyConfirmed plus an explicit scope; that typed path calls pruneScoped so
+// a fresh process can remove the previous process's owned registrations.
 //
 // The listing is the complete SelectAllInstances view in SDK mode (or the
 // catalog view in explicit HTTP compatibility mode), not the filtered
@@ -363,6 +355,10 @@ func (s *Sink) PushAll(triggerTime int64, instances []*instance.Instance) error 
 // the exact state spotter's own unhealthy pushes write — so the prune sees
 // and reconciles disabled drift.
 func (s *Sink) prune(instances []*instance.Instance) error {
+	return s.pruneScoped(instances, nil)
+}
+
+func (s *Sink) pruneScoped(instances []*instance.Instance, scopes []string) error {
 	type clusterKey struct {
 		service string
 		cluster string
@@ -370,6 +366,11 @@ func (s *Sink) prune(instances []*instance.Instance) error {
 
 	desired := map[clusterKey]map[string]bool{}
 	pushedClusters := map[string]bool{}
+	for _, scope := range scopes {
+		if scope != "" {
+			pushedClusters[scope] = true
+		}
+	}
 	for _, ins := range instances {
 		if ins == nil {
 			continue
@@ -409,6 +410,39 @@ func (s *Sink) prune(instances []*instance.Instance) error {
 		}
 	}
 	s.rememberedMu.Unlock()
+
+	// A process restart loses the in-memory remembered map. Rebuild the
+	// complete owned-pair universe from Nacos before pruning so a service that
+	// vanished entirely while Spotter was down is still discovered and swept.
+	// GetAll is scoped by provider/cluster and ignores non-Spotter owners, so a
+	// k8s full snapshot can never adopt or delete an ecs/foreign registration.
+	allStatuses := []int32{
+		instance.InstanceStatusOnline,
+		instance.InstanceStatusUnhealthy,
+		instance.InstanceStatusOffline,
+	}
+	for cluster := range pushedClusters {
+		remote, err := s.GetAll(allStatuses, cluster)
+		if err != nil {
+			return fmt.Errorf("nacos: prune discover owned pairs for cluster %s: %w", cluster, err)
+		}
+		if remote == nil {
+			continue
+		}
+		for _, item := range remote.Instance {
+			if item == nil {
+				continue
+			}
+			if clusterOf(item) != cluster {
+				s.logger.Warnf("nacos: ignoring cross-cluster instance %s returned while discovering prune scope %s", item.InstanceId, cluster)
+				continue
+			}
+			key := clusterKey{service: item.AppCode, cluster: clusterOf(item)}
+			if _, exists := union[key]; !exists {
+				union[key] = map[string]bool{}
+			}
+		}
+	}
 
 	// The sweep's deregisters run with the same bounded parallelism as the
 	// registers (DS-2-1: "the same bounded group applies to the
@@ -562,6 +596,10 @@ func (s *Sink) GetAll(statuses []int32, provider string) (*instance.InstanceList
 			return nil, err
 		}
 		for _, host := range hosts {
+			if host.ClusterName != provider {
+				s.logger.Warnf("nacos: ignoring cross-cluster catalog instance %s returned for provider %s", host.InstanceID, provider)
+				continue
+			}
 			if host.Metadata["spotterOwner"] != metadataOwner {
 				s.logger.Warnf("nacos: ignoring non-owned catalog instance %s for reconcile", host.InstanceID)
 				continue
