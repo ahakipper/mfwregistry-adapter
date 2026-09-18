@@ -288,6 +288,11 @@ type watchTimeline struct {
 	nacosDeleted   map[string]time.Time
 	nacosSnapshots map[string]map[string]string
 	nacosStates    map[string]map[string]planeWatchObservation
+	// nacosKnown retains the last complete observation for every identity ever
+	// seen in a service. Subscribe callbacks can arrive as rapid successive
+	// snapshots; using only the immediately previous snapshot can lose the
+	// source identity before the delete callback is correlated.
+	nacosKnown     map[string]map[string]planeWatchObservation
 	nacosEmpty     time.Time
 	spotterPresent map[string]time.Time
 	spotterDeleted map[string]time.Time
@@ -310,6 +315,7 @@ func newWatchTimeline(k8sEvents <-chan k8sWatchEvent, spotterEvents <-chan spott
 		nacosPresent: map[string]time.Time{}, nacosDeleted: map[string]time.Time{},
 		nacosSnapshots: map[string]map[string]string{},
 		nacosStates:    map[string]map[string]planeWatchObservation{},
+		nacosKnown:     map[string]map[string]planeWatchObservation{},
 		sourceHistory:  map[string][]planeWatchObservation{}, spotterHistory: map[string][]planeWatchObservation{},
 		nacosHistory: map[string][]planeWatchObservation{},
 	}
@@ -411,6 +417,10 @@ func newWatchTimeline(k8sEvents <-chan k8sWatchEvent, spotterEvents <-chan spott
 					current[id] = signature
 					observation := nacosPlaneObservation(host, event.At)
 					currentStates[id] = observation
+					if timeline.nacosKnown[event.Service] == nil {
+						timeline.nacosKnown[event.Service] = map[string]planeWatchObservation{}
+					}
+					timeline.nacosKnown[event.Service][id] = observation
 					if previous, existed := timeline.nacosSnapshots[event.Service][id]; !existed || previous != signature {
 						timeline.nacosPresent[id] = event.At
 						timeline.nacosHistory[id] = append(timeline.nacosHistory[id], observation)
@@ -420,7 +430,10 @@ func newWatchTimeline(k8sEvents <-chan k8sWatchEvent, spotterEvents <-chan spott
 			for id := range timeline.nacosSnapshots[event.Service] {
 				if _, exists := current[id]; !exists {
 					timeline.nacosDeleted[id] = event.At
-					removed := timeline.nacosStates[event.Service][id]
+					removed := timeline.nacosKnown[event.Service][id]
+					if removed.SourceKey == "" {
+						removed = timeline.nacosStates[event.Service][id]
+					}
 					removed.At = event.At
 					removed.Present = false
 					removed.Status = 3
