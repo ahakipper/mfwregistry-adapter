@@ -16,6 +16,7 @@ mkdir -p "$out"
 status="$out/${mode}-${run_id}.status"
 log="$out/${mode}-${run_id}.log"
 pid_file="$out/${mode}-${run_id}.pid"
+launch_label="${OBS_LAUNCH_LABEL:-${XPC_SERVICE_NAME:-}}"
 
 printf 'RUNNING\n' > "$status"
 printf '%d\n' "$$" > "$pid_file"
@@ -25,8 +26,8 @@ finish() {
   rm -f "$pid_file"
   # launchctl submit may respawn a completed submitted service. Remove our own
   # label after the terminal status is durable so a successful gate runs once.
-  if [[ -n "${XPC_SERVICE_NAME:-}" ]]; then
-    (/bin/launchctl remove "$XPC_SERVICE_NAME" >/dev/null 2>&1 || true) &
+  if [[ -n "$launch_label" ]]; then
+	(/bin/launchctl remove "$launch_label" >/dev/null 2>&1 || true) &
   fi
 }
 trap finish EXIT
