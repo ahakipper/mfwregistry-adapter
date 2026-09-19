@@ -1,5 +1,11 @@
 # DSCA Track 2 — K8s-Path End-to-End Latency
 
+> **Historical scope note (2026-09-19):** This audit predates the current
+> Nacos-only release decision. Atlas references describe the legacy fan-out
+> path used by the measurements; Atlas implementation/validation and AppCenter
+> delivery are excluded and none of the historical recommendations is a
+> current Atlas/AppCenter task.
+
 **Auditor:** DS-2 (K8s-path end-to-end latency)
 **Repo:** `spotter`, branch `refactor/all`, HEAD `0ff71f7` ("docs: DSCA phase 1 — five audit documents", a docs-only commit over `69b0105`; every file:line below re-checked at `0ff71f7` — the code is identical)
 **Method:** full code reading of the event chain (informer callback → enqueue → Pop → pod2Instance → ants pool → worker.Handle → FanoutSink → nacos Sink → HTTP register) + an executed scratch harness (built as a sibling module at `/Users/donghongshuai/go/src/gitlab.mfwdev.com/paas/ds2-latency-audit/`, importing `spotter`'s real packages: `pkg/nacos`, `pkg/worker`, `pkg/providers`, `pkg/k8srobot`, `pkg/beehive/service/v2` — no repo file was modified) against a throwaway loopback HTTP mock on a dynamic port + read-only GET probes against the live demo nacos at `127.0.0.1:18848` + analysis of the running spotter's own log (`build/demo/app.log`, PID 30306, `--push-interval 60`). No repo files were modified; the demo stack was not touched; no reserved port was bound.

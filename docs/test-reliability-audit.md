@@ -10,9 +10,10 @@
 > pre-register health-check ordering; ownership-safe catalog reads; cache and
 > unfiltered discovery reads; bounded Observe commands/child/Docker teardown;
 > injected notifier/metrics lifecycle; and observable panic recovery. Real
-> Nacos/Atlas protocol evidence, the approved Admin/Maintainer adapter,
-> AppCenter delivery, and the complete 2h Observe run remain **BLOCKED / NOT
-> VERIFIED**. Consul scale remains an accepted non-goal. Historical findings
+> The current Nacos 3 + KWOK data-plane gate is recorded in the fresh 20-minute
+> evidence. Atlas protocol evidence and AppCenter delivery are **EXCLUDED BY
+> SCOPE**, not blocked work. Consul scale remains an accepted non-goal.
+> Historical findings
 > below are preserved for provenance and should be read with the current audit
 > and remediation-plan addenda first.
 > The current code baseline is `356aa75`; related later stage commits include `5df45d5` (panic recovery),

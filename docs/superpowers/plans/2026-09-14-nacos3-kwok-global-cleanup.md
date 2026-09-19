@@ -449,7 +449,8 @@ Docker, Cobra, zap, Prometheus, Go test/race/vet, and the existing testkit.
 - [ ] State whether the short and two-hour kwok gates are PASS or
       `NOT VERIFIED`; never infer a full run from unit tests.
 - [ ] Remove the old claim that cluster-admin is a naming startup blocker.
-- [ ] Record that Atlas remains deferred and Consul scale remains a non-goal.
+- [x] Record that Atlas and AppCenter are excluded by scope; Consul scale
+      remains a non-goal.
 - [ ] Record the legacy package deletion and the intentional compatibility
       break.
 - [ ] Run documentation link checks and `git diff --check`.

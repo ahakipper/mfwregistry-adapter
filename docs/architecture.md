@@ -11,14 +11,21 @@ status/state enums, ports, labels), [operations.md](operations.md) (build,
 configuration, metrics and failure runbook) and [../README.md](../README.md)
 (project README).
 
+> **Current release scope (2026-09-19):** The active data-plane Sink is Nacos
+> 3. Atlas and AppCenter are excluded from the current deliverable. The Atlas
+> flow described in the historical sections is retained only as compatibility
+> scaffolding/provenance; it is not a current implementation, validation, or
+> release-gate task. AppCenter is log-only/fail-closed by scope.
+
 ## Overview
 
 spotter is a discovery-center adapter that aggregates instance data from
 multiple sources — several Kubernetes clusters plus Consul-backed ECS
 (machine-deployed) services — converts the observed pods and Consul service
-endpoints into a single standardized `Instance` model, and pushes the resulting
-instance events (incremental and full) to the discovery center ("Atlas") over
-gRPC. Multiple spotter replicas run as one election group backed by etcd: only
+endpoints into a single standardized `Instance` model, and publishes the
+resulting instance events (incremental and full) to the active Nacos Sink. The
+historical Atlas gRPC path remains only as compatibility scaffolding. Multiple
+spotter replicas run as one election group backed by etcd: only
 the elected master connects to the providers and pushes; the other replicas stay
 in the election as hot backups and take over within about ten seconds if the
 master dies. Downstream, the gateway and the Java SDK consume the instance data
@@ -46,9 +53,9 @@ container/machine instances exist and what state they are in".
                              +-------> push failures, data inconsistency)
                              v
                   +---------------------+
-                  |  Discovery center   |
-                  |     ("Atlas")       |
-                  |     gRPC :50051     |
+                  |  Nacos Sink (active)|
+                  |  Atlas path legacy |
+                  |  compatibility only|
                   +----------+----------+
                              |
                   +---------------------+
@@ -63,7 +70,8 @@ Key external touch points:
 | Kubernetes API servers | read (watch) | One pod `SharedInformer` per cluster, all namespaces; kubeconfigs in `config/kubeconfigs/`. |
 | Consul API | read (blocking queries) | Health state + catalog services + service entries. |
 | etcd | read/write | Leader election (`concurrency.Election`), node registration/watch. |
-| Discovery center (Atlas) | write + read (gRPC) | `SynInstance`, `SynAllInstance`, `GetAllInstance`. |
+| Nacos Sink (active) | write + read | Official Nacos SDK/facade; application-scoped batches and reconcile. |
+| Atlas compatibility path | legacy write/read (gRPC) | Retained for older callers only; excluded from the current release. |
 | Prometheus | expose | `:8090/metrics` by default, plus `net/http/pprof` endpoints. |
 | Notice channel | write | Emergency-level notices on failures and inconsistencies. |
 
@@ -572,12 +580,12 @@ references. Commit `1c9912a` removed `config`, `pkg/log`, `pkg/notice`,
 constructors. The composition root now owns instance logging and fail-closed
 notice construction through explicit dependencies.
 
-For the current Spotter scope, the Nacos 3 ARM64 target has passed the strict
-one-hour KWork equality run and the 201-entry persistent application-batch
-test. The remaining gate is the two-hour burst run. Nacos deployment auth/TLS,
-non-public namespaces, HA/leaderless recovery, AppCenter delivery, and real
-Atlas protobuf wire compatibility are intentionally deployment/deferred scope,
-not open Spotter implementation defects.
+For the current Spotter scope, the Nacos 3 ARM64 target has passed the fresh
+20-minute KWOK equality gate with complete Instance comparison. AppCenter
+delivery and real Atlas protobuf wire compatibility are explicitly excluded,
+not open Spotter implementation defects. Nacos deployment auth/TLS,
+non-public namespaces, HA/leaderless recovery, and Consul scale remain outside
+the current Spotter data-plane gate.
 
 ## References
 

@@ -1,11 +1,11 @@
-# Atlas wire compatibility gate (deferred follow-up)
+# Atlas wire compatibility — excluded scope record
 
-Status: **DEFERRED (future entry gate; not a current release blocker)**.
+Status: **EXCLUDED from the current Spotter release**.
 
-> **Current-status addendum (2026-09-13, code baseline `33606fa`):** Atlas is
-> retained as an existing Sink/mock integration point and deferred from the
-> current Spotter release. The future entry gate remains real protobuf/method
-> path/TLS/auth compatibility evidence. The
+> **Historical-status addendum (2026-09-13, code baseline `33606fa`):** Atlas was
+> retained as an existing Sink/mock integration point in the historical graph.
+> Real protobuf/method-path/TLS/auth compatibility evidence is unavailable.
+> The
 > guarded `atlas_real` gate now supports explicit TLS/CA/server-name and
 > scratch-only insecure-auth controls, marks canary cleanup before the first
 > write, validates cleanup responses, and reports redacted endpoint/latency/
@@ -14,11 +14,9 @@ Status: **DEFERRED (future entry gate; not a current release blocker)**.
 > protobuf, method path, TLS, authentication, and payload compatibility stay
 > **NOT VERIFIED**.
 
-> Deferred does not mean Atlas is production-ready; if Atlas is re-enabled,
-> this real wire gate becomes a release blocker again.
-> The current server still constructs Atlas by default. Deployments retaining
-> that path must provide and verify an Atlas endpoint; removing this runtime
-> dependency requires a separate Atlas-optional wiring code change.
+> This document is provenance only. Atlas is not a current implementation
+> target, and no Atlas endpoint/protobuf work is required for the current
+> Spotter release.
 
 The repository still ships a self-contained mirror of the private
 `beehive-proto api/service/v2` surface.  `pkg/beehive/service/v2/v2.go` defines

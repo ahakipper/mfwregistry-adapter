@@ -8,7 +8,12 @@ per tier, and specifies the exact Makefile targets that will implement the
 matrix. It is the implementation brief for the test work that follows; it does
 not change any code by itself.
 
-**Current status (2026-09-13, code baseline `33606fa`):** the default unit, full and
+**Current status addendum (2026-09-19):** the fresh Nacos 3 + KWOK 20-minute
+1000-Pod gate passed with exact three-watch correlation and full Instance
+equality. Atlas real tags and AppCenter delivery are intentionally excluded
+from the current release gate; their absence is not a pending Spotter task.
+
+**Historical status (2026-09-13, code baseline `33606fa`):** the default unit, full and
 race suites are green and `go vet ./...` is clean. The Nacos naming path is
 SDK-backed by default; `http-compat` is an explicit test/rollback mode. The
 SDK mode allocates no compatibility HTTP client; service-list, SelectAll-based
@@ -28,7 +33,8 @@ leadership start receives a fresh admin, factory errors fail before readiness,
 and a nil factory retains the SDK startup block without selecting HTTP
 compatibility.
 
-The current release gates are explicit: SDK-only Nacos product startup is
+The historical release-gate text below is retained for provenance. The current
+release gate is the completed Nacos 3 + KWOK data-plane run; SDK-only Nacos product startup is
 blocked before readiness until official cluster-admin support exists;
 `http-compat` is test/rollback only. Guarded Nacos/Atlas real tags and the
 Observe harness skip as `NOT VERIFIED` when no scratch target exists. The
@@ -596,6 +602,6 @@ health-check 是 Nacos 服务器主动探测实例健康的管理开关；AppCen
 endpoint/payload/auth/SLA 分别是告警地址、消息格式、认证信息和时效承诺；
 legacy shim/globals 是为旧调用方保留的兼容包装和进程级全局变量。
 
-Atlas deferred 表示本版本不执行真实协议门禁，不代表 Atlas 已可用于生产。
+Atlas excluded 表示本版本不实现、不验证真实 Atlas 协议，也不代表 Atlas 已可用于生产。
 Deployment-level Nacos checks out-of-scope 表示本阶段不搭建或验收 HA/TLS 等部署条件，
 不代表这些条件已经通过。

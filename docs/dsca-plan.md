@@ -1,5 +1,9 @@
 # Data Stability & Consistency — Assessment and Enhancement Plan
 
+> **Historical scope note (2026-09-19):** This plan is retained for audit
+> provenance. The current release uses Nacos as the active Sink; Atlas is a
+> compatibility stand-in only and AppCenter is not integrated.
+
 **Status:** IN PROGRESS
 **Date:** 2026-09-11
 **Theme owner:** lead (orchestration + gating); auditors A1-A5 (parallel discovery); reviewers (per-document adversarial pass); fix agents (serialized agent-1/agent-2 loop).

@@ -8,9 +8,10 @@
 
 独立开发审计和评审均判定旧阶段延迟证据为 **FAIL（方法不成立）**，但没有据此判定产品数据已经不一致。完整 Instance 快照比较本身仍然有效，因为 canonical payload 覆盖 labels、Reversion、SourceKey、SourceCluster、端点、生命周期及其他 domain 字段。
 
-当前已完成测试方法修正，并通过单 Pod 的真实 Nacos 3 ARM64 + KWOK 诊断。全规模阶梯和新的两小时观察仍需使用修正后的方法重新执行，因此本文当前状态为：
+当前已完成测试方法修正，并通过真实 Nacos 3 ARM64 + KWOK 诊断；随后完成
+1000-Pod 的 20 分钟三路 Watch/完整字段一致性门禁。本文当前状态为：
 
-**METHOD VALIDATED / FULL GATES PENDING**
+**METHOD VALIDATED / 20-MINUTE FULL-SCALE PASS**
 
 ## 为什么旧结果不能继续使用
 
@@ -104,6 +105,6 @@ Nacos 服务端自行维护的 wire `Healthy` 位只记录、不作为 Spotter d
 
 ## 当前不在本轮范围
 
-- AppCenter 真实告警接入；
+- AppCenter 真实告警接入（明确排除，不是待办）；
 - Nacos 部署级 TLS、认证、非 public namespace、HA、leaderless；
-- Atlas 真实 protobuf wire compatibility。
+- Atlas 真实 protobuf wire compatibility（明确排除，不是待办）。

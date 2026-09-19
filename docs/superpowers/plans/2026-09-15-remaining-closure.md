@@ -7,7 +7,8 @@
 
 **Goal:** Close every remaining in-scope Spotter engineering item after the
 Nacos3/Kwok consistency work, while leaving AppCenter delivery, Nacos
-deployment operations, and real Atlas wire compatibility explicitly deferred.
+deployment operations, and real Atlas wire compatibility explicitly excluded
+by the current user scope decision.
 
 **Architecture:** The active runtime keeps explicit logger/config/notifier
 dependencies at the composition root and uses the official Nacos Go SDK for
@@ -32,7 +33,7 @@ current evidence contract in
 - Do not add Nacos deployment HA, TLS, production auth, non-public namespace,
   or leaderless-recovery work; these remain deployment-owned out of scope.
 - Do not implement or validate the real Atlas protobuf wire contract; Atlas is
-  a deferred non-blocking sink.
+  an excluded compatibility sink, not a pending work item.
 - Do not add same-scale Consul observation; the current project has no machine
   deployment scenario and this is an accepted non-goal.
 - All Nacos business operations use the official SDK; `http-compat` remains a
@@ -70,7 +71,7 @@ current evidence contract in
       linking `docs/evidence/nacos3-kwok-complete-instance-equality-2026-09-15.md`.
 - [ ] Keep the two-hour burst Observe gate explicitly `NOT VERIFIED` until its
       own run produces complete evidence.
-- [ ] Mark AppCenter delivery, deployment-owned Nacos operations, Atlas wire,
+- [x] Mark AppCenter delivery, deployment-owned Nacos operations, Atlas wire,
       and Consul scale with the exact out-of-scope wording from this plan.
 - [ ] Record that `go vet ./...` is currently clean and that application-level
       batch is implemented even though Nacos has no persistent protocol batch.

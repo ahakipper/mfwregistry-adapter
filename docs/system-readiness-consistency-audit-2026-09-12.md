@@ -1,10 +1,10 @@
 # spotter 当前工程就绪度与一致性闭环审计
 
-> **Current target correction (2026-09-14):** The Nacos 2.1.0 and v2 SDK
+> **Historical target correction (2026-09-14):** The Nacos 2.1.0 and v2 SDK
 > records in this historical audit are provenance only. The active release
 > target is Nacos 3.2.4-slim on `linux/arm64` with an official SDK gRPC
-> facade. Nacos 3 integration and the real kwok 1000-instance/2-hour
-> observation remain `NOT VERIFIED` until fresh evidence is recorded.
+> facade. The historical 2-hour wording below is superseded for the current
+> gate by the fresh 20-minute PASS evidence recorded on 2026-09-19.
 > `healthChecker=NONE` is deployment-owned service/cluster configuration, not
 > a naming-SDK startup prerequisite.
 
@@ -14,18 +14,21 @@
 > one-hour run passed 361/361 exact ticks with zero field divergence, drops, or
 > cleanup residuals; see
 > [complete Instance evidence](evidence/nacos3-kwok-complete-instance-equality-2026-09-15.md).
-> The two-hour burst gate and legacy package deletion remain open. AppCenter
-> delivery, deployment-level Nacos operations, Atlas wire compatibility, and
-> Consul scale are intentionally excluded from the current Spotter scope.
+> The fresh Nacos 3 + KWOK 20-minute gate is PASS. AppCenter delivery,
+> deployment-level Nacos operations, Atlas wire compatibility, and Consul scale
+> are intentionally excluded from the current Spotter scope; they are not open
+> release tasks.
 
 **审计日期：** 2026-09-12（当前状态增量更新至 2026-09-13）
 
-> Current scope: Atlas is an existing Sink/mock integration point deferred
-> from the current release; real protobuf/method/TLS/auth is a future gate.
+> Current scope: Atlas is an existing compatibility Sink/mock only; Atlas
+> protocol, deployment, and removal work are explicitly excluded from the
+> current release and are not future gates unless scope is reopened.
 > Deployment-level Nacos HA/TLS/auth/namespace/leaderless checks are outside
 > current Spotter scope; single-Sink SDK integration remains in scope.
-> Current server wiring still constructs Atlas by default; retaining that path
-> requires an Atlas endpoint. Fully optional Atlas wiring is a separate code item.
+> Current server wiring may still construct the legacy Atlas compatibility path
+> for older callers; that path is not part of the Nacos-only release. No Atlas
+> endpoint or optional-wiring migration is scheduled under the current scope.
 **仓库：** `/Users/d-robotics/go/src/github.com/ahakipper/mfwregistry-adapter`  
 **分支/提交：** `refactor/all` / `c986632` (implementation baseline; docs synced after)
 **文档状态：** FINAL（已完成第二轮独立 reviewer 复核）
@@ -38,7 +41,10 @@
 > `RequestHandler Not Found`; this leaves protocol capability target-dependent
 > and does not invalidate Spotter application batching.
 
-> **当前状态增补（2026-09-13，实现基线 `c986632`）：** 生产 Nacos 默认仍为 SDK-only，但因当前 pinned Nacos SDK pseudo-version `0024865` 没有 cluster-admin health-check update，启动在 readiness/canary 前 **BLOCKED / NOT VERIFIED**；`http-compat` 仅测试/回滚。Nacos real/sdk-eval harness 已加入 TLS/CA/server-name/auth guards、redacted evidence 和 write-attempt cleanup，本地 scratch 目标已补充但不能宣称生产协议 PASS。Atlas 仍是普通 Go struct + JSON codec 的 discoverymock stand-in，真实 protobuf/TLS/auth/method compatibility **NOT VERIFIED**。Observe harness 的命令、健康检查和 teardown 已 context-bounded，clean host 缺外部依赖会显式 `NOT VERIFIED: EnvError/InfraError` skip；完整 2h OBS 未运行。Nacos GetAll 只返回 `spotterOwner` 自有条目；Cache Delete/GetAll 已修复 nil、深拷贝、空 provider 和 legacy 唯一匹配。Notifier 有 owned context/Close/retry/fail-closed 生命周期，但真实 AppCenter endpoint/payload/auth/SLA 未提供。DDD active graph 使用显式 ports，legacy bridge 集中于 `internal/infra/legacycompat`；Consul 同规模观察按当前无机器部署列为 accepted non-goal。`go vet ./...`、相关 race/unit/tagged gates 已通过；真实 Nacos/Atlas/OBS-full 证据仍保持 NOT VERIFIED。
+> **历史状态增补（2026-09-13）：** 本段记录旧基线的 Nacos 2/SDK 能力和
+> scratch 证据边界，不定义当前发布状态。当前 Nacos 3 + KWOK 20 分钟数据面门禁
+> 已 PASS；Atlas 与 AppCenter 明确排除，不是待补的 Spotter 发布证据。部署级
+> Nacos 运维检查和 Consul 规模观察仍分别属于部署方范围与 accepted non-goal。
 
 > Nacos exported `NewClient`/`NewSink` now default to SDK; raw HTTP is
 > available only through explicitly named compatibility constructors, and SDK
@@ -47,7 +53,8 @@
 > A bounded ARM64 local scratch run is recorded in
 > [nacos-arm64-scratch-2026-09-13.md](evidence/nacos-arm64-scratch-2026-09-13.md):
 > both SDK lifecycle tags passed with cleanup evidence, but this is not
-> production evidence and does not close TLS/auth/HA/Admin/Atlas/Observe gates.
+> production evidence and does not close deployment TLS/auth/HA/Admin gates;
+> Atlas is excluded rather than an open evidence gate.
 > The artifact also records the guarded auth-enabled `38848/39848/39849` run
 > and the `tenant-a`/`blue` namespace/group run, plus the intentional rejection
 > of plaintext auth without scratch/write guards.
@@ -82,9 +89,9 @@
 | A0–A3 身份、顺序、全量重试 | **IMPLEMENTED / TESTED** | source-aware identity、keyed per-identity gate、typed full retry、revalidation、tombstone scope 已提交；仍需真实 2h/生产观测验证。 |
 | K8s cache/worker | **IMPLEMENTED / RACE-TESTED** | cache pointer swap、stop-state、HasSynced cancel 竞态已修复；`--appcodes` 多值 membership、full SyncAll metadata、cross-provider tombstone 已修复；ants pool overload 现在 nonblocking 并计数 drop。 |
 | Nacos naming | **SDK DEFAULT / NO PRODUCTION RAW HTTP / REAL EVIDENCE PARTIAL** | SDK client/Admin capability code and scratch evidence remain partial; cluster Admin NONE health-check is typed fail-closed. Deployment HA/multi-node/TLS/auth/namespace/leaderless checks are out of scope. |
-| Atlas wire | **DEFERRED (non-blocking)** | Real wire is a future entry gate; current release does not require production Atlas protocol evidence. |
-| Observe | **HARNESS FIXED / 2H NOT RUN** | zap `ts` 解析和 ledger-before-apply/delete 已修复；完整自包含 2h OBS 仍待执行。 |
-| DDD / notice | **CODE IMPLEMENTED / REAL DELIVERY PENDING** | active provider/elector/conversion/metrics graph uses injected ports; legacy constructors/bridge remain for compatibility; aggregate is build-gated; appcenter HTTP adapter is fail-closed until deployment contract is supplied. |
+| Atlas wire | **EXCLUDED** | Current release does not implement or require production Atlas protocol evidence; historical findings remain for provenance only. |
+| Observe | **20-MINUTE DATA-PLANE PASS** | Fresh Nacos 3 + KWOK run passed 106/106 exact ticks and 3368/3368 mutation correlation. |
+| DDD / notice | **CODE IMPLEMENTED / APP CENTER EXCLUDED** | Active graph uses injected ports; legacy constructors/bridge remain as compatibility scaffolding; AppCenter is deliberately not wired in this release. |
 | Consul scale | **ACCEPTED NON-GOAL** | 当前无机器部署场景；重新启用 ECS/机器部署时再开同等规模门禁。 |
 | Static quality | **PASS** | `go vet ./...` 已在 `eb6bf0c` 清零原两条诊断。 |
 
@@ -124,15 +131,18 @@ amd64，QEMU 下 Java 持续高 CPU 超过 5 分钟仍无 readiness 响应。容
 | Burst delete race | **IMPLEMENTED / TESTED; REAL OBS PENDING** | keyed per-identity gate、trusted full revalidation、scoped tombstone 和 typed full retry 已提交；真实长时 burst/生产延迟仍需重跑观察 | 部分过时：原始 burst 结果保留为历史证据，当前实现状态见增量章节 |
 | Observe `logSlice` + ledger/apply 竞态 | **HARNESS FIXED; 2H PENDING** | zap JSON `ts`/行首时间解析和 apply/delete 前 ledger clock 已修复并有 deterministic tests；完整自包含 2h 观察尚未执行 | 是：旧缺口已修复，长时证据仍缺 |
 | Consul 同等规模观察 | **ACCEPTED NON-GOAL** | 2h/1000 观察只启动 `--providers k8s`；当前没有机器部署场景，按本次范围暂不展开 | 否；范围边界已明确 |
-| Nacos HTTP/SDK Sink | **HISTORICAL V2 / Nacos 3 MIGRATION IN PROGRESS** | The v2 evidence below is retained for provenance; the active v3.2.4 ARM64 SDK/gRPC lifecycle and Admin policy remain NOT VERIFIED. Deployment HA/multi-node/TLS/auth/namespace/leaderless checks are out of scope. | 是 |
+| Nacos HTTP/SDK Sink | **NACOS 3 DATA-PLANE PASS** | The v2 evidence below is retained for provenance; the active v3.2.4 ARM64 SDK/gRPC path passed the fresh 20-minute data-plane gate. Deployment HA/multi-node/TLS/auth/namespace/leaderless checks are out of scope. | 是 |
 | Nacos 官方 SDK gRPC 能力 | **NACOS 3 TARGET / REAL NOT VERIFIED** | Current branch pins the official v3 development pseudo-version and adds a vendor seam; Task 1.2 must prove persistent register/deregister request types use gRPC. | 是 |
 | Nacos SDK 统一接入约束 | **CODE PASS / RELEASE NOT VERIFIED (P1)** | SDK query/list/subscribe/batch/reconnect/Admin evidence is partial; deployment HA/multi-node/TLS/auth/namespace/leaderless checks are out of scope. | 是 |
-| Atlas 真实 protobuf wire | **DEFERRED / NON-BLOCKING** | Historical limitation retained; real wire remains a future entry gate if Atlas is re-enabled. | No current release blocker |
-| Notice / appcenter 告警 | **OPTIONAL / OUT OF SCOPE** | AppCenter endpoint/payload/auth/SLA are deployment-owned and not wired in this release; notifier adapter remains optional. | No current release blocker |
+| Atlas 真实 protobuf wire | **EXCLUDED** | Historical limitation retained for provenance; no current Atlas implementation or wire gate. | No current release task |
+| Notice / appcenter 告警 | **EXCLUDED / LOG-ONLY** | AppCenter endpoint/payload/auth/SLA are not part of this release; notifier remains fail-closed/log-only. | No current release task |
 | DDD 目标架构 | **CODE PARTIAL / SHIM RETIREMENT PENDING** | active provider/elector/conversion/metrics graph 已使用显式依赖；legacy constructors/bridge 保留兼容，aggregate 已由 `legacyaggregate` build tag 隔离 | 是 |
 | `go vet ./...` | **PASS** | `eb6bf0c` 修复 cache printf 和 K8s unkeyed literal；当前命令退出 0 | 是 |
 
-**总体判定（历史基线）：** 业务主路径曾达到“可构建、可测试、可在本地 Nacos 2.1 形状运行”的阶段；该结论不适用于当前 Nacos 3 目标。当前仍未闭环的是真实 Nacos 3 SDK/gRPC、完整 2h kwok Observe、DDD globals 删除、真实 AppCenter 告警，以及 deployment-owned health policy evidence。Consul 大规模观察按当前没有机器部署场景处理为 accepted non-goal，不影响本次 K8s 主路径结论。
+**总体判定（历史基线）：** 本段旧结论不作为当前发布判定。当前 Nacos 3 + KWOK
+数据面 20 分钟门禁已 PASS；Atlas/AppCenter 明确排除，部署级 Nacos 运维与
+Consul 规模观察仍属于范围外。历史 Nacos 2/Atlas/2h/通知缺口仅保留作审计
+背景。
 
 ## 3. Nacos Sink 审计
 
@@ -394,6 +404,11 @@ coalescing 只发生在 Pop 前；一旦第一个事件已 Pop 并提交 pool，
 
 ## 6. 优化优先级与后续计划
 
+> **Scope correction (2026-09-19):** The priority list below is the original
+> audit plan and is retained for traceability. Any Atlas or AppCenter item is
+> retired by the current scope decision and must not be scheduled unless the
+> user explicitly reopens that integration.
+
 ### P0：先解决会造成错误数据的并发和身份问题
 
 1. **统一事件身份**：`clusterID + namespace + pod UID` 作为内部 key；`QueueObject`、cache、diff、retry 和 forensic record 全部携带它。兼容外部 `InstanceId` 时，不再用 pod name 单独做内部主键。
@@ -407,7 +422,7 @@ coalescing 只发生在 Pop 前；一旦第一个事件已 Pop 并提交 pool，
 6. 设计 provider ownership lease/epoch；空源删除需要连续观测和 owner 证明，避免源故障被解释为“所有实例已删除”。
 7. `HasSynced`/Pop/Consul watch 全部改成 context-cancellable wait；ants `Submit` 非阻塞化并把 overflow 进入有界、可观测、按 key 合并的队列。
 8. 把 Nacos readiness 改为 read + write probe；补齐 TLS CA、username/password、namespace、group、server list 的配置和测试。
-9. Atlas 生产 codec 做真实环境验证：确认服务端 proto/JSON codec、RPC method path、TLS 和返回码；在未验证前保留“本地 JSON only”警示。
+9. ~~Atlas 生产 codec 做真实环境验证：确认服务端 proto/JSON codec、RPC method path、TLS 和返回码。~~ **RETIRED BY SCOPE DECISION:** Atlas implementation and wire validation are excluded; retain the historical “local JSON only” warning for provenance only.
 
 ### P2：收尾工程质量和观察能力
 
@@ -476,14 +491,14 @@ Reviewer 确认：
 
 **Reviewer 状态：** PASS（仅表示原始审计/计划的一致性复核完成，不表示当前生产发布门禁关闭）。
 
-**后续实现复核（2026-09-13）：** 已关闭并提交：Nacos naming SDK seam、SDK
+**后续实现复核（历史记录，2026-09-13）：** 已关闭并提交：Nacos naming SDK seam、SDK
 catalog/prune/readiness routing、B2 scoped readiness、Atlas/Observe fail-closed gates、
 K8s cache pointer/stop-state race、multi-appcode membership、normal SyncAll metadata
 propagation、cross-provider tombstone scope、nonblocking provider pool submission 和
 `go vet` 两条诊断。仍为 P1/P2 REMAINING：真实 Nacos/Atlas/2h Observe 证据、DDD
-legacy globals、真实 appcenter 告警，以及当前 SDK pseudo-pin `0024865` 缺少 cluster-admin health-check
-API 的有期限 typed unsupported 例外；这些不能由本地 mock、tagged skip 或计划 reviewer
-PASS 代替。
+legacy globals，以及当前 SDK pseudo-pin `0024865` 缺少 cluster-admin health-check
+API 的有期限 typed unsupported 例外；Atlas 与 AppCenter 已由当前范围决策排除，
+不构成待办。这些历史结论不能由本地 mock、tagged skip 或计划 reviewer PASS 代替。
 
 > **SDK provenance clarification:** Current implementation and ARM64
 > reconnect evidence use pseudo-pin `v2.3.6-0.20260902123754-002486583df5`

@@ -1,5 +1,10 @@
 # DSCA Track 4 — Sustained Large-Scale Consistency Observation
 
+> **Historical scope note (2026-09-19):** This soak audit used an Atlas
+> stand-in to exercise the historical fan-out. Atlas parity sections are
+> provenance only; the current release evaluates the Nacos data plane and does
+> not include Atlas or AppCenter integration work.
+
 > **Authoritative current addendum (2026-09-15):** The active Observe target
 > is Nacos 3.2.4 ARM64 with the official SDK and kwokctl. A fresh one-hour
 > complete-Instance run passed 361/361 linearized ticks at 1000 Pods across 20

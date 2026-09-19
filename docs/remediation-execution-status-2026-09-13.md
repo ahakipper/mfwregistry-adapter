@@ -4,21 +4,21 @@ This document is the current execution ledger for the remediation plan. It
 supersedes stale HEAD labels in historical audit sections; historical findings
 remain unchanged and are not promoted to current PASS evidence.
 
-## Authoritative current addendum — 2026-09-15
+## Authoritative current addendum — 2026-09-19
 
 - Current branch: `refactor/all`; evidence baseline `436a4af`.
 - Nacos target: `nacos/nacos-server:v3.2.4-slim` on `linux/arm64`, official
   Go SDK gRPC naming path, application-scoped batches capped at 100.
-- Complete Instance equality is verified by the fresh one-hour run in
-  [nacos3-kwok-complete-instance-equality-2026-09-15.md](evidence/nacos3-kwok-complete-instance-equality-2026-09-15.md):
-  361/361 emitted ticks exact, 1000 Pods across 20 applications, zero field
-  divergences, zero drops, and drained cleanup.
-- The two-hour burst run, legacy compatibility-tree deletion, final status
-  reconciliation, and the separately authorized 175-commit history rewrite
-  remain in scope and open.
+- The fresh Nacos 3 + KWOK 20-minute run passed with 106/106 exact ticks,
+  3368/3368 mutation correlation, zero missing boundaries, zero drops, final
+  source population 1000, and an exact post-quiescence snapshot. See
+  [nacos3-kwok-20m-pass-2026-09-19.md](evidence/nacos3-kwok-20m-pass-2026-09-19.md).
+- The legacy compatibility-tree deletion and separately authorized history
+  rewrite are migration decisions, not blockers for the completed data-plane
+  gate.
 - AppCenter delivery, Nacos deployment HA/TLS/auth/namespace/leaderless work,
   Atlas real wire compatibility, and Consul scale observation are explicitly
-  excluded by the current user decision.
+  excluded by the current user decision; none is a current release task.
 
 ## Current baseline
 
@@ -37,7 +37,7 @@ remain unchanged and are not promoted to current PASS evidence.
 | Category | Items |
 |---|---|
 | Current release blockers | Nacos Admin/Maintainer health-check capability; definitive OBS-full 2h/1000+ evidence; legacy shim retirement where required by deployment policy. |
-| Out of scope or deferred | Atlas real wire contract; deployment-level Nacos HA/multi-node/TLS/auth/namespace/leaderless validation; AppCenter endpoint/payload/auth/SLA; Consul scale evidence. |
+| Out of scope by decision | Atlas real wire contract; deployment-level Nacos HA/multi-node/TLS/auth/namespace/leaderless validation; AppCenter endpoint/payload/auth/SLA; Consul scale evidence. |
 
 | Area | Status | Evidence / boundary |
 |---|---|---|
@@ -51,8 +51,8 @@ remain unchanged and are not promoted to current PASS evidence.
 | Observe deterministic engine | **CODE PASS** | Zap timestamp parsing, ledger-before-apply/delete, live source snapshots, divergence ageing and per-tick verdicts are unit/race tested. |
 | Observe lifecycle | **CODE PASS; 2H NOT VERIFIED** | `observe-up.sh/down.sh` own a scratch kwok cluster, validate daemon/ports/readyz/node/capacity/state hash and clean failures. External `OBS_KUBECONFIG` mode is read-only. No 2h/1000+ run has executed because `kwokctl` is unavailable on this host. |
 | DDD active graph | **CODE PASS; EXTERNAL SHIM GATE PENDING** | Active composition/providers/elector/metrics use explicit ports; package-global logger/config wiring is bypassed by production composition. Legacy globals are confined to the compatibility boundary and aggregate is build-gated; final deletion still requires external caller migration evidence. |
-| Notifications | **CODE PASS; REAL DELIVERY NOT VERIFIED** | HTTP notifier has timeout/retry/Close/counters/redaction and fail-closed construction. AppCenter endpoint, payload, auth and SLA are deployment-owned and absent. |
-| Atlas | **DEFERRED** | Existing Sink/mock integration point; real protobuf/method/TLS/auth compatibility is a future entry gate, not a current release blocker. |
+| Notifications | **CODE PASS; LOG-ONLY BY SCOPE** | HTTP notifier has timeout/retry/Close/counters/redaction and fail-closed construction. AppCenter endpoint, payload, auth and SLA are deliberately not part of this Spotter release. |
+| Atlas | **EXCLUDED** | Existing compatibility Sink/mock only; real protobuf/method/TLS/auth compatibility is not a current task or release gate. |
 | Consul scale | **ACCEPTED NON-GOAL** | No machine/ECS deployment is in scope; reopen only when that deployment mode returns. |
 | Consul monitor change payload | **CODE PASS** | Additive payload-free `InstanceChangeHandler`; legacy and new handlers both dispatch, with notifier/Warnf error semantics covered by race tests. Historical fabricated empty `CatalogService` finding is closed for migrated callers; legacy compatibility boundary remains. |
 | Static quality | **PASS** | `go vet ./...`, `go test ./... -count=1`, `go test -race ./... -count=1`, `make test-all`, Observe unit/race and lifecycle shell tests pass. |
@@ -87,6 +87,6 @@ Until these external gates are satisfied, the repository is suitable for code
 review and local scratch validation but must not be labeled production-ready.
 
 Deployment-level Nacos HA/TLS/auth/namespace/leaderless evidence, Atlas real
-wire contract, and AppCenter endpoint/payload/auth/SLA are deferred scope;
+wire contract, and AppCenter endpoint/payload/auth/SLA are explicitly excluded scope;
 they become required only if a future release explicitly re-enables those
 deployment or integration targets.

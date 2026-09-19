@@ -7,22 +7,25 @@
 > and a real 1000-Pod/2-hour kwok gate. The old version-specific records stay
 > as provenance and must not be used as the current release verdict.
 
-> Current scope: Atlas is an optional existing Sink/mock deferred from the
-> current release; real wire compatibility is a future entry gate. Deployment
-> Nacos HA/TLS/auth/namespace/leaderless checks are outside scope.
-> The current server still constructs Atlas by default; deployments retaining
-> that path require an Atlas endpoint. Removing the dependency needs a separate
-> Atlas-optional wiring change.
+> **Current scope correction (2026-09-19):** Atlas and AppCenter are explicitly
+> excluded from the current Spotter deliverable. Atlas wire compatibility and
+> AppCenter endpoint/auth/SLA work are not current tasks or release gates; the
+> historical sections below are retained only as provenance. Existing Atlas
+> construction is compatibility scaffolding, not a current implementation
+> target. Deployment Nacos HA/TLS/auth/namespace/leaderless checks are outside
+> scope.
 
 > **Authoritative current addendum (2026-09-15):** The successor Nacos3/kwok
 > plan has delivered complete Instance metadata round-trip, all-label and
 > `Reversion` equality, fresh SDK snapshots, and linearized one-hour evidence
 > at 1000 Pods/20 applications. Remaining in-scope work is tracked in
 > [remaining-closure.md](superpowers/plans/2026-09-15-remaining-closure.md):
-> legacy tree deletion, the two-hour burst gate, status reconciliation, and
-> the safely backed-up 175-commit message rewrite. AppCenter delivery,
+> legacy tree deletion, status reconciliation, and the safely backed-up
+> 175-commit message rewrite. AppCenter delivery,
 > deployment-owned Nacos operations, Atlas wire compatibility, and Consul
-> scale are excluded by decision.
+> scale are excluded by decision. The historical two-hour note is superseded by
+> the fresh 20-minute PASS evidence in
+> `docs/evidence/nacos3-kwok-20m-pass-2026-09-19.md`.
 
 > **执行说明：** 本计划以 [system-readiness-consistency-audit-2026-09-12.md](system-readiness-consistency-audit-2026-09-12.md) 为输入，按工作包和提交批次执行。每个批次必须先补测试、再改实现、再跑门禁；任何 P0/P1/P2 未关闭时不得宣布批次完成。
 
@@ -32,7 +35,7 @@
 
 **版本变更：** v6 将“禁止 Nacos 生产路径裸 HTTP、统一经官方 Nacos SDK/facade”从可选 POC 提升为 P1 强制整改和 Nacos 启用时的发布门禁，并补充 SDK 迁移、例外管理和完整测试矩阵。
 
-> **Historical status addendum (2026-09-13, implementation baseline `c986632`):** The SDK-only Nacos startup block and v2 SDK capability notes below describe the prior Nacos 2-era implementation. They are retained as provenance and are superseded for the active target by the 2026-09-14 Nacos 3/kwok plan. Deployment-level Nacos HA/multi-node/TLS/auth/namespace/leaderless checks are outside current Spotter scope; single-Sink Nacos 3 SDK integration remains in scope. Atlas is an optional existing Sink/mock deferred to a future entry gate, not a current release blocker. Full 2h Observe and AppCenter delivery remain pending; Consul scale remains an accepted non-goal.
+> **Historical status addendum (2026-09-13, implementation baseline `c986632`):** The SDK-only Nacos startup block and v2 SDK capability notes below describe the prior Nacos 2-era implementation. They are retained as provenance and are superseded for the active target by the 2026-09-14 Nacos 3/kwok plan. Deployment-level Nacos HA/multi-node/TLS/auth/namespace/leaderless checks are outside current Spotter scope; single-Sink Nacos 3 SDK integration remains in scope. Atlas and AppCenter are explicitly excluded from the current release, not pending gates. The current 20-minute Observe gate is complete; Consul scale remains an accepted non-goal.
 > Exported Nacos `NewClient`/`NewSink` now default to SDK and fail closed on the
 > cluster-admin capability gap; raw HTTP is reachable only through explicitly
 > named `NewHTTPCompatClient`/`NewHTTPCompatSink` compatibility constructors and
@@ -44,7 +47,7 @@
 > with cleanup evidence; see the artifact for the exact scope and negative
 > plaintext-auth guard result.
 
-**当前基线：** `refactor/all` / `c986632`（其后为文档同步提交）。A0→A3、B1、B2 HTTP 过渡层、B3 SDK seam、B4 Atlas gate、C1 Observe 修复、D1 provider overflow/lifecycle、C2 logger/notifier/metrics 注入和两条 `go vet` 诊断清零已按阶段提交并通过 focused/full/race/cover 测试；`go vet ./...` 当前为 0。Nacos naming、service-list、SelectAll/query、subscribe/unsubscribe、catalog/prune 和 readiness read/write 已统一经官方 SDK；cluster Admin health-check update 在 SDK pseudo-version `0024865` 中没有等价接口，SDK mode typed fail-closed，HTTP 仅显式 compatibility/test 且 product wiring 拒绝。真实 Nacos/Atlas 证据、appcenter endpoint contract、完整 2h Observe 和最终真实环境发布证据仍未闭环。
+**当前基线：** `refactor/all`（当前 HEAD 已完成 Nacos 3 + KWOK 20 分钟数据面门禁）。A0→A3、B1、B2 HTTP 过渡层、B3 SDK seam、C1 Observe、D1 lifecycle、C2 依赖注入和 `go vet` 门禁均已完成；Atlas 与 AppCenter 不属于当前交付范围，部署级 Nacos 运维检查也不属于 Spotter 发布门禁。完整证据见 `docs/evidence/nacos3-kwok-20m-pass-2026-09-19.md`。
 
 **Current SDK evidence clarification (2026-09-13):** The implementation uses `github.com/nacos-group/nacos-sdk-go/v2` pseudo-pin `v2.3.6-0.20260902123754-002486583df5` (commit `0024865`). The guarded ARM64 single-client reconnect `-race` run passed; historical v2.3.5 race output is provenance only. Untagged SDK/Admin capability remain `NOT VERIFIED`; deployment HA/TLS/auth/namespace/leaderless checks are outside current scope.
 
@@ -64,7 +67,7 @@ Server composition 通过 per-start `ClusterAdminFactory` 创建新的 admin
 facade；leader restart 不复用已关闭实例。factory 缺失或构造失败均在
 readiness 前 fail-closed，且不会降级为 HTTP。
 
-**执行状态（2026-09-13）：** `b1d9e2f` 已完成 B2 的 HTTP compatibility foundation：多地址 failover（5xx/transport 可切换、4xx 停止）、显式 namespace/group/auth/TLS/timeout、CLI→Config wiring、read+write readiness canary（成功地址固定 register/deregister，清理失败告警）、custom scope PushAll/prune/GetAll 回归测试。`fd1f539` 完成 B3 SDK seam：生产默认 `sdk`，naming lifecycle/query/subscribe 走官方 SDK；其后 `7e9ec06` 将 catalog/prune、service-list、readiness read/write 也统一到 SDK facade，并使 SDK mode 不分配 compatibility HTTP client，product wiring 拒绝 `http-compat`；`771dfd6` 进一步使 cluster-admin health-check unsupported 在业务 register 前 fail-closed、零远端写入。`c8e5613` 完成 B4 fail-closed Atlas gate，`cce983e` 完成 Observe 时间/ledger 修复，`eb6bf0c` 清零 `go vet`，`75a151b/403e0c5` 修复 K8s cache 指针和 stop-state 竞态，`728f1d2` 修复 normal SyncAll metadata、cross-provider tombstone、multi-appcode filter、provider backpressure 和 HasSynced cancellation，`ff10610` 完成 provider overflow/lifecycle 汇合，`42ecb89` 完成 C2 显式依赖注入、aggregate 隔离和通知生命周期/敏感信息收口，`b38505c` 完成 provider lifecycle stop-channel 初始化。真实 Nacos/Atlas 版本验证、完整 2h Observe、appcenter endpoint contract、cluster-admin 官方替代方案和最终发布证据仍未提供，因此发布状态仍为 NOT VERIFIED。
+**历史执行记录（2026-09-13）：** 下列提交和门禁记录保留用于审计追溯。它们不再定义当前发布状态；当前 Nacos 3 + KWOK 20 分钟门禁已 PASS，Atlas/AppCenter 明确不在当前范围。
 
 **B3 SDK-only amendment (2026-09-13):** 后续实现已将 `TransportSDK` 设为真正的生产
 only path：SDK mode 不分配 compatibility `net/http` client；`ListCatalogInstances`
@@ -128,7 +131,7 @@ WP-0A 身份模型 ─┬─> WP-0B 有序写入/快照校验 ─┬─> WP-0C P
                 └────────────────────────────┴─> WP-1A Nacos ownership/空源
 
 WP-1B Nacos 配置/HTTP 过渡 ──> WP-1C 官方 SDK 强制迁移 ──> WP-1D 灰度与 HTTP fallback 下线决策
-WP-1E Atlas 真实 codec 验证（独立，可并行）
+WP-1E Atlas 真实 codec 验证（历史项，已按范围决策退休；不可执行）
 WP-2A 测试补齐 ──> WP-2B E2E/observe 门禁 ──> WP-2C 全量验收与文档更新
 WP-2V vet 清零（独立，尽早完成）
 ```
@@ -142,7 +145,7 @@ WP-2V vet 清零（独立，尽早完成）
 5. `B1` 空源/ownership；
 6. `B2` Nacos HTTP 配置与 write readiness；
 7. `B3` 官方 SDK 迁移与协议兼容性验证（强制）；
-8. `B4` Atlas codec；
+8. `B4` Atlas codec（历史项，不执行）；
 9. `C1` observe/E2E 门禁；
 10. `C2` DDD globals/通知；
 11. `C3` vet、文档和最终回归。
@@ -538,9 +541,10 @@ go test -tags=nacos_real -race ./tests/e2e/... -run 'TestNacosReal|TestNacosSDKR
 
 上述 tag 对应测试文件未创建、环境不可达或只运行 mock 时，SDK 接入状态必须保持 `NOT VERIFIED`，不得标记为完成。
 
-## 11. B4：Atlas 真实 codec/protobuf 验证（Deferred follow-up）
+## 11. B4：Atlas 真实 codec/protobuf 验证（Historical / retired by scope decision）
 
-**目标：** 作为后续版本 entry gate，证明生产 Atlas 接受当前 wire，或明确切换到真实 protobuf 生成代码；不阻塞当前 Spotter 发布。
+**状态：** 明确排除，不是当前 Spotter 实现、验证或发布门禁。以下内容仅保留
+作为历史计划记录；除非用户重新打开 Atlas 范围，否则不得执行。
 
 **步骤：**
 
@@ -550,7 +554,8 @@ go test -tags=nacos_real -race ./tests/e2e/... -run 'TestNacosReal|TestNacosSDKR
 4. discoverymock 继续保留 JSON 测试，但不得把它标成生产兼容证明。
 5. 将 codec、method path、TLS、返回码、最大 payload 写入一份可版本化兼容矩阵。
 
-**验收：** 真实 Atlas 证据通过才可把该项标 PASS；真实验证命令固定为 `go test -tags=atlas_real ./tests/e2e/... -run TestAtlasReal -count=1`；该文件/标签未创建或 endpoint 不可用时，文档和启动日志都保持 NOT VERIFIED。提交 `B4`。
+**历史验收记录：** 不再适用于当前发布；`atlas_real` 只保留为兼容性代码的
+历史测试入口，不得被解释为当前待完成任务。
 
 ## 12. C1：补齐测试、边界和 E2E 门禁（P0/P1）
 
@@ -648,29 +653,30 @@ is promoted to a product PASS, and no real stack is started by the unit tier.
 
 ## 13. C2：通知、DDD globals 与生命周期收口（P1/P2）
 
-**执行状态（2026-09-13）：IMPLEMENTED / PRODUCTION EVIDENCE REMAINING.**
+**执行状态（历史记录）：代码门禁已完成；AppCenter 真实接入明确不属于当前范围。**
 `42ecb89` 已将 active server/provider graph 改为显式 logger/notifier/metrics/config
 依赖，aggregate 已由 `legacyaggregate` build tag 隔离；仅兼容构造器保留 legacy
 global bridge。`internal/infra/notice.HTTPNotifier` 已具备 endpoint/auth/request-builder
 契约、timeout、429/5xx/transport retry、atomic counters、payload redaction 和
-`Close` 汇合；缺少部署方 appcenter payload schema、真实 endpoint/auth/SLA 时会
-fail-closed，不能把本地单测提升为真实告警 PASS。故 C2 代码门禁通过，但真实
-appcenter delivery 与 legacy shim 最终删除仍是发布前 P1/P2 证据项。
+`Close` 汇合；AppCenter 真实 endpoint/auth/SLA 未纳入当前 Spotter 交付，现有
+通知保持 fail-closed/log-only 语义。legacy shim 的最终删除也是明确 deferred
+的兼容迁移事项，不是当前数据面发布阻塞。
 
 随后 `legacycompat` boundary patch 将兼容 global reads 集中到
 `internal/infra/legacycompat`；`internal/composition/boundary_test.go` 静态禁止
 active provider/conversion/elector/metrics files 直接导入 legacy `pkg/log`,
 `pkg/notice`, `spotter/config` 或 aggregate。旧 `New*`/`formatInstance` 入口只通过
 该 boundary 转发，生产 server 仍只调用 `WithDeps` constructors。该隔离不等同于
-删除 shim；真实调用方迁移和 appcenter endpoint contract 证据仍是发布前门禁。
+删除 shim 和真实调用方迁移属于未来兼容性治理，不是当前数据面发布门禁；
+AppCenter endpoint contract 也明确不在当前范围。
 空 campaign key 的旧 election fallback 也经由该 boundary；显式
 `NewCandidateWithDeps` 始终要求调用方传入 campaign key，不读取全局配置。
 
 ### 13.1 通知
 
 - 把 providers/election/metrics 的 `notice.Notice` 全部改成 `ports.Notifier` 注入；保留 `pkg/notice` 兼容 shim 但生产路径不读取全局。
-- appcenter notifier 增加真实 HTTP/API adapter、超时、重试、认证和失败计数；日志只作为 fallback，不能宣称已告警。
-- 每个严重事件至少有通知单测、发送失败测试和真实 scratch endpoint 测试。
+- AppCenter notifier 的真实 HTTP/API adapter 不在当前范围；日志/fail-closed
+  行为必须保持诚实，不能宣称已接入真实告警。
 
 ### 13.2 DDD
 
@@ -762,21 +768,21 @@ Expiry/revisit trigger:
 - `ID-NACOS-OWNER`：`k8s/ecs` cluster 是否由 Spotter 独占；
 - `ID-NACOS-GRPC`：SDK batch gRPC 是否在目标 Nacos 版本可用；
 - `ID-NACOS-SDK-MANDATE`：官方 SDK/facade 对每个 Nacos operation type 的覆盖、HTTP compatibility 例外 owner/expiry/删除条件；
-- `ID-ATLAS-CODEC`：真实 Atlas 接受 JSON 还是必须 protobuf；
-- `ID-NOTICE-DELIVERY`：appcenter 真实告警 endpoint、认证和 SLA；
+- `ID-ATLAS-CODEC`：真实 Atlas 接受 JSON 还是必须 protobuf（历史决策，当前关闭）；
+- `ID-NOTICE-DELIVERY`：appcenter 真实告警 endpoint、认证和 SLA（当前范围外，关闭）；
 - `ID-CONSUL-SCALE`：重新启用 ECS/机器部署时打开 Consul 规模观察。
 
-**计划结论：** 先执行 A0→A1→A2→A3，关闭身份、乱序和全量重试三项一致性风险；再执行 B1/B2 明确 Nacos 生产边界；B3 官方 SDK 迁移是 Nacos 启用时的强制发布门禁，B4 负责 Atlas 协议能力验证；最后用 C1/C2/C3 把测试、E2E、DDD、通知和静态质量收口。任何阶段都不能用当前 2h K8s 观察结果替代未验证的 Nacos/Atlas/Consul 生产结论。
+**计划结论（历史计划）：** 先执行 A0→A1→A2→A3，关闭身份、乱序和全量重试三项一致性风险；再执行 B1/B2 明确 Nacos 生产边界；B3 官方 SDK 迁移是 Nacos 启用时的强制发布门禁。B4 Atlas 与 AppCenter 已按当前范围决策关闭，不再是后续工作包；最后用 C1/C2/C3 把测试、E2E、DDD 和静态质量收口。
 
 ## 17. Reviewer 结论与发布边界
 
 **Reviewer：** `final_remediation_review`（2026-09-13）
-**代码/计划复核结论：** **PASS（离线实现门禁）**；**生产发布结论：NOT VERIFIED / REMAINING**。
+**代码/计划复核结论：** **PASS（离线实现门禁）**；当前数据面 20 分钟门禁已 PASS。
 **复核范围：** 当前 `refactor/all` HEAD、A0–A3/B1–B4/C1/C3 变更、K8s
 watch/cache/worker/reconcile 链路、Nacos SDK/HTTP 例外、Atlas/Observe/DDD/通知状态，
 以及 `go test`/race/vet/tagged harness。Reviewer 未发现新的离线 P0；以下 P1/P2
-仍是发布阻塞或后续 work package：真实 Nacos/Atlas/2h Observe 证据、真实 appcenter
-告警、Nacos Admin/Catalog/readiness 例外替换、SDK static-token 能力，以及
+历史记录中的后续 work package（不属于当前 Spotter 数据面门禁）：真实 Atlas/appcenter
+能力、部署级 Nacos 运维证据、SDK static-token 能力，以及
 overflow queue 在多进程/进程重启场景下的持久化重放证据。C2 的 active graph
 globals 已完成注入和隔离，但 legacy compatibility shim 的最终删除仍需兼容调用方
 迁移证明。

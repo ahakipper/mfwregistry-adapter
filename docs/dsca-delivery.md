@@ -1,5 +1,10 @@
 # Data Stability & Consistency — Assessment and Enhancement: Delivery
 
+> **Historical scope note (2026-09-19):** This delivery report records the
+> earlier multi-sink/Atlas implementation path. Atlas and AppCenter are
+> excluded from the current release; current acceptance is the Nacos 3 data
+> plane documented in the fresh evidence reports.
+
 **Status:** COMPLETE
 **Date:** 2026-09-11
 **Theme:** data stability and consistency assessment and enhancement, per the user's five requirements.

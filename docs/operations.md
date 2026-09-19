@@ -20,21 +20,20 @@ spotter. See [architecture.md](architecture.md) for design background and
 - Real Nacos deployment HA, multi-node failover, TLS/auth policy, namespace
   authorization, and leaderless recovery remain outside this Spotter release
   scope; the Nacos 3 single-Sink runtime gate is still required.
-- Atlas remains an existing Sink/mock integration point, deferred for a future
-  release. Real protobuf/method/TLS/auth compatibility is its future entry gate,
-  not a current release blocker.
-- Observe unit/race harness safety is implemented, including bounded external
-  commands and explicit EnvError/InfraError skips; the full 2h/1000+ run is
-  still pending. Consul scale observation is an accepted non-goal until ECS
+- Atlas remains compatibility scaffolding only and is explicitly excluded from
+  the current release. Real protobuf/method/TLS/auth compatibility is not a
+  current task or release gate; the Atlas address flag below is legacy wiring.
+- Observe unit/race harness safety and the fresh 20-minute/1000-Pod gate are
+  complete. Consul scale observation is an accepted non-goal until ECS
   deployment returns.
 - DDD active paths use injected logger/notifier/metrics ports. The deprecated
-  global packages are scheduled for removal after repository callers migrate.
-  AppCenter delivery is fail-closed without a deployment-owned
-  endpoint/payload/auth/SLA contract.
+  global packages remain only as compatibility scaffolding. AppCenter is not
+  integrated in this release; notification output is log-only/fail-closed and
+  no endpoint/payload/auth/SLA work is scheduled.
 
 Current code gates: `go vet ./...`, package race tests, observe-tagged unit/race
-tests, and guarded `nacos_real`/`atlas_real` tag tests. A skipped external gate
-must remain `NOT VERIFIED`.
+tests, and guarded Nacos compatibility tests. The `atlas_real` tag is retained
+only as historical compatibility scaffolding and is not a current release gate.
 The exported Nacos `NewClient`, `NewSink`, and `CheckReadiness` constructors
 are SDK-default; raw HTTP is available only through the explicitly named
 `NewHTTPCompat*` and `CheckReadinessHTTPCompat` rollback/test helpers.
@@ -87,7 +86,7 @@ repository root. The official build is performed by the internal CI pipeline
 Typical production invocation:
 
 ```bash
-./spotter adapter -e product -r k8s,ecs -g <atlas-grpc-addr> -i 21600
+./spotter adapter -e product -r k8s,ecs -g <legacy-atlas-grpc-addr> -i 21600
 ```
 
 The `adapter` subcommand requires `--env` to be one of `test`, `dev` or
@@ -103,7 +102,7 @@ process is normally started from the directory that contains `config/`.
 | `-t, --leader-elect` | `true` | Enable etcd leader election. `false` makes the process a forever-fake leader. |
 | `-e, --env` | `test` | Environment preset (etcd, kubeconfigs, consul, campaign key). |
 | `-i, --push-interval` | `21600` | Full-push interval, in seconds (21600 = 6 h). |
-| `-g, --grpc-addr` | `172.16.130.71:50051` | Discovery center (Atlas) gRPC address. |
+| `-g, --grpc-addr` | `172.16.130.71:50051` | Legacy Atlas compatibility address; not used by the current Nacos-only release. |
 
 ### Nacos sink transport
 
@@ -122,12 +121,10 @@ accepted as Nacos 3 evidence until the real v3.2.4 gate proves that persistent
 operations use gRPC rather than `/v1/ns` HTTP. The explicit `http-compat`
 transport is test-only and is never a product fallback.
 
-For notifications, configure `--appcenter-notice-endpoint`,
-`--appcenter-notice-auth-token`, `--appcenter-notice-timeout` and
-`--appcenter-notice-retries` only after the deployment supplies a
-`NoticeRequestBuilder` payload contract. Without a complete contract the
-runtime uses a fail-closed notifier and records delivery failure; local log
-output is not treated as appcenter alert delivery.
+AppCenter notification flags are retained only for compatibility with older
+callers. The current release does not configure or send AppCenter requests;
+the runtime remains log-only/fail-closed, and local log output is not treated
+as AppCenter alert delivery.
 | `-w, --disable-worker` | `false` | Disable the real push; pushes are logged only. Testing flag. |
 | `--appcodes` | `[]` | Restrict pushes to these appcodes. Testing flag. |
 | `--metrics-addr` | `:8090` | Prometheus metrics listen address. |

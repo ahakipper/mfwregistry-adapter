@@ -1,5 +1,9 @@
 # DSCA Track 5 — Model Fidelity & the Periodic 3-Diff
 
+> **Historical scope note (2026-09-19):** Atlas references in this model audit
+> describe the legacy mirror and reconcile findings. Atlas wire work and
+> AppCenter delivery are excluded from the current Spotter release.
+
 **Status:** Phase 1 audit document (author DS-5; adversarial review returned NEEDS-REVISION — revisions applied 2026-09-09: DS-5-2's activation re-scoped as conditional on widening the consul status request, since dsca-3 as written masks the pair as a false-no-diff; DS-5-4 re-scoped per leg and its remedy reconciled with dsca-3's R2; internal cross-references corrected; §5 live-wire numbers corrected; scenario fixtures persisted as Appendix A)
 **Date:** 2026-09-09 (execution window 2026-09-11, see LIVE-STATE VERIFICATION)
 **Repo:** module `spotter`, branch `refactor/all`, HEAD 69b0105, read-only
@@ -98,7 +102,7 @@ This is a "system bug"-shaped cause (a stand-in that never serves a view), **not
 If the remote view were a real Atlas serving back what spotter pushed, the compare's old instance is the **Atlas model**: the JSON payload pushed by `discoverycenter.Client.Sync` marshals the **entire domain struct** (registry.go:60-77 → client.go:116-137, `json.Marshal(instances)` — the log's `rsyncing instance` lines show every field: Ports, EnvCode, Label, Image, Hostname, Memory…). A faithful Atlas round trip is **full-fidelity** for every field of the model, so:
 
 - Perpetual mismatch candidates: **none.** For any local steady-state pair, old==new on every compared field (both are conversion outputs of the same unchanged pod).
-- The user's dichotomy resolves to "system bug" in this world: the only observed every-cycle behavior comes from the empty view (World 0), and any future every-cycle report against a real Atlas must come from a real drift or an Atlas-side write-back asymmetry (outside this repo).
+- The user's dichotomy resolves to "system bug" in this historical world: the only observed every-cycle behavior comes from the empty view (World 0). Any real-Atlas scenario is outside the current release scope and is not a follow-up task.
 - The consul unhealthy `Enabled` asymmetry is invisible here: the Atlas JSON carries `Enabled:true` (the forced-false override exists **only** in the nacos sink's register, nacos.go:362-365 — it is a per-sink write policy, not a model transformation).
 - Cache-diff path (b): `pod2Instance`'s `hasInstanceDiff(cache, fresh)` compares two local conversion outputs — same source, same derivation, no round trip. CPU/Memory are excluded (k8s.go:254, the Atlas-int-legacy). Executed reasoning over the conversion functions: `formatCpuSize`/`formatMemorySize`/`formatState`/`formatStatus` are deterministic functions of the pod object; a pod that did not change produces a byte-identical instance; a pod whose status flapped produces a real change (Pod status updates bump `metadata.resourceVersion` → new `Reversion` → correctly pushed). **No flap candidate found.** The one degenerate case is offline-equal (`old.Status==new.Status==3` → false, `k8s.go:247`) — deliberate.
 - UPDATE semantics (c): `new.Reversion > old.Reversion` (`k8s.go:249`) against an Atlas-served old with the same reversion → gate false; field-equality path: all equal → no push. A nacos-side manual edit is **not** in this world's compare at all (nacos is never read for comparing, plan §6.3 v1) — the only nacos reconcile is the PushAll prune, which is id-set only.

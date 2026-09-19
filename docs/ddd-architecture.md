@@ -11,15 +11,16 @@
 > Legacy constructors and `cmd/adapter.go`'s compatibility bridge remain for
 > older callers; `pkg/providers/aggregate` is isolated behind the
 > `legacyaggregate` build tag. Notifications have a real transport seam and
-> fail-closed behavior, but appcenter endpoint/auth/SLA evidence is still
-> required for any future AppCenter integration; legacy shim retirement is a
-> separate migration decision. See remediation plan §13.
+> fail-closed behavior. AppCenter integration is explicitly excluded from the
+> current Spotter deliverable; no endpoint/auth/SLA evidence is a current gate.
+> Legacy shim retirement is a separate, explicitly deferred migration decision.
 
 > **Current-status addendum (code baseline `356aa75`):** The active graph
 > has explicit ports and no direct legacy imports; `legacycompat` is the sole
 > compatibility read boundary and aggregate is excluded by build tag. Nacos
-> real-gate and Observe harness lifecycles are bounded and fail-closed, while
-> real AppCenter/Atlas/Nacos evidence remains unavailable. Discovery-center
+> real-gate and Observe harness lifecycles are bounded and fail-closed. Atlas
+> and AppCenter are deliberately excluded from the current release scope;
+> their real evidence is not a release blocker. Discovery-center
 > empty-provider retrieval and provider cache deletion now preserve unfiltered,
 > nil-safe, deep-copy and unique-legacy-identity semantics.
 > Nacos exported constructors and `CheckReadiness` are SDK-default; HTTP
@@ -27,6 +28,13 @@
 > The injected `NacosClusterAdmin` boundary performs pre-register health-check
 > setup with per-pair claim/wait and bounded, idempotent close; default
 > composition intentionally supplies no unverified implementation.
+
+> **Scope correction (2026-09-19):** The Nacos 3 + KWOK data-plane reliability
+> gate passed the fresh 20-minute/1000-Pod run. Atlas real protobuf compatibility
+> and AppCenter delivery are excluded by decision, not unfinished release work.
+> References later in this design document to Atlas/AppCenter entry gates are
+> historical plan material unless a future scope decision explicitly reopens
+> them.
 
 The remaining compatibility reads are centralized in
 `internal/infra/legacycompat`; provider, conversion, elector, and metrics
@@ -868,6 +876,7 @@ wrapper packages no longer exist; `internal/infra/logging` and the explicit
 The Nacos 3 ARM64 one-hour KWork evidence proves strict full-Instance equality,
 including labels, metadata, and Reversion, while the bounded application batch
 test proves 201 persistent registrations converge as `100 + 100 + 1`. The
-remaining in-scope reliability gate is the two-hour burst run. AppCenter real
+current in-scope reliability gate is complete: the fresh Nacos 3 + KWOK
+20-minute burst run passed with exact K8s/Spotter/Nacos equality. AppCenter real
 delivery, deployment-level Nacos operations, and real Atlas protobuf wire
 compatibility remain deliberately excluded by the current scope decision.

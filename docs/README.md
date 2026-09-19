@@ -2,8 +2,13 @@
 
 Documentation set for **spotter**, the discovery-center adapter
 (`spotter`) that aggregates instance data from multiple
-Kubernetes clusters and Consul/ECS and pushes standardized instance events to
-the discovery center ("Atlas") over gRPC.
+Kubernetes clusters and Consul/ECS and publishes standardized instance data to
+the current Nacos Sink.
+
+> **Current release scope (2026-09-19):** Nacos 3 is the active Sink and data
+> plane. Atlas and AppCenter are explicitly excluded from this release. Atlas
+> references below are historical/compatibility provenance only; AppCenter
+> remains log-only/fail-closed and has no delivery integration task.
 
 | Document | Description |
 | --- | --- |
@@ -12,7 +17,7 @@ the discovery center ("Atlas") over gRPC.
 | [operations.md](operations.md) | Operational runbook: build and run instructions, flags reference, environment presets, metrics/alerting reference, failure scenarios and deployment notes. |
 | [system-readiness-consistency-audit-2026-09-12.md](system-readiness-consistency-audit-2026-09-12.md) | Current-state readiness audit: unfinished-item verification, Nacos HTTP/SDK/gRPC assessment, mandatory SDK migration defect, K8s event-path risks, Reconcile/Sink closure and prioritized optimization plan. |
 | [system-readiness-consistency-remediation-plan-2026-09-12.md](system-readiness-consistency-remediation-plan-2026-09-12.md) | v6 remediation plan: mandatory official Nacos SDK/facade adoption, ordered P0/P1/P2 work packages, complete SDK test matrix, E2E gates, migration/rollback rules and release blockers. |
-| [atlas-wire-compatibility.md](atlas-wire-compatibility.md) | Atlas gRPC wire-compatibility gate: current JSON mirror limitations, mock-versus-real evidence boundary, and the guarded `atlas_real` round-trip test. |
+| [atlas-wire-compatibility.md](atlas-wire-compatibility.md) | **Excluded-scope record:** historical Atlas JSON-mirror limitations and the guarded `atlas_real` test; no current Atlas implementation gate. |
 | [evidence/nacos-arm64-scratch-2026-09-13.md](evidence/nacos-arm64-scratch-2026-09-13.md) | Real ARM64 local Nacos SDK lifecycle evidence with immutable image, port mappings, cleanup status, and explicit production evidence limits. |
 | [nacos-sdk-provenance.md](nacos-sdk-provenance.md) | Pinned upstream SDK race fix provenance, expiry, and lifecycle CI gate. |
 | [remediation-execution-status-2026-09-13.md](remediation-execution-status-2026-09-13.md) | Current implementation, test evidence, release blockers, and external verification boundary. |

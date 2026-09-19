@@ -9,10 +9,15 @@
 > deployment operations and Atlas real wire compatibility are out of scope;
 > the old v2/cluster-admin text below is historical provenance.
 
-> Current scope: Atlas remains an optional existing Sink/mock deferred from the
-> current release; this plan's release gate covers the Nacos single-Sink SDK.
-> The server currently wires Atlas by default, so this deferral does not make
-> an Atlas-less deployment production-ready; optional wiring is a separate task.
+> **Current scope correction (2026-09-19):** Atlas is explicitly excluded from
+> the current Spotter deliverable. Existing Atlas Sink/mock wiring is retained
+> only as compatibility scaffolding; Atlas protocol, deployment, and removal
+> work are not current tasks or release gates. This plan's active gate is the
+> Nacos single-Sink data plane.
+
+> The design sections below were written when Atlas was the primary fan-out
+> sink. They are retained as historical implementation context only; they are
+> not an instruction to implement or validate Atlas in the current release.
 
 > **Current-state addendum (2026-09-13, code baseline `356aa75`):** This document contains the original F5
 > implementation plan. Its D4 “hand-rolled HTTP client” decision is superseded:
@@ -95,7 +100,7 @@ local docker/colima stack and are ground truth.
 
 ---
 
-## 1. Executive Summary
+## 1. Executive Summary (historical design context)
 
 spotter pushes provider instances (k8s pods, consul catalog entries) to a
 single discovery center ("Atlas") over gRPC. Three structural defects block
@@ -134,8 +139,10 @@ production callers: k8s and consul still run inline diff policies
 The multi-sink work must not force-unify those policies — the taken decision
 in ddd-architecture.md §4(j).
 
-**Goal.** Nacos becomes a `ports.InstanceSink`; Atlas remains an existing
-Sink/mock integration point deferred to a later release,
+**Historical goal (completed context, not a current work item).** Nacos became
+a `ports.InstanceSink`; Atlas remains only as an existing compatibility
+Sink/mock in the historical graph. No later Atlas implementation or validation
+commitment is implied,
 behind a `FanoutSink` the worker talks to, with per-sink retry state — plus
 a full local end-to-end environment (real Nacos, consul, k3s, etcd
 election) and a 1-hour continuous soak with extreme edge cases, runnable on
@@ -997,9 +1004,9 @@ phase ends green on `make test-unit test-blackbox test-e2e` (F5 adds
 4. **Nacos 2.x gRPC protocol / official Go SDK** — no longer a non-goal;
    mandatory migration and compatibility gate is defined by D4 (§7.2) and
    remediation plan §10.
-5. **Production Atlas wire format** — real proto marshaling remains the
-   documented follow-up of v2.go:9-16; F2's aliases change nothing about
-   it.
+5. **Production Atlas wire format** — historical/non-goal. Real proto
+   marshaling is intentionally excluded from the current release; F2's aliases
+   change nothing about that historical boundary.
 6. **Nacos health-check registration** (TCP/HTTP checks) — instance
    liveness stays spotter's responsibility, consistent with the persistent
    instance rationale (§7.1).
