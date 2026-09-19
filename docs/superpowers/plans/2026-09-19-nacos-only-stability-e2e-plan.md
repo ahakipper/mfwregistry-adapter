@@ -12,8 +12,8 @@
 | 1 — Nacos-only composition | **PASS** | `91fb3a7`; independent review PASS |
 | 2 — canonical all-field reconcile | **PASS** | `52b787c`; independent adversarial review PASS |
 | 3 — batch/ordering/failure recovery | **PASS** | `92712fb`; independent adversarial review PASS |
-| 4 — E2E/Observe qualification | **PARTIAL** | Expanded E2E landed; final-code two-hour run pending |
-| 5 — cleanup/release gate | **IN PROGRESS** | AppCenter removal `d80aa42`; aggregate deletion `0e6de37`; final matrix/docs pending |
+| 4 — E2E/Observe qualification | **RUNNING** | Expanded E2E landed; durable final-code two-hour run is executing after the batch-polling fix |
+| 5 — cleanup/release gate | **IN PROGRESS** | AppCenter removal `d80aa42`; aggregate deletion `0e6de37`; batch-polling fix `bb59885`; final matrix/docs pending |
 
 ## Scope decision
 
@@ -110,6 +110,9 @@ and a guarded real Nacos 3 catalog/Subscribe replay.
   for query visibility).
 - Preserve the full operation type, scope, batch ID, and prune barrier across
   partial failures and retries.
+- Treat an acknowledged official SDK write as the write-attempt boundary. Do
+  not synchronously read the same batch back from Nacos; catalog visibility is
+  eventually verified by prune/reconcile and the external three-watch oracle.
 
 ### E2E gates
 

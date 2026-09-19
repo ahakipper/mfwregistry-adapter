@@ -562,15 +562,17 @@ binary into `/usr/bin` and uses `/usr/bin/spotter` as the entrypoint.
 8. **Go 1.25 module and mixed historical formatting.** `go.mod` declares
    `go 1.25`; older files retain their original style, but changed files are
    gofmt-checked.
-9. **Nacos transport boundary.** All production Nacos operations route through
+9. **Historical Nacos transport boundary (superseded by the current addendum).**
+   All production Nacos operations route through
    pinned official `nacos-sdk-go/v3` commit `93a93504cc2f`: persistent gRPC
    lifecycle plus naming query/subscribe,
    service-list, complete SelectAll-based catalog/prune, and SDK readiness
    read/write canary. SDK mode does not allocate the compatibility HTTP client.
-   The pinned SDK has no cluster health-check Admin API, so that operation
-   returns typed `ErrUnsupportedOperation` and is recorded as an owned,
-   expiring release blocker; it never falls back to raw HTTP. The HTTP adapter
-   remains only for explicit test/rollback mode, which product wiring rejects.
+   The historical SDK pin had no cluster health-check Admin API, so that
+   operation was recorded as an owned release blocker; the current default
+   treats health policy as deployment-owned and does not require this optional
+   admin operation. The HTTP adapter remains only for explicit test/rollback
+   mode, which product wiring rejects.
    Real Nacos SDK/TLS/auth/reconnect evidence is still required before a
    production PASS.
 
@@ -589,13 +591,15 @@ not open Spotter implementation defects. Nacos deployment auth/TLS,
 non-public namespaces, HA/leaderless recovery, and Consul scale remain outside
 the current Spotter data-plane gate.
 
-Implementation baseline `0e6de37` makes Nacos the only implicit active Sink,
+Implementation baseline `bb59885` makes Nacos the only implicit active Sink,
 requires `--atlas-compat` for any Atlas wiring, compares the complete canonical
 Instance (including labels, ports, images, source fields and Reversion), shares
 one mutation limit across incremental/full/retry/prune work, deletes the
 AppCenter HTTP transport and legacy aggregate scaffold, and keeps notice
-delivery resource-free/fail-closed. The fresh two-hour final-code observation
-is the remaining in-scope evidence gate.
+delivery resource-free/fail-closed. Persistent batch success ends at
+acknowledged official SDK writes plus prune; the removed synchronous catalog
+read-after-write check is covered by the external Observe oracle. The fresh
+two-hour final-code observation is the remaining in-scope evidence gate.
 
 ## References
 

@@ -4,7 +4,7 @@ Operational reference for building, running, monitoring and troubleshooting
 spotter. See [architecture.md](architecture.md) for design background and
 [data-model.md](data-model.md) for the pushed data model.
 
-## Current release status (2026-09-19, implementation baseline `0e6de37`)
+## Current release status (2026-09-20, implementation baseline `bb59885`)
 
 - The supported Nacos target is `nacos/nacos-server:v3.2.4-slim` on
   `linux/arm64`. The historical Nacos 2.1.0 scratch records below are
@@ -13,7 +13,14 @@ spotter. See [architecture.md](architecture.md) for design background and
   `93a93504cc2f`. Persistent register/deregister use the adapter's v3 gRPC
   request seam; query, Subscribe, service-list, readiness and catalog/reconcile
   remain SDK-backed. Real Nacos 3.2.4 ARM64 lifecycle, 201-instance application
-  batch, and 20-minute/1000-Pod KWOK gates passed.
+  batch, and 20-minute/1000-Pod KWOK gates passed; the final two-hour gate is
+  currently running on the final code.
+- Application batches are logical Spotter batches, not a Nacos persistent
+  protocol batch: one application scope is partitioned at 100 items and sent
+  through bounded official SDK item RPCs. RPC acknowledgement completes the
+  write attempt; Spotter intentionally does not synchronously poll the same
+  catalog snapshot. Catalog visibility is checked by prune/reconcile and the
+  external Observe oracle, so a lagging read cannot create a false retry.
 - `healthChecker=NONE` is a service/cluster management setting provisioned by
   the Nacos deployment. It is not a prerequisite for the SDK's register,
   deregister, query, or subscribe calls. Spotter does not silently fall back to
@@ -202,3 +209,11 @@ two-hour/1000-Pod corrected three-watch run on the final code.
 Missing Admin/Maintainer support does not disable ordinary naming operations.
 Spotter assumes cluster health policy is deployment-owned and does not attempt
 to configure it unless the optional `admin-managed` mode is explicitly chosen.
+
+### Final-code two-hour gate
+
+The durable run is launched outside the interactive shell through
+`scripts/observe-runner.sh` and macOS `launchctl`. Its terminal status, tick
+JSONL, summary, latency percentiles, and teardown status are authoritative. A
+run stopped by host/session interruption is evidence of test interruption, not
+a product PASS or FAIL.

@@ -5,7 +5,7 @@
 > preserved notifier/Warnf semantics. The fabricated empty CatalogService
 > issue is closed for migrated callers. Consul scale remains a non-goal.
 
-> **Implementation status (2026-09-19, baseline `0e6de37`):** The composition
+> **Implementation status (2026-09-20, baseline `bb59885`):** The composition
 > root and `internal/ports` own explicit logger/notifier/metrics/config
 > dependencies. Package-global config/log/notice bridges, compatibility
 > constructors, and `pkg/providers/aggregate` are deleted. AppCenter transport
@@ -868,7 +868,9 @@ wrapper packages no longer exist; `internal/infra/logging` and the explicit
 The Nacos 3 ARM64 one-hour KWork evidence proves strict full-Instance equality,
 including labels, metadata, and Reversion, while the bounded application batch
 test proves 201 persistent registrations converge as `100 + 100 + 1`. The
-current in-scope reliability gate is complete: the fresh Nacos 3 + KWOK
-20-minute burst run passed with exact K8s/Spotter/Nacos equality. AppCenter real
-delivery, deployment-level Nacos operations, and real Atlas protobuf wire
-compatibility remain deliberately excluded by the current scope decision.
+current in-scope code and 20-minute reliability gate are complete: the fresh
+Nacos 3 + KWOK burst run passed with exact K8s/Spotter/Nacos equality. The final
+two-hour gate is still pending until the durable final-code run produces a
+terminal summary and teardown evidence. AppCenter real delivery,
+deployment-level Nacos operations, and real Atlas protobuf wire compatibility
+remain deliberately excluded by the current scope decision.

@@ -4,15 +4,22 @@ This document is the current execution ledger for the remediation plan. It
 supersedes stale HEAD labels in historical audit sections; historical findings
 remain unchanged and are not promoted to current PASS evidence.
 
-## Authoritative current addendum — 2026-09-19
+## Authoritative current addendum — 2026-09-20
 
-- Current branch: `refactor/all`; evidence baseline `436a4af`.
+- Current branch: `refactor/all`; implementation/evidence baseline `bb59885`.
 - Nacos target: `nacos/nacos-server:v3.2.4-slim` on `linux/arm64`, official
   Go SDK gRPC naming path, application-scoped batches capped at 100.
 - The fresh Nacos 3 + KWOK 20-minute run passed with 106/106 exact ticks,
   3368/3368 mutation correlation, zero missing boundaries, zero drops, final
   source population 1000, and an exact post-quiescence snapshot. See
   [nacos3-kwok-20m-pass-2026-09-19.md](evidence/nacos3-kwok-20m-pass-2026-09-19.md).
+- A prior final-code two-hour attempt was externally interrupted after 266
+  exact ticks; it is retained as interrupted evidence, not a two-hour verdict.
+  That run exposed false retry amplification from synchronous catalog polling
+  after successful SDK writes. Commit `bb59885` removed that hot-path poll,
+  added vendor-error and lagging-catalog safety regressions, and changed the
+  guarded real-Nacos verifier to bounded fresh-client polling. The durable
+  final-code two-hour gate is now running.
 - The active graph is now Nacos-only by default. Atlas requires the explicit
   `--atlas-compat` escape hatch; the obsolete aggregate scaffold and
   package-global logger/notice/config bridge are deleted.
@@ -25,7 +32,7 @@ remain unchanged and are not promoted to current PASS evidence.
 ## Current baseline
 
 - Branch: `refactor/all`
-- Implementation baseline: `0e6de37` (Nacos-only graph, canonical reconcile,
+- Implementation baseline: `bb59885` (Nacos-only graph, canonical reconcile,
   Sink-wide batch limits, fail-closed notices, and aggregate deletion)
 - SDK: `github.com/nacos-group/nacos-sdk-go/v3`
   `v3.0.0-20260831100852-93a93504cc2f` (upstream commit `93a93504cc2f`)
@@ -47,9 +54,9 @@ remain unchanged and are not promoted to current PASS evidence.
 | Nacos authoritative reads | **CODE PASS** | GetAll and prune create one fresh SDK read session per snapshot, use an isolated temporary cache directory, and close it before returning. |
 | Nacos ARM64 persistent lifecycle | **NACOS 3 SCRATCH PASS** | `nacos/nacos-server:v3.2.4-slim` on `linux/arm64`; persistent request lifecycle, canonical read-back, 201-entry application batch, and cleanup passed. |
 | Nacos reconnect | **SCRATCH PASS** | Single-client outage→write→fresh-query gate passed under `-race`; deployment-level HA/multi-node failover and production TLS/auth are outside this release scope. |
-| Nacos batch | **SPOTTER APPLICATION BATCH CODE PASS; PROTOCOL BATCH TARGET-DEPENDENT** | Initial snapshots and retries group one application scope at a time, split at 100 items, serialize within that scope, and use global bounded concurrency (8) over official SDK persistent single-instance calls. Nacos 2.1.0 protocol-level ephemeral batch returned `RequestHandler Not Found`; this does not invalidate Spotter application batching. |
+| Nacos batch | **SPOTTER APPLICATION BATCH CODE PASS; PROTOCOL BATCH NOT REQUIRED** | Initial snapshots and retries group one application scope at a time, split at 100 items, serialize within that scope, and use global bounded concurrency (8) over official SDK persistent single-instance calls. A successful SDK RPC is the write boundary; synchronous catalog read-after-write was removed because visibility may lag under churn. Nacos protocol-level batch remains unsupported/irrelevant to the persistent application contract. |
 | Observe deterministic engine | **CODE PASS** | Zap timestamp parsing, ledger-before-apply/delete, live source snapshots, divergence ageing and per-tick verdicts are unit/race tested. |
-| Observe lifecycle | **CODE PASS; 20M PASS; 2H PENDING** | Owned Nacos 3/KWOK lifecycle passed the final 20-minute gate; the same corrected three-watch method must run for two hours on this final code. |
+| Observe lifecycle | **CODE PASS; 20M PASS; 2H RUNNING** | Owned Nacos 3/KWOK lifecycle passed the final 20-minute gate; a durable corrected three-watch run is executing for two hours on commit `bb59885`. Only its terminal summary and teardown evidence can promote this row to PASS. |
 | DDD active graph | **PASS** | Production and tests use explicit dependencies; legacy package globals and the build-tagged aggregate scaffold are deleted and statically forbidden. |
 | Notifications | **FAIL-CLOSED BY SCOPE** | AppCenter/HTTP transport and its CLI/config secrets are deleted. The generic injected Notifier port remains; the default performs no external I/O. |
 | Atlas | **EXCLUDED** | Existing compatibility Sink/mock only; real protobuf/method/TLS/auth compatibility is not a current task or release gate. |

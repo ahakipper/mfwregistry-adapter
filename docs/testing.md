@@ -8,16 +8,19 @@ per tier, and specifies the exact Makefile targets that will implement the
 matrix. It is the implementation brief for the test work that follows; it does
 not change any code by itself.
 
-**Current status addendum (2026-09-19):** the fresh Nacos 3 + KWOK 20-minute
+**Current status addendum (2026-09-20, implementation baseline `bb59885`):** the fresh Nacos 3 + KWOK 20-minute
 1000-Pod gate passed with exact three-watch correlation and full Instance
 equality. Atlas real tags and AppCenter delivery are intentionally excluded
 from the current release gate; their absence is not a pending Spotter task.
-The active implementation baseline is `0e6de37`: Nacos-only composition is the
+The active implementation baseline is `bb59885`: Nacos-only composition is the
 default, canonical reconcile covers every Instance field, application batches
 share one Sink-wide mutation limit, confirmed-empty retries preserve prune
 authority, external AppCenter/HTTP notification code is deleted, and the
-legacy aggregate scaffold is deleted. The remaining in-scope evidence gate is
-the fresh two-hour/1000-Pod run on this final code.
+legacy aggregate scaffold is deleted. Persistent application batch success is
+defined by acknowledged official SDK writes plus successful prune; immediate
+catalog read-after-write is deliberately not a hot-path requirement. The
+remaining in-scope evidence gate is the durable fresh two-hour/1000-Pod run on
+this final code.
 
 **Historical status (2026-09-13, code baseline `33606fa`):** the default unit, full and
 race suites are green and `go vet ./...` is clean. The Nacos naming path is

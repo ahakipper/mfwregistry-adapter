@@ -5,11 +5,19 @@ Documentation set for **spotter**, the discovery-center adapter
 Kubernetes clusters and Consul/ECS and publishes standardized instance data to
 the current Nacos Sink.
 
-> **Current release scope (2026-09-19):** Nacos 3 is the active Sink and data
+> **Current release scope (2026-09-20):** Nacos 3 is the active Sink and data
 > plane. Atlas and AppCenter are explicitly excluded from this release. Atlas
 > references below are historical/compatibility provenance only; AppCenter
 > transport and configuration are deleted, while generic notices remain
-> fail-closed. The current implementation baseline is `0e6de37`.
+> fail-closed. The current implementation baseline is `bb59885`.
+
+> **Batch acceptance boundary:** a successful official SDK persistent RPC is a
+> successful write attempt. Spotter does not synchronously read the same
+> application batch back from Nacos, because catalog/SDK visibility may lag an
+> acknowledged write under churn. `PushAll` still prunes only against the
+> local desired identity set, and periodic canonical reconcile plus the
+> three-watch Observe harness verify eventual full-field equality. Catalog lag
+> is therefore not converted into a false retry.
 
 | Document | Description |
 | --- | --- |

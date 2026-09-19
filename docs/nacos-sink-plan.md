@@ -19,7 +19,7 @@
 > sink. They are retained as historical implementation context only; they are
 > not an instruction to implement or validate Atlas in the current release.
 
-> **Current-state addendum (2026-09-13, code baseline `356aa75`):** This document contains the original F5
+> **Current-state addendum (2026-09-20, code baseline `bb59885`):** This document contains the original F5
 > implementation plan. Its D4 “hand-rolled HTTP client” decision is superseded:
 > all production Nacos operations must now go through the official Nacos SDK or
 > an explicitly versioned SDK facade. The existing HTTP client may remain only
@@ -27,9 +27,10 @@
 > allocate the compatibility `net/http` client. See
 > [system-readiness-consistency-remediation-plan-2026-09-12.md](system-readiness-consistency-remediation-plan-2026-09-12.md) §10 for the
 > mandatory migration and complete test gate.
-> Production SDK startup is intentionally **BLOCKED / NOT VERIFIED** before
-> readiness because SDK pseudo-version `0024865` lacks the required cluster-admin health-check
-> operation; no HTTP fallback is permitted in product wiring. Real Nacos tests
+> The historical v2/Admin-blocker paragraph below is superseded for the current
+> Nacos 3 release: deployment-owned health policy is the default, ordinary SDK
+> naming startup does not require a cluster-admin facade, and no HTTP fallback
+> is used in product wiring. Real Nacos tests
 > are guarded and cleanup-safe with local ARM64 scratch evidence, so mock/race evidence
 > does not promote the production status.
 > Exported `NewClient` and `NewSink` are SDK-default and therefore inherit
@@ -63,14 +64,14 @@
 > Production readiness is governed by remediation plan B2/B3 and
 > `ID-NACOS-SDK-MANDATE`.
 
-Current operation ownership (baseline `728f1d2`) is
+Current operation ownership (baseline `bb59885`) is
 intentionally explicit:
 
 | Operation | Production adapter | Temporary exception |
 |---|---|---|
-| persistent register/deregister, SelectAll, service list, subscribe/unsubscribe, readiness read/write canary | official `nacos-sdk-go/v2` naming facade (`--nacos-transport=sdk`) | none; `http-compat` is rollback/test-only |
+| persistent register/deregister, SelectAll, service list, subscribe/unsubscribe, readiness read/write canary | official `nacos-sdk-go/v3` naming facade (`--nacos-transport=sdk`) | none; `http-compat` is rollback/test-only |
 | catalog/prune | official SDK `SelectAllInstances` (complete view includes disabled/unhealthy hosts) | catalog HTTP endpoint remains only in explicit `http-compat` fixtures |
-| cluster health-check update | **unsupported in official naming SDK pseudo-version `0024865`; SDK mode returns `ErrUnsupportedOperation` before any business register and logs a release gap** | versioned HTTP compatibility adapter only; never selected by product wiring |
+| cluster health-check update | **deployment-owned by default; optional admin-managed mode returns typed `ErrUnsupportedOperation` when no approved facade is injected** | versioned HTTP compatibility adapter only; never selected by product wiring |
 
 The server wiring defaults to `sdk`; an explicit `http-compat` mode is required
 for the nacosmock suites and emergency rollback, and is rejected when
@@ -79,16 +80,15 @@ rejected in SDK mode because SDK pseudo-version `0024865` exposes username/passw
 than an equivalent static-token option; this is fail-closed by design.
 
 The code-level exception registry (`pkg/nacos.HTTPCompatibilityExceptions`)
-now contains only `cluster-health-check-update`, with owner
-`spotter-maintainers`, expiry `2026-10-31`, and the removal criterion
-“official Nacos Admin/Maintainer SDK equivalent verified against the target
-version”. The expiry does not waive the release blocker. The separate
+now contains only the optional `cluster-health-check-update` operation. It is
+not part of the deployment-owned default data plane. The separate
 `SDKUnsupportedOperations` registry and typed `ErrUnsupportedOperation` keep
-the production gap explicit; there is no hidden fallback to `net/http`.
+explicit admin-managed requests fail-closed; there is no hidden fallback to
+`net/http`.
 
 Status: authoritative implementation plan for the multi-sink initiative on
 `refactor/all`; the historical implementation baseline `728f1d2` is superseded
-by the current-status addendum above and HEAD `356aa75`. The lead implements it
+by the current-status addendum above and HEAD `bb59885`. The lead implements it
 phase-by-phase (F2..F6) under agent review; each phase's exit criteria are
 the review contract. Companions: [ddd-architecture.md](ddd-architecture.md)
 (target layering, §4 decisions), [architecture.md](architecture.md),
@@ -586,10 +586,10 @@ ddd-architecture.md §4(c)).
   authoritative. The cost — drift persists if spotter dies — is exactly
   what the retry queue and the full-push reconcile (§7.4) bound.
 
-### 7.2 Decision D4 — official SDK/facade is mandatory; HTTP is compatibility-only
+### 7.2 Historical Decision D4 — official SDK/facade is mandatory; HTTP is compatibility-only
 
-**Current decision.** `pkg/nacos` must depend on a `NacosTransport` and an
-official `nacos-sdk-go/v2` facade for naming operations: register,
+**Historical decision.** `pkg/nacos` must depend on a `NacosTransport` and an
+official SDK facade for naming operations: register,
 deregister, service list, query, subscribe and batch. Admin/Catalog/prune and
 readiness must use an official Admin/Maintainer SDK when the target Nacos
 version provides one, or a separately versioned and audited facade with an
@@ -1001,9 +1001,10 @@ phase ends green on `make test-unit test-blackbox test-e2e` (F5 adds
 3. **Non-default Nacos namespaces** (`namespaceId` stays `public`) — historical
    F5 local scope only; current B2/B3 requires namespace/group coverage before
    production.
-4. **Nacos 2.x gRPC protocol / official Go SDK** — no longer a non-goal;
-   mandatory migration and compatibility gate is defined by D4 (§7.2) and
-   remediation plan §10.
+4. **Nacos protocol-level persistent batch** — not required by the current
+   Spotter contract. The current Nacos 3 path uses application-scoped logical
+   batches (maximum 100) made of official SDK persistent item RPCs; protocol
+   batch capability is not used as a release gate.
 5. **Production Atlas wire format** — historical/non-goal. Real proto
    marshaling is intentionally excluded from the current release; F2's aliases
    change nothing about that historical boundary.
@@ -1027,7 +1028,14 @@ phase ends green on `make test-unit test-blackbox test-e2e` (F5 adds
 colima/docker stack (§8.2).*
 ### Current SDK startup status
 
-The production SDK path is intentionally fail-closed. `NewSinkWithConfig` rejects construction before readiness when the official Go SDK cannot perform cluster-admin health-check configuration. This prevents registration side effects with uncontrolled health semantics. The status is `BLOCKED / NOT VERIFIED` until an approved Admin/Maintainer SDK or adapter is verified against the target Nacos version.
+The production SDK path uses Nacos 3 and treats health policy as
+deployment-owned. `NewSinkWithConfig` does not require a cluster-admin facade
+for ordinary register, deregister, query, Subscribe, service-list, readiness,
+or application-batch operations. Explicit `admin-managed` mode remains
+fail-closed if no approved facade is injected; it never falls back to raw HTTP.
+
+The older v2/Admin-blocker wording in this historical plan is retained only as
+provenance and is not a current release blocker.
 
 ### Protocol batch versus Spotter persistent application batch
 
