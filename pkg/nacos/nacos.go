@@ -604,7 +604,7 @@ func (s *Sink) GetAll(statuses []int32, provider string) (*instance.InstanceList
 				s.logger.Warnf("nacos: ignoring non-owned catalog instance %s for reconcile", host.InstanceID)
 				continue
 			}
-			ins := reconstruct(service, host)
+			ins := reconstructForTransport(service, host, readClient.sdk != nil)
 			if !statusAllowed(statuses, ins.Status) {
 				continue
 			}
@@ -984,6 +984,25 @@ func reconstruct(service string, host Host) *instance.Instance {
 	}
 	if cpu, err := strconv.ParseFloat(host.Metadata["cpu"], 32); err == nil {
 		ins.Cpu = float32(cpu)
+	}
+	return ins
+}
+
+// reconstructForTransport preserves the canonical provider projection while
+// also surfacing an SDK wire-policy drift. Nacos 3 must keep status-2
+// persistent hosts transport-enabled so query/Subscribe can observe them. The
+// canonical Enabled value can legitimately be false (K8s) or true (Consul), so
+// it cannot directly carry the wire bit. When an SDK host violates the derived
+// policy, force the reconstructed Reversion to zero. Valid provider
+// revisions are nonzero, so this is a collision-free drift sentinel even when
+// canonical metadata and the wire bit were both tampered in opposite ways.
+// The comparator then emits one heal push, and the next read restores the real
+// canonical revision once the wire host is enabled again. HTTP compatibility
+// retains its historical disabled status-2 shape and does not use this rule.
+func reconstructForTransport(service string, host Host, sdkTransport bool) *instance.Instance {
+	ins := reconstruct(service, host)
+	if sdkTransport && ins.Status == instance.InstanceStatusUnhealthy && !host.Enabled {
+		ins.Reversion = 0
 	}
 	return ins
 }

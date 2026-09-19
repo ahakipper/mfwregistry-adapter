@@ -37,6 +37,48 @@ func TestNacosMetadataRoundTripsLabelsAndReversion(t *testing.T) {
 	}
 }
 
+func TestReconstructForSDKSurfacesDisabledUnhealthyWireDriftWithoutSteadyLoop(t *testing.T) {
+	for _, domainEnabled := range []bool{false, true} {
+		local := &instance.Instance{
+			InstanceId: "unhealthy", AppCode: "pay-user", Provider: "k8s",
+			Ip: "10.0.0.2", Ports: []*instance.PortInfo{{Port: 8080}},
+			Enabled: domainEnabled, Status: instance.InstanceStatusUnhealthy,
+			State: instance.InstanceStateProbing, Reversion: 7,
+		}
+		metadata := metadataOf(local)
+		steady := reconstructForTransport("pay-user", Host{
+			IP: "10.0.0.2", Port: 8080, ClusterName: "k8s", Enabled: true, Metadata: metadata,
+		}, true)
+		if instance.DiffNacosReconcile(local, steady) {
+			t.Fatalf("domain Enabled=%t: expected SDK unhealthy wire shape caused a loop", domainEnabled)
+		}
+		drifted := reconstructForTransport("pay-user", Host{
+			IP: "10.0.0.2", Port: 8080, ClusterName: "k8s", Enabled: false, Metadata: metadata,
+		}, true)
+		if !instance.DiffNacosReconcile(local, drifted) {
+			t.Fatalf("domain Enabled=%t: disabled SDK unhealthy host was not surfaced as drift", domainEnabled)
+		}
+		if drifted.Reversion != 0 {
+			t.Fatalf("domain Enabled=%t: transport drift sentinel Reversion=%d, want 0", domainEnabled, drifted.Reversion)
+		}
+		combinedCanonicalDrift := *local
+		combinedCanonicalDrift.Enabled = !local.Enabled
+		combined := reconstructForTransport("pay-user", Host{
+			IP: "10.0.0.2", Port: 8080, ClusterName: "k8s", Enabled: false,
+			Metadata: metadataOf(&combinedCanonicalDrift),
+		}, true)
+		if !instance.DiffNacosReconcile(local, combined) || combined.Reversion != 0 {
+			t.Fatalf("domain Enabled=%t: combined canonical/wire drift canceled: reconstructed=%+v", domainEnabled, combined)
+		}
+		compat := reconstructForTransport("pay-user", Host{
+			IP: "10.0.0.2", Port: 8080, ClusterName: "k8s", Enabled: false, Metadata: metadata,
+		}, false)
+		if instance.DiffNacosReconcile(local, compat) {
+			t.Fatalf("domain Enabled=%t: HTTP compatibility status-2 shape should retain its historical projection", domainEnabled)
+		}
+	}
+}
+
 func TestNacosMetadataSourceIdentityRoundTrip(t *testing.T) {
 	original := &instance.Instance{
 		SourceKey: "cluster-a/uid-42", SourceCluster: "cluster-a",

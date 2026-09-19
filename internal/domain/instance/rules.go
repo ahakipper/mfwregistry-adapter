@@ -141,6 +141,40 @@ func DiffEqualReversion(old, new *Instance) bool {
 		old.Cpu != new.Cpu
 }
 
+// EqualNacosReconcile reports whether a provider instance and the instance
+// reconstructed from Nacos describe the same Spotter-owned state.
+//
+// Nacos is a wire store, not an authority for the provider's revision.  A
+// reconcile therefore compares the complete canonical Spotter projection,
+// including Reversion in both directions, instead of applying the legacy
+// "newer revision wins" rule or a hand-maintained subset of fields.  The
+// canonical payload normalizes nil maps/slices to their empty representation,
+// which avoids a false diff after a metadata round-trip.  Nacos-owned wire
+// properties (Healthy, Ephemeral, Weight, and the generated composite
+// instance id) are intentionally absent from Instance/CanonicalPayload and
+// are not compared here.
+//
+// The Nacos SDK keeps unhealthy persistent hosts transport-enabled so they
+// remain query-visible, while the canonical payload retains the provider's
+// Enabled value.  reconstruct applies that same rule before this function is
+// called; comparing the canonical projection consequently handles both the
+// SDK (wire Enabled=true) and HTTP-compat (wire Enabled=false) shapes without
+// treating Nacos's health bit as provider drift.
+func EqualNacosReconcile(provider, remote *Instance) bool {
+	if provider == nil || remote == nil {
+		return false
+	}
+	return CanonicalPayload(provider) == CanonicalPayload(remote)
+}
+
+// DiffNacosReconcile is the inverse of EqualNacosReconcile and is provided as
+// the explicit predicate used by provider compare paths.  Keeping the rule
+// in the domain package prevents K8s and Consul from drifting into different
+// field subsets again.
+func DiffNacosReconcile(provider, remote *Instance) bool {
+	return !EqualNacosReconcile(provider, remote)
+}
+
 // CompareThreeWay classifies instances by ID while preserving provider and remote input order.
 // The provider instance is returned for same-ID differences selected by diff.
 func CompareThreeWay(provider, remote []*Instance, diff DiffPolicy) (providerOnly, remoteOnly, changed []*Instance) {

@@ -552,16 +552,17 @@ func remoteEntryMatches(expected sourceEntry, got remoteEntry) bool {
 }
 
 func wireEnabledMatches(expected sourceEntry, got remoteEntry) bool {
-	if expected.Enabled == got.Enabled {
-		return true
-	}
 	// Nacos 3 omits disabled persistent instances from official naming query
 	// and Subscribe results. Spotter therefore writes status-2 instances as
-	// transport-enabled but unhealthy while preserving domain Enabled=false in
-	// the canonical payload. Only that exact metadata-backed exception is
-	// accepted; online/manual-disable drift remains strict.
-	return expected.Status == "2" && !expected.Enabled && got.Enabled &&
-		got.Metadata["status"] == "2" && got.Metadata["spotter.instance"] == expected.Metadata["spotter.instance"]
+	// transport-enabled but unhealthy while preserving provider Enabled in the
+	// canonical payload. For a current-schema status-2 entry, wire Enabled=true
+	// is therefore mandatory, not merely an allowed exception; a manual disable
+	// must become a divergence so reconcile restores query visibility.
+	if expected.Status == "2" && expected.Metadata["spotter.instance"] != "" {
+		return got.Enabled && got.Metadata["status"] == "2" &&
+			got.Metadata["spotter.instance"] == expected.Metadata["spotter.instance"]
+	}
+	return expected.Enabled == got.Enabled
 }
 
 func copyStringMap(input map[string]string) map[string]string {

@@ -8,61 +8,35 @@ import (
 	"testing"
 	"time"
 
-	"spotter/internal/testkit/discoverymock"
+	"spotter/internal/domain/instance"
 	"spotter/internal/testkit/nacosmock"
 	v2 "spotter/pkg/beehive/service/v2"
-	"spotter/pkg/discoverycenter"
 	"spotter/pkg/nacos"
 	"spotter/pkg/worker"
 )
 
-// TestE2ENacosReconcileSourceBootHeal drives the nacos-authoritative
-// reconcile end to end through the REAL production wiring (dsca-3 §3.1/§4.2):
+// TestE2ENacosFanoutTransportDriftHealPrimitives exercises the real
+// worker/fanout/Nacos-Sink transport boundary for remote ghost deletion and a
+// wire Enabled heal. It deliberately scripts the provider outputs; the real
+// K8s CompareAndFlush + revalidated SyncAll/prune chain is covered by
+// pkg/providers/k8s/TestE2EK8sCompareAndFullPushPrunesBootGhost.
 //
-//	discoverymock (Atlas, primary push target) + nacosmock (nacos sink)
-//	  -> FanoutSink with SetReconcileSource("nacos")     [the flag's effect]
+//	nacosmock (the only active sink)
+//	  -> FanoutSink with Nacos as its primary/read source
 //	  -> DefaultWorker
-//	  -> k8s.CompareAndFlush (the boot path's synchronous call)
+//	  -> scripted provider-equivalent worker events
 //
 // The scenario: nacos state drifted while spotter was down — one live pod's
 // registration is intact, one pod was deleted while down (its registration
 // is a remote-only ghost), and one healthy registration was console-disabled
-// (enabled=false, metadata status "1"). The boot CompareAndFlush must heal
-// BOTH drift classes with no code change beyond the source routing:
-//   - the ghost → case 3 → a status-3 push → the nacos sink DEREGISTERS it;
-//   - the console-disabled healthy instance → the [online, unhealthy] view
-//     serves it (the catalog) → field diff on Enabled → the local truth is
-//     re-registered with enabled=true.
+// (enabled=false, metadata status "1"). The scripted outputs verify the
+// transport primitives used by the real provider test:
+//   - a status-3 event deregisters the ghost;
+//   - a local status-1 event re-enables the console-disabled host.
 //
 // The nacos catalog replaces the in-memory remembered memory as the
 // boot-time ownership record (the 416e62a residual, closed).
-func TestE2ENacosReconcileSourceBootHeal(t *testing.T) {
-	// --- Atlas side: the in-memory gRPC server over bufconn (the primary
-	// PUSH target; its GetAll view is empty and irrelevant — the compare
-	// no longer reads it).
-	discovery, err := discoverymock.Start()
-	if err != nil {
-		t.Fatalf("discoverymock.Start() error = %v", err)
-	}
-	defer discovery.Close()
-
-	dialCtx, dialCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer dialCancel()
-	conn, err := discovery.DialContext(dialCtx)
-	if err != nil {
-		t.Fatalf("discoverymock.DialContext() error = %v", err)
-	}
-	defer func() { _ = conn.Close() }()
-
-	client, err := discoverycenter.NewClient(&serviceClient{conn: conn}, nil, nil)
-	if err != nil {
-		t.Fatalf("discoverycenter.NewClient() error = %v", err)
-	}
-	registry, err := discoverycenter.NewDiscoveryCenter(client, nil, nil, false)
-	if err != nil {
-		t.Fatalf("discoverycenter.NewDiscoveryCenter() error = %v", err)
-	}
-
+func TestE2ENacosFanoutTransportDriftHealPrimitives(t *testing.T) {
 	// --- Nacos side: the real sink over the loopback nacosmock, seeded
 	// with the downtime drift (the state spotter would have written before
 	// it went down, plus one console edit).
@@ -105,11 +79,8 @@ func TestE2ENacosReconcileSourceBootHeal(t *testing.T) {
 	}
 	nacosServer.SetInstances([]nacosmock.Host{liveHost, ghostHost, drainedHost}, "DEFAULT_GROUP", "pay-user", "k8s")
 
-	// --- The fan-out with the reconcile designation — exactly what the
-	// server wiring builds under --reconcile-source nacos (Atlas primary,
-	// Nacos second, the read role handed to the nacos sink).
+	// --- The one-sink fan-out used by the active Nacos-only server graph.
 	fanout, err := worker.NewFanoutSink(nil,
-		worker.NamedSink{Name: worker.AtlasSinkName, Sink: registry},
 		worker.NamedSink{Name: nacos.SinkName, Sink: nacosSink},
 	)
 	if err != nil {
@@ -126,13 +97,7 @@ func TestE2ENacosReconcileSourceBootHeal(t *testing.T) {
 		t.Fatalf("worker.NewResourceWorker() error = %v", err)
 	}
 
-	// --- The compare, driven exactly as the boot path drives it: the
-	// provider's local list (the informer store) against the worker's
-	// GetAll (the designated nacos catalog view). The fakeProvider stands
-	// in for the k8s provider's CompareAndFlush mechanics with the same
-	// shape; the k8s package's own boot test covers the provider-internal
-	// path, so here the e2e value is the WIRING: worker.GetAll must return
-	// the nacos view through the real fanout.
+	// --- Read the designated catalog view through the real worker/fanout.
 	list, err := w.GetAll([]int32{1, 2}, "k8s")
 	if err != nil {
 		t.Fatalf("worker.GetAll([1,2], k8s) error = %v, want nil (the designated nacos view)", err)
@@ -158,10 +123,9 @@ func TestE2ENacosReconcileSourceBootHeal(t *testing.T) {
 		t.Fatal("the live instance reconstructed as enabled=false; the steady registration must reconstruct enabled")
 	}
 
-	// --- The heal: the provider's set difference (local = pod-live +
-	// pod-drained; remote = all three) produces case-3 for the ghost and a
-	// field-diff push for the drained instance. The pushes go through the
-	// REAL worker to the REAL nacos sink.
+	// --- Script the two provider-equivalent heal outputs. The value of this
+	// test is the real worker/fanout/Nacos transport and final-state assertion,
+	// not provider comparison policy.
 	local := []*v2.Instance{
 		{InstanceId: "pod-live", AppCode: "pay-user", Ip: "10.0.0.1",
 			Ports: []*v2.PortInfo{{Port: 7096}}, Provider: "k8s", Cluster: "",
@@ -202,5 +166,74 @@ func TestE2ENacosReconcileSourceBootHeal(t *testing.T) {
 		if stored.IP == "10.0.0.2" {
 			t.Fatalf("the ghost survived the boot heal; stored = %+v", stored)
 		}
+	}
+}
+
+// TestE2ENacosCanonicalFullFieldDriftRoundTrip proves the E2E transport
+// precondition of full-field reconcile: all canonical fields survive a Nacos
+// write/read, an out-of-band labels/images/ports/source mutation is detected
+// even at equal Reversion, and one local re-publication restores equality.
+func TestE2ENacosCanonicalFullFieldDriftRoundTrip(t *testing.T) {
+	server := nacosmock.Start()
+	defer server.Close()
+	sink, err := nacos.NewHTTPCompatSink(server.URL(), nil)
+	if err != nil {
+		t.Fatalf("nacos.NewHTTPCompatSink: %v", err)
+	}
+	defer func() { _ = sink.Close() }()
+
+	want := &instance.Instance{
+		SourceKey: "cluster-a/uid-a", SourceCluster: "cluster-a",
+		InstanceId: "pod-a", AppCode: "pay-user", Provider: "k8s",
+		Ip: "10.0.0.1", Ports: []*instance.PortInfo{{Name: "http", Protocol: "http", Port: 8080, ServicePort: 18080}},
+		EnvCode: "test#blue", EnvType: "test", EnvGroup: "blue", Cluster: "edge",
+		Version: "v1", Enabled: true, State: instance.InstanceStateRunning,
+		HealthState: "ready", Status: instance.InstanceStatusOnline, Reversion: 42,
+		Label: map[string]string{"team": "discovery", "zone": "a"}, Hostname: "pod-a",
+		Cpu: 2.5, Memory: 256, Disk: 10, Os: "linux", Image: map[string]string{"app": "repo/pay:v1"}, Idc: "idc-a",
+	}
+	if err := sink.Push(time.Now().UnixNano(), []*instance.Instance{want}); err != nil {
+		t.Fatalf("initial canonical push: %v", err)
+	}
+	read := func() *instance.Instance {
+		list, err := sink.GetAll([]int32{instance.InstanceStatusOnline}, "k8s")
+		if err != nil {
+			t.Fatalf("GetAll canonical view: %v", err)
+		}
+		if len(list.Instance) != 1 {
+			t.Fatalf("canonical view entries = %d, want 1", len(list.Instance))
+		}
+		return list.Instance[0]
+	}
+	if got := read(); !instance.EqualNacosReconcile(want, got) {
+		t.Fatalf("initial round-trip lost fields: got=%s want=%s", instance.CanonicalPayload(got), instance.CanonicalPayload(want))
+	}
+
+	stored := server.Instances("pay-user", "k8s")
+	if len(stored) != 1 {
+		t.Fatalf("stored hosts = %d, want 1", len(stored))
+	}
+	drifted := *want
+	drifted.Label = map[string]string{"team": "tampered", "zone": "a"}
+	drifted.Image = map[string]string{"app": "repo/pay:tampered"}
+	drifted.Ports = []*instance.PortInfo{{Name: "http", Protocol: "http", Port: 9090, ServicePort: 19090}}
+	drifted.SourceKey = "cluster-a/forged"
+	driftedMetadata := stored[0].Metadata
+	driftedMetadata["spotter.instance"] = instance.CompressedCanonicalPayload(&drifted)
+	server.SetInstances([]nacosmock.Host{{
+		InstanceID: stored[0].InstanceID, IP: stored[0].IP, Port: stored[0].Port,
+		Enabled: stored[0].Enabled, Healthy: true, Ephemeral: stored[0].Ephemeral,
+		ClusterName: stored[0].ClusterName, ServiceName: stored[0].ServiceName,
+		Metadata: driftedMetadata,
+	}}, "DEFAULT_GROUP", "pay-user", "k8s")
+	if got := read(); !instance.DiffNacosReconcile(want, got) {
+		t.Fatal("equal-Reversion canonical field drift was not detected")
+	}
+
+	if err := sink.Push(time.Now().UnixNano(), []*instance.Instance{want}); err != nil {
+		t.Fatalf("heal canonical drift: %v", err)
+	}
+	if got := read(); !instance.EqualNacosReconcile(want, got) {
+		t.Fatalf("canonical drift did not heal: got=%s want=%s", instance.CanonicalPayload(got), instance.CanonicalPayload(want))
 	}
 }

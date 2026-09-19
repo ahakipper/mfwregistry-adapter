@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/panjf2000/ants/v2"
 	v1 "k8s.io/api/core/v1"
+	domaininstance "spotter/internal/domain/instance"
 	"spotter/internal/ports"
 	sv "spotter/pkg/beehive/service/v2"
 	k8srobot "spotter/pkg/k8srobot"
@@ -866,7 +867,18 @@ func (k *k8s) CompareAndFlush() {
 			// case1: instance is both in K8s and the discovery center.
 			// Instance data information to be pushed, subject to the data in K8s
 			if servIns := providers.LookupIdentity(servMap, list.GetInstance(), k8sIns); servIns != nil {
+				// The Nacos-authoritative path compares the complete canonical
+				// domain projection.  This deliberately includes Reversion in
+				// either direction and fields such as labels, images, every port,
+				// source identity and resource metadata.  Nacos reconstructs the
+				// provider Enabled value from its canonical payload for unhealthy
+				// hosts, so its wire-only Healthy/Enabled representation is not
+				// mistaken for provider drift.  The legacy Atlas path retains its
+				// historical monotonic field policy below.
 				diff := k.hasInstanceDiff(servIns, k8sIns)
+				if k.nacosReconcile {
+					diff = domaininstance.DiffNacosReconcile(k8sIns, servIns)
+				}
 				// R2 (dsca-3 §3.3), nacos-reconcile mode only: reversion is
 				// provider-owned monotonic state, not an authority token —
 				// the "strictly-higher wins" gate was Atlas's database guard
@@ -879,8 +891,7 @@ func (k *k8s) CompareAndFlush() {
 				// is the single writer under leader election), and adopting
 				// Atlas's "remote higher wins" here would let one forged
 				// bump permanently blind the reconcile.
-				if !diff && k.nacosReconcile && servIns.Reversion != k8sIns.Reversion {
-					diff = true
+				if diff && k.nacosReconcile && servIns.Reversion != k8sIns.Reversion {
 					// The R2 companion signal (dsca-5 DS-5-4, adopted per
 					// dsca-3's lead ruling): a remote reversion ABOVE the
 					// local one witnesses an out-of-band write — R2's push

@@ -6,6 +6,7 @@ import (
 	"github.com/hashicorp/consul/api"
 	"github.com/panjf2000/ants/v2"
 	"github.com/pkg/errors"
+	domaininstance "spotter/internal/domain/instance"
 	"spotter/internal/ports"
 	"spotter/pkg/beehive/service/v2"
 	sv "spotter/pkg/beehive/service/v2"
@@ -645,8 +646,15 @@ func (c *consul) CompareAndFlush() {
 			}
 		}
 		c.generation++
-		// compare diffs and sync incrementally
-		registryList, err := c.worker.GetAll([]int32{providers.InstanceStatusOnline}, providers.ProviderEcs)
+		// Compare diffs and sync incrementally. Atlas historically returned only
+		// online ECS entries; Nacos must also return unhealthy entries so the
+		// canonical comparator can prove their steady state and heal field or
+		// Reversion drift instead of treating an all-unhealthy service as empty.
+		statuses := []int32{providers.InstanceStatusOnline}
+		if c.nacosReconcile {
+			statuses = append(statuses, providers.InstanceStatusUnhealthy)
+		}
+		registryList, err := c.worker.GetAll(statuses, providers.ProviderEcs)
 		if err != nil {
 			err = errors.WithMessage(err, "get all instances from the discovery center")
 			c.logger.Errorf("%s", err.Error())
@@ -674,6 +682,17 @@ func (c *consul) CompareAndFlush() {
 			// For these instances in both Provider and the discovery center, if the information in Provider is newer, push is performed.
 			if servIns := providers.LookupIdentity(remoteInstances, registryList.GetInstance(), consulIns); servIns != nil {
 				diff := false
+				if c.nacosReconcile {
+					// Nacos is authoritative only as a read-back view; the
+					// Consul provider remains the source of truth. Compare the
+					// complete canonical domain projection so labels, images,
+					// every port, source identity/resource fields and Reversion
+					// drift in either direction are healed. The shared predicate
+					// deliberately excludes Nacos-owned Healthy and handles the
+					// SDK's transport-enabled unhealthy wire shape through the
+					// reconstructed canonical Enabled value.
+					diff = domaininstance.DiffNacosReconcile(consulIns, servIns)
+				}
 				// The R2 rule of dsca-3 §3.3, applied in nacos-reconcile
 				// mode: reversion is provider-owned monotonic state, not an
 				// authority token (the strictly-higher/equal gates were
@@ -686,7 +705,7 @@ func (c *consul) CompareAndFlush() {
 				// election), and the old equal-revision field gate would
 				// have suppressed the heal forever (DS-5-4's complete
 				// suppression on the consul leg).
-				if c.nacosReconcile && consulIns.Reversion != servIns.Reversion {
+				if c.nacosReconcile && diff && consulIns.Reversion != servIns.Reversion {
 					diff = true
 					// The R2 companion signal (dsca-5 DS-5-4, adopted per
 					// dsca-3's lead ruling): a remote reversion ABOVE the
@@ -698,9 +717,9 @@ func (c *consul) CompareAndFlush() {
 						c.logger.Warnf("the instance: %s of appcode: %s carries a nacos reversion %d above the local %d (out-of-band edit suspected); the reconcile push overwrites it with the local value", consulIns.InstanceId, consulIns.AppCode, servIns.Reversion, consulIns.Reversion)
 						c.notifier.Notify("Forged remote reversion", fmt.Sprintf("The ecs instance %s of appcode %s holds nacos reversion %d above the local %d (out-of-band edit suspected); the reconcile overwrites the remote value with the local one", consulIns.InstanceId, consulIns.AppCode, servIns.Reversion, consulIns.Reversion))
 					}
-				} else if consulIns.Reversion > servIns.Reversion {
+				} else if !c.nacosReconcile && consulIns.Reversion > servIns.Reversion {
 					diff = true
-				} else if consulIns.Reversion == servIns.Reversion {
+				} else if !c.nacosReconcile && consulIns.Reversion == servIns.Reversion {
 					// The wire projection of Enabled (dsca-3 §3.3 / dsca-5
 					// DS-5-2), nacos-reconcile mode only: compare
 					// wireEnabled(local) = local.Enabled && local.Status !=

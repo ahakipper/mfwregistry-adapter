@@ -3,6 +3,7 @@ package consul
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -876,6 +877,8 @@ type scriptableWorker struct {
 	mu      sync.Mutex
 
 	getAllResponse *sv.InstanceList
+	filterStatuses bool
+	lastStatuses   []int32
 }
 
 func (w *scriptableWorker) AddEventHandler(opt worker.OperateType, handler worker.EventResourceHandler) {
@@ -895,6 +898,20 @@ func (w *scriptableWorker) ProcessUnsynced() {}
 func (w *scriptableWorker) GetAll(enable []int32, provider string) (*sv.InstanceList, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.lastStatuses = append([]int32(nil), enable...)
+	if w.filterStatuses && w.getAllResponse != nil {
+		allowed := map[int32]bool{}
+		for _, status := range enable {
+			allowed[status] = true
+		}
+		filtered := make([]*sv.Instance, 0, len(w.getAllResponse.Instance))
+		for _, item := range w.getAllResponse.Instance {
+			if item != nil && allowed[item.Status] {
+				filtered = append(filtered, item)
+			}
+		}
+		return &sv.InstanceList{Instance: filtered}, nil
+	}
 	return w.getAllResponse, nil
 }
 
@@ -990,41 +1007,27 @@ func newStaticConsulProvider(t *testing.T, w worker.Worker, entries map[string][
 }
 
 // TestConsulNacosReconcileStatus2PairNoDiffNoPush: THE DS-5-2 neutralization
-// contract (dsca-3 §3.5): a local status-2 ecs instance that exists in the
-// nacos catalog as enabled=false / metadata status "2" produces NO diff and
-// NO push at steady state, tick after tick. The pair is exercised where it
-// is most dangerous — the field compare reached with the status-2 instance
-// PRESENT in the remote map (the widened-request shape the [online] guard
-// currently masks): the wire projection makes the compare pass regardless
-// (wireEnabled(local)=false vs remote.Enabled=false), so the pin holds
-// through BOTH the projection and the accidental guards, and stays green
-// whichever mechanism carries it — while asserting the observable (no
-// push), so it goes red the moment either is broken. Mutation (d):
-// reverting to the raw Enabled compare re-arms the every-cycle push and
-// fails this test.
+// contract: a local status-2 ECS instance remains present in the filtered
+// Nacos read and produces no push at steady state. The canonical payload keeps
+// the provider Enabled value; the SDK-only wire Enabled=true requirement is
+// validated separately by the transport-aware reconstruction tests.
 func TestConsulNacosReconcileStatus2PairNoDiffNoPush(t *testing.T) {
 	// The local truth: a failing-check instance (Status=2, Enabled=true by
 	// the converter hardcode, Reversion=308) — served through the monitor
 	// double because the HTTP health view filters critical entries.
 	local := unhealthyEntry("srv-uh", "127.0.0.1", 308)
 
-	// The nacos-shaped remote view: the [online]-request filter would drop
-	// a status-2 reconstruction, but the compare under test is fed the
-	// WIDENED view (the pin must hold through the projection, not only
-	// through the filter): the reconstruction of the same instance —
-	// Status=2 (metadata), Enabled=FALSE (the wire the register wrote),
-	// Cluster "" (the dsca-3 §3.2 fidelity fix), Provider "ecs", reversion
-	// equal.
-	remote := &sv.Instance{
-		InstanceId: "srv-uh", AppCode: "pay-user", Ip: "127.0.0.1",
-		Ports: []*sv.PortInfo{{Port: 8081}}, Provider: "ecs", Cluster: "",
-		EnvType: "test", EnvGroup: "7", State: "probing",
-		Status: providers.InstanceStatusUnhealthy, Enabled: false,
-		Idc: "mix", Cpu: 0, Reversion: 308, Version: "v1",
-	}
-
-	w := &scriptableWorker{getAllResponse: &sv.InstanceList{Instance: []*sv.Instance{remote}}}
+	// Build the Nacos-shaped remote from the complete local projection. Real
+	// Nacos writes this canonical payload, so the steady-state fixture must
+	// include labels/source/resource fields rather than an old sparse wire
+	// shape. Reconstruct preserves the provider's canonical Enabled value, so the
+	// domain projection remains equal while the actual wire bit is checked by the
+	// Nacos adapter.
+	w := &scriptableWorker{filterStatuses: true}
 	c := newStaticConsulProvider(t, w, map[string][]*api.ServiceEntry{"pay-user": {local}})
+	localProjection := c.GetAll()[0]
+	remote := *localProjection
+	w.getAllResponse = &sv.InstanceList{Instance: []*sv.Instance{&remote}}
 	c.SetNacosReconcileSource(true)
 
 	// Sanity: the local list really holds the status-2 shape (the
@@ -1042,6 +1045,12 @@ func TestConsulNacosReconcileStatus2PairNoDiffNoPush(t *testing.T) {
 	if events := w.handleSnapshot(); len(events) != 0 {
 		t.Fatalf("pushed events = %d, want 0 (the status-2 ecs pair is steady: no diff, no push, tick after tick); events = %#v", len(events), events)
 	}
+	w.mu.Lock()
+	statuses := append([]int32(nil), w.lastStatuses...)
+	w.mu.Unlock()
+	if !reflect.DeepEqual(statuses, []int32{providers.InstanceStatusOnline, providers.InstanceStatusUnhealthy}) {
+		t.Fatalf("Nacos reconcile statuses = %v, want [online unhealthy]", statuses)
+	}
 }
 
 // TestConsulNacosReconcileHealthyMirrorSteadyNoPush: the healthy mirror-image
@@ -1058,18 +1067,13 @@ func TestConsulNacosReconcileHealthyMirrorSteadyNoPush(t *testing.T) {
 
 	// The nacos-shaped reconstruction of the healthy instance: Enabled=true
 	// (no override at status 1), Cluster "" (never carried), Provider "ecs".
-	remote := &sv.Instance{
-		InstanceId: "srv-ok", AppCode: "pay-user", Ip: "127.0.0.1",
-		Ports: []*sv.PortInfo{{Port: 8081}}, Provider: "ecs", Cluster: "",
-		EnvType: "test", EnvGroup: "7", State: "running",
-		Status: providers.InstanceStatusOnline, Enabled: true,
-		Idc: "mix", Cpu: 0, Reversion: 42, Version: "v1",
-	}
-
-	w := &scriptableWorker{getAllResponse: &sv.InstanceList{Instance: []*sv.Instance{remote}}}
+	w := &scriptableWorker{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	c := newBlackboxConsulProvider(t, server, w, 0, ctx)
+	localProjection := c.GetAll()[0]
+	remote := *localProjection
+	w.getAllResponse = &sv.InstanceList{Instance: []*sv.Instance{&remote}}
 	c.SetNacosReconcileSource(true)
 
 	c.CompareAndFlush()
@@ -1174,13 +1178,6 @@ func TestConsulNacosReconcileCase3Deregisters(t *testing.T) {
 	// holds srv-live's registration PLUS the ghost of an instance consul
 	// no longer has.
 	seedConsul(t, server, healthyEntry("srv-live", "127.0.0.1", 42))
-	liveRemote := &sv.Instance{
-		InstanceId: "srv-live", AppCode: "pay-user", Ip: "127.0.0.1",
-		Ports: []*sv.PortInfo{{Port: 8081}}, Provider: "ecs", Cluster: "",
-		EnvType: "test", EnvGroup: "7", State: "running",
-		Status: providers.InstanceStatusOnline, Enabled: true,
-		Idc: "mix", Cpu: 0, Reversion: 42, Version: "v1",
-	}
 	ghost := &sv.Instance{
 		InstanceId: "srv-ghost", AppCode: "pay-user", Ip: "127.0.0.9",
 		Ports: []*sv.PortInfo{{Port: 8081}}, Provider: "ecs", Cluster: "",
@@ -1189,10 +1186,12 @@ func TestConsulNacosReconcileCase3Deregisters(t *testing.T) {
 		Idc: "mix", Cpu: 0, Reversion: 9, Version: "v1",
 	}
 
-	w := &scriptableWorker{getAllResponse: &sv.InstanceList{Instance: []*sv.Instance{liveRemote, ghost}}}
+	w := &scriptableWorker{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	c := newBlackboxConsulProvider(t, server, w, 0, ctx)
+	liveRemote := *c.GetAll()[0]
+	w.getAllResponse = &sv.InstanceList{Instance: []*sv.Instance{&liveRemote, ghost}}
 	c.SetNacosReconcileSource(true)
 
 	c.CompareAndFlush()
@@ -1274,44 +1273,69 @@ func TestConsulAtlasModeCase3KeepsStatus2(t *testing.T) {
 	t.Fatalf("no push for the remote-only ghost in Atlas mode; events = %#v", events)
 }
 
-// TestConsulNacosReconcileFieldDriftUpdatePushesLocal: the UPDATE heal —
-// same-id field-level drift on the remote side (a manual metadata edit)
-// pushes the LOCAL instance (R1).
-func TestConsulNacosReconcileFieldDriftUpdatePushesLocal(t *testing.T) {
-	server := consulmock.Start()
-	defer server.Close()
-
-	seedConsul(t, server, healthyEntry("srv-a", "127.0.0.1", 42))
-
-	remote := &sv.Instance{
-		InstanceId: "srv-a", AppCode: "pay-user", Ip: "127.0.0.1",
-		Ports: []*sv.PortInfo{{Port: 8081}}, Provider: "ecs", Cluster: "",
-		EnvType: "beta", EnvGroup: "7", State: "running", // the console edit
-		Status: providers.InstanceStatusOnline, Enabled: true,
-		Idc: "mix", Cpu: 0, Reversion: 42, Version: "v1",
+// TestConsulNacosReconcileCanonicalFieldDriftPushesLocal pins the full-domain
+// UPDATE policy for the ECS leg. Equal-Reversion drift is still repaired when
+// it exists only in labels, images, secondary port metadata, source identity,
+// or resource fields.
+func TestConsulNacosReconcileCanonicalFieldDriftPushesLocal(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*sv.Instance)
+	}{
+		{name: "env", mutate: func(ins *sv.Instance) { ins.EnvType = "beta" }},
+		{name: "labels", mutate: func(ins *sv.Instance) { ins.Label["reconcile-test"] = "tampered" }},
+		{name: "images", mutate: func(ins *sv.Instance) { ins.Image["reconcile-test"] = "tampered:v2" }},
+		{name: "ports", mutate: func(ins *sv.Instance) { ins.Ports[0].ServicePort++ }},
+		{name: "source identity", mutate: func(ins *sv.Instance) { ins.SourceKey = "forged/source" }},
+		{name: "memory", mutate: func(ins *sv.Instance) { ins.Memory++ }},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := consulmock.Start()
+			defer server.Close()
+			seedConsul(t, server, healthyEntry("srv-a", "127.0.0.1", 42))
 
-	w := &scriptableWorker{getAllResponse: &sv.InstanceList{Instance: []*sv.Instance{remote}}}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	c := newBlackboxConsulProvider(t, server, w, 0, ctx)
-	c.SetNacosReconcileSource(true)
+			w := &scriptableWorker{}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			c := newBlackboxConsulProvider(t, server, w, 0, ctx)
+			local := c.GetAll()[0]
+			remote := *local
+			remote.Label = map[string]string{}
+			for key, value := range local.Label {
+				remote.Label[key] = value
+			}
+			remote.Image = map[string]string{}
+			for key, value := range local.Image {
+				remote.Image[key] = value
+			}
+			remote.Ports = make([]*sv.PortInfo, len(local.Ports))
+			for i, port := range local.Ports {
+				if port != nil {
+					copyPort := *port
+					remote.Ports[i] = &copyPort
+				}
+			}
+			tt.mutate(&remote)
+			w.getAllResponse = &sv.InstanceList{Instance: []*sv.Instance{&remote}}
+			c.SetNacosReconcileSource(true)
+			c.CompareAndFlush()
 
-	c.CompareAndFlush()
-
-	deadline := time.Now().Add(3 * time.Second)
-	var events []*worker.Event
-	for time.Now().Before(deadline) {
-		events = w.handleSnapshot()
-		if len(events) >= 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if len(events) == 0 {
-		t.Fatal("no push for the field-drifted instance (the UPDATE heal)")
-	}
-	if events[0].Data[0].EnvType != "test" {
-		t.Fatalf("pushed envType = %q, want test (local wins the field diff)", events[0].Data[0].EnvType)
+			deadline := time.Now().Add(3 * time.Second)
+			var events []*worker.Event
+			for time.Now().Before(deadline) {
+				events = w.handleSnapshot()
+				if len(events) >= 1 {
+					break
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			if len(events) == 0 {
+				t.Fatalf("no local heal push for canonical %s drift", tt.name)
+			}
+			if events[0].Data[0].Reversion != local.Reversion {
+				t.Fatalf("heal push Reversion=%d, want local %d", events[0].Data[0].Reversion, local.Reversion)
+			}
+		})
 	}
 }

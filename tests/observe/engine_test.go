@@ -126,6 +126,11 @@ func TestObserveUnitUnhealthySDKVisibilityPreservesCanonicalEnabled(t *testing.T
 	if diff := compareService("obs-app-0", model, []remoteEntry{remote}, stubLedger(nil), time.Minute, time.Now()); len(diff.Divergences) != 0 {
 		t.Fatalf("query-visible unhealthy wire shape diverged: %+v", diff.Divergences)
 	}
+	remote.Enabled = false
+	if diff := compareService("obs-app-0", model, []remoteEntry{remote}, stubLedger(nil), time.Minute, time.Now()); len(diff.Divergences) == 0 {
+		t.Fatal("disabled status-2 SDK host was accepted even though it is no longer query-visible")
+	}
+	remote.Enabled = true
 	remote.Metadata["status"] = "1"
 	if diff := compareService("obs-app-0", model, []remoteEntry{remote}, stubLedger(nil), time.Minute, time.Now()); len(diff.Divergences) == 0 {
 		t.Fatal("status/canonical drift was accepted by unhealthy wire exception")

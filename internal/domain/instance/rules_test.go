@@ -114,6 +114,89 @@ func TestDiffEqualReversion(t *testing.T) {
 	}
 }
 
+func TestEqualNacosReconcileComparesCompleteCanonicalProjection(t *testing.T) {
+	base := &Instance{
+		SourceKey: "cluster-a/pod-a", SourceCluster: "cluster-a", InstanceId: "pod-a",
+		Level: "gold", Ports: []*PortInfo{{Name: "http", Protocol: ProtoHTTP, Port: 8080, ServicePort: 18080}},
+		Ip: "10.0.0.1", EnvCode: "test#blue", EnvType: "test", EnvGroup: "blue", Cluster: "edge",
+		Version: "v1", Enabled: true, State: InstanceStateRunning, HealthState: "ready", AppCode: "pay-user",
+		Provider: ProviderK8s, Label: map[string]string{"app": "pay-user", "team": "platform"}, Hostname: "pod-a",
+		Cpu: 2.5, Memory: 256, Disk: 10, Os: "linux", Image: map[string]string{"application": "repo/app:v1"},
+		Idc: "idc-a", Reversion: 42, Status: InstanceStatusOnline,
+	}
+
+	if !EqualNacosReconcile(base, base) || DiffNacosReconcile(base, base) {
+		t.Fatal("identical canonical instances must be equal")
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*Instance)
+	}{
+		{name: "labels", mutate: func(ins *Instance) { ins.Label["team"] = "runtime" }},
+		{name: "images", mutate: func(ins *Instance) { ins.Image["application"] = "repo/app:v2" }},
+		{name: "ports", mutate: func(ins *Instance) { ins.Ports[0].Port = 9090 }},
+		{name: "source identity", mutate: func(ins *Instance) { ins.SourceKey = "cluster-b/pod-a" }},
+		{name: "resource and host fields", mutate: func(ins *Instance) { ins.Memory = 512; ins.Hostname = "pod-b" }},
+		{name: "reversion increases", mutate: func(ins *Instance) { ins.Reversion = 43 }},
+		{name: "reversion decreases", mutate: func(ins *Instance) { ins.Reversion = 41 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			remote := *base
+			remote.Label = map[string]string{}
+			for key, value := range base.Label {
+				remote.Label[key] = value
+			}
+			remote.Image = map[string]string{}
+			for key, value := range base.Image {
+				remote.Image[key] = value
+			}
+			remote.Ports = []*PortInfo{{}}
+			*remote.Ports[0] = *base.Ports[0]
+			tt.mutate(&remote)
+			if EqualNacosReconcile(base, &remote) || !DiffNacosReconcile(base, &remote) {
+				t.Fatalf("canonical mutation %q was not detected: base=%s remote=%s", tt.name, CanonicalPayload(base), CanonicalPayload(&remote))
+			}
+		})
+	}
+}
+
+func TestEqualNacosReconcileNormalizesWireShapesAndIgnoresNacosHealth(t *testing.T) {
+	provider := &Instance{
+		InstanceId: "pod-uh", AppCode: "pay-user", Provider: ProviderK8s,
+		Ip: "10.0.0.2", Ports: []*PortInfo{{Port: 8080}}, Enabled: false,
+		Status: InstanceStatusUnhealthy, State: InstanceStateProbing, Reversion: 7,
+		Label: nil, Image: nil, HealthState: "provider-health",
+	}
+	// Nacos SDK keeps the transport host enabled while preserving the
+	// provider Enabled=false in the canonical payload. The reconstructed
+	// value passed to this predicate is therefore false as well; the
+	// Nacos-owned Healthy bit never appears in the domain projection.
+	remote := &Instance{
+		InstanceId: "pod-uh", AppCode: "pay-user", Provider: ProviderK8s,
+		Ip: "10.0.0.2", Ports: []*PortInfo{{Port: 8080}}, Enabled: false,
+		Status: InstanceStatusUnhealthy, State: InstanceStateProbing, Reversion: 7,
+		Label: map[string]string{}, Image: map[string]string{}, HealthState: "provider-health",
+	}
+	if !EqualNacosReconcile(provider, remote) {
+		t.Fatal("nil and empty metadata maps must not create a Nacos reconcile diff")
+	}
+
+	remote.Enabled = true
+	if EqualNacosReconcile(provider, remote) {
+		t.Fatal("a provider Enabled drift must still be detected for unhealthy instances")
+	}
+}
+
+func TestEqualNacosReconcileOfflineEntriesStillCompareReversionAndEndpoint(t *testing.T) {
+	provider := &Instance{InstanceId: "gone", Status: InstanceStatusOffline, Reversion: 2}
+	remote := &Instance{InstanceId: "gone", Status: InstanceStatusOffline, Reversion: 99, Ip: "10.0.0.9"}
+	if EqualNacosReconcile(provider, remote) || !DiffNacosReconcile(provider, remote) {
+		t.Fatal("offline catalog entries must not bypass canonical Reversion/endpoint comparison")
+	}
+}
+
 func TestCompareThreeWay(t *testing.T) {
 	providerOnly := &Instance{InstanceId: "provider-only"}
 	remoteOnly := &Instance{InstanceId: "remote-only"}

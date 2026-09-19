@@ -67,7 +67,7 @@ test-smoke:
 # E2E tier: full pipeline against in-process loopback mocks/embedded etcd;
 # no external network or shared service is used.
 test-e2e:
-	go test -race -count=1 -tags=e2e ./internal ./tests/e2e/...
+	go test -race -count=1 -tags=e2e ./internal ./pkg/providers/k8s ./tests/e2e/...
 
 # Soak tier (plan docs/nacos-sink-plan.md §8, decision D5): the local
 # full-stack e2e + 1h soak. NOT part of test-all — it needs the colima

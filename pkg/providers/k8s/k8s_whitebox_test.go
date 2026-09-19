@@ -2607,15 +2607,11 @@ func newUnhealthyPod(namespace, name string) *corev1.Pod {
 }
 
 // nacosViewInstance builds the NACOS-SHAPED remote view entry for a local
-// instance: the reconstruction of what the sink registered — metadata
-// reversion/status/state equal to the local values, Enabled mirroring the
-// wire projection (register forces enabled=false for every status-2
-// instance), Provider carrying the cluster, Cluster empty (the dsca-3 §3.2
-// fidelity correction), ports beyond the first dropped.
+// instance: the complete canonical payload reconstructs the provider-owned
+// fields exactly. Nacos wire health/Enabled projection is validated separately
+// in pkg/nacos and must not be substituted for the canonical Enabled field.
 func nacosViewInstance(local *sv.Instance) *sv.Instance {
 	remote := *local
-	remote.Cluster = ""
-	remote.Enabled = local.Enabled && local.Status != providers.InstanceStatusUnhealthy
 	remote.Provider = local.Provider
 	return &remote
 }
@@ -2762,6 +2758,57 @@ func TestCompareAndFlushNacosReconcileFieldDiffUpdatePushesLocal(t *testing.T) {
 	}
 	if e.Data[0].EnvType != "test" {
 		t.Fatalf("pushed envType = %q, want test (local wins the field diff)", e.Data[0].EnvType)
+	}
+}
+
+func TestCompareAndFlushNacosReconcileCanonicalFieldDriftPushesLocal(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*sv.Instance)
+	}{
+		{name: "labels", mutate: func(ins *sv.Instance) { ins.Label["reconcile-test"] = "tampered" }},
+		{name: "images", mutate: func(ins *sv.Instance) { ins.Image["reconcile-test"] = "repo/tampered:v2" }},
+		{name: "ports", mutate: func(ins *sv.Instance) { ins.Ports[0].ServicePort++ }},
+		{name: "source cluster", mutate: func(ins *sv.Instance) { ins.SourceCluster = "forged-cluster" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pod := newValidPod("msp", "pod-a")
+			pod.ResourceVersion = "100"
+			local := instanceFromPod(t, pod)
+			remote := nacosViewInstance(local)
+			remote.Label = map[string]string{}
+			for key, value := range local.Label {
+				remote.Label[key] = value
+			}
+			remote.Image = map[string]string{}
+			for key, value := range local.Image {
+				remote.Image[key] = value
+			}
+			remote.Ports = make([]*sv.PortInfo, len(local.Ports))
+			for i, port := range local.Ports {
+				if port != nil {
+					copyPort := *port
+					remote.Ports[i] = &copyPort
+				}
+			}
+			tt.mutate(remote)
+
+			robot := newFakeRobot(nil, []interface{}{pod}, false)
+			w := &fakeWorker{getAllResponse: &sv.InstanceList{Instance: []*sv.Instance{remote}}}
+			k := newTestProvider(robot, w)
+			k.SetNacosReconcileSource(true)
+			k.CompareAndFlush()
+
+			events := w.waitForHandles(t, 1)
+			e := findEvent(t, events, "pod-a")
+			if e == nil {
+				t.Fatalf("no heal push for canonical %s drift; events=%#v", tt.name, events)
+			}
+			if e.Data[0].Reversion != 100 {
+				t.Fatalf("heal push Reversion=%d, want local 100", e.Data[0].Reversion)
+			}
+		})
 	}
 }
 
