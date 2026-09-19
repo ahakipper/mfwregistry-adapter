@@ -107,6 +107,42 @@ func TestFullSyncRetryPreservesBatchIdentityAndScope(t *testing.T) {
 	}
 }
 
+func TestConfirmedEmptyFullRetryRetainsDestructiveAuthority(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sink := &fullOperationFailingSink{
+		FakeInstanceSink: &fakes.FakeInstanceSink{},
+		err:              errors.New("transient prune failure"),
+	}
+	fanout, err := NewFanoutSink(nil, NamedSink{Name: "nacos", Sink: sink})
+	if err != nil {
+		t.Fatalf("NewFanoutSink: %v", err)
+	}
+	w, err := NewResourceWorker(ctx, fanout, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+	if err != nil {
+		t.Fatalf("NewResourceWorker: %v", err)
+	}
+	w.Handle(&Event{
+		Trigger: 9, Operate: OperateTypeSyncAll, Scope: "k8s",
+		BatchID: "empty-k8s", Sequence: 3, EmptyConfirmed: true,
+	})
+	if w.unsyncedService.Len() != 1 {
+		t.Fatalf("queued confirmed-empty retries=%d, want 1", w.unsyncedService.Len())
+	}
+	if len(sink.operations) != 1 || !sink.operations[0].EmptyConfirmed {
+		t.Fatalf("initial operation=%+v, want confirmed empty", sink.operations)
+	}
+
+	sink.err = nil
+	w.unsyncedService.syncOnce()
+	if w.unsyncedService.Len() != 0 {
+		t.Fatalf("retry queue length=%d, want drained after successful confirmed prune", w.unsyncedService.Len())
+	}
+	if len(sink.operations) != 2 || !sink.operations[1].EmptyConfirmed || sink.operations[1].Scope != "k8s" || sink.operations[1].BatchID != "empty-k8s" {
+		t.Fatalf("replayed operation=%+v, want retained confirmed-empty authority", sink.operations)
+	}
+}
+
 func (s *staleSequenceSink) Push(int64, []*instance.Instance) error { return nil }
 func (s *staleSequenceSink) PushAll(_ int64, items []*instance.Instance) error {
 	s.mu.Lock()

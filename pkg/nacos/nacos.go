@@ -48,10 +48,10 @@ var DefaultPushConcurrency = 8
 // SetPushConcurrency overrides the bounded parallelism of the sink's
 // per-instance pushes. It exists for tests (the wall-clock bound tests
 // cannot exercise the default 8 meaningfully against 10ms mocks); call it
-// before the pushes under test and restore the default afterwards.
-// Production must not call it mid-flight: the value is read per Push, so a
-// concurrent change applies to subsequent pushes only — harmless, but the
-// intended tuning path is DefaultPushConcurrency at build time.
+// before any Sink operation and restore the default afterwards. Mid-flight
+// tuning is deliberately unsupported: existing worker groups and condition
+// waiters are not resized or proactively awakened. Production tuning remains
+// the build-time DefaultPushConcurrency value.
 func SetPushConcurrency(n int) {
 	if n < 1 {
 		n = 1
@@ -102,7 +102,7 @@ func (s *Sink) pushInstances(instances []*instance.Instance) error {
 				if instances[i] == nil {
 					continue // a nil slot is a skip, not an error (Push's contract)
 				}
-				errs[i] = s.pushOne(instances[i])
+				errs[i] = s.withPushPermit(func() error { return s.pushOne(instances[i]) })
 			}
 		}()
 	}
@@ -134,6 +134,14 @@ type Sink struct {
 	client    *Client
 	logger    ports.Logger
 	groupName string
+
+	// pushLimiter bounds every mutating SDK/HTTP call issued by this sink,
+	// including calls from concurrent Push, PushAll, and prune executions. A
+	// per-call semaphore is insufficient here: independent provider workers or
+	// a retry can otherwise each create their own worker group and multiply the
+	// configured concurrency against Nacos. Tests set the package bound before
+	// starting operations; production uses the build-time default.
+	pushLimiter pushLimiter
 
 	// batch metrics are kept on the sink so each Nacos sink reports its own
 	// logical work-unit accounting without widening the shared metrics port.
@@ -206,6 +214,47 @@ type Sink struct {
 	healthCheckWait   map[clusterKeyOf]*healthCheckAttempt
 	// rememberedMu guards remembered, healthCheckDone and healthCheckClaims.
 	rememberedMu sync.Mutex
+}
+
+// pushLimiter is a Sink-wide permit gate. It uses a condition variable so all
+// entry points share one active count. The bound is read during acquisition;
+// callers must configure it before work starts, as documented above.
+type pushLimiter struct {
+	mu     sync.Mutex
+	cond   *sync.Cond
+	active int
+}
+
+func (l *pushLimiter) acquire() {
+	l.mu.Lock()
+	if l.cond == nil {
+		l.cond = sync.NewCond(&l.mu)
+	}
+	for l.active >= currentPushConcurrency() {
+		l.cond.Wait()
+	}
+	l.active++
+	l.mu.Unlock()
+}
+
+func (l *pushLimiter) release() {
+	l.mu.Lock()
+	if l.active > 0 {
+		l.active--
+	}
+	if l.cond != nil {
+		l.cond.Broadcast()
+	}
+	l.mu.Unlock()
+}
+
+func (s *Sink) withPushPermit(fn func() error) error {
+	if s == nil {
+		return fn()
+	}
+	s.pushLimiter.acquire()
+	defer s.pushLimiter.release()
+	return fn()
 }
 
 // clusterKeyOf is the prune's (service, cluster) pair identity. It is the
@@ -517,7 +566,9 @@ func (s *Sink) pruneScoped(instances []*instance.Instance, scopes []string) erro
 				defer wg.Done()
 				for i := range indexes {
 					task := tasks[i]
-					errs[i] = s.deregister(task.key.service, task.host.IP, task.host.Port, task.key.cluster)
+					errs[i] = s.withPushPermit(func() error {
+						return s.deregister(task.key.service, task.host.IP, task.host.Port, task.key.cluster)
+					})
 				}
 			}()
 		}
@@ -672,20 +723,7 @@ func (s *Sink) register(ins *instance.Instance) error {
 	// accepted. ensureClusterHealthCheckDisabled performs that control-plane
 	// operation first and SDK mode fails closed when no approved admin facade is
 	// injected; compatibility HTTP retains its warning-only legacy behavior.
-	enabled := ins.Enabled
-	healthy := ins.Enabled
-	if ins.Status == instance.InstanceStatusUnhealthy {
-		healthy = false
-		// Nacos 3's official naming query and Subscribe paths omit disabled
-		// persistent hosts even with healthyOnly=false. Keep the transport host
-		// enabled but unhealthy so it remains observable/reconcilable; the
-		// canonical payload preserves the Spotter domain Enabled=false value.
-		if s.client.sdk != nil {
-			enabled = true
-		} else {
-			enabled = false // explicit HTTP rollback keeps its historical shape
-		}
-	}
+	enabled, healthy := persistentWireFlags(ins, s.client.sdk != nil)
 	if s.shouldApplyHealthPolicy() && s.client.sdk != nil {
 		if err := s.ensureClusterHealthCheckDisabled(ins.AppCode, clusterOf(ins)); err != nil {
 			return fmt.Errorf("nacos: register %s blocked by cluster health-check setup: %w", ins.InstanceId, err)
@@ -713,6 +751,27 @@ func (s *Sink) register(ins *instance.Instance) error {
 		}
 	}
 	return nil
+}
+
+// persistentWireFlags is the single mapping for the two health bits carried
+// by a persistent registration. SDK/Nacos 3 must keep an unhealthy host
+// transport-enabled (Enabled=true) but mark it Healthy=false so SelectAll and
+// Subscribe continue to expose it for reconciliation. The explicit HTTP
+// compatibility adapter retains its historical disabled shape. Keeping this
+// helper shared by Push and application-batch PushAll prevents the batch path
+// from silently emitting a different wire state.
+func persistentWireFlags(ins *instance.Instance, sdkTransport bool) (enabled, healthy bool) {
+	enabled = ins.Enabled
+	healthy = ins.Enabled
+	if ins.Status == instance.InstanceStatusUnhealthy {
+		healthy = false
+		if sdkTransport {
+			enabled = true
+		} else {
+			enabled = false
+		}
+	}
+	return enabled, healthy
 }
 
 func (s *Sink) shouldApplyHealthPolicy() bool {

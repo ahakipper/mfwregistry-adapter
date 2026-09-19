@@ -138,16 +138,21 @@ func fromHost(group, service string, host Host) *Instance {
 // URL-encoded on the query string, exactly like the real v1 API — including
 // on PUT, whose form body the real servlet does not parse.
 type Server struct {
-	mu             sync.RWMutex
-	server         *httptest.Server
-	instances      map[instanceKey]*Instance // keyed by namespace + composite id
-	clusters       map[clusterKey]*ClusterConfig
-	injected       int           // HTTP status injected on every endpoint; 0 = off
-	delay          time.Duration // injected per-request delay
-	endpointStatus map[string]int
-	endpointDelay  map[string]time.Duration
-	requests       []Request
-	closeOnce      sync.Once
+	mu                   sync.RWMutex
+	server               *httptest.Server
+	instances            map[instanceKey]*Instance // keyed by namespace + composite id
+	clusters             map[clusterKey]*ClusterConfig
+	injected             int           // HTTP status injected on every endpoint; 0 = off
+	delay                time.Duration // injected per-request delay
+	endpointStatus       map[string]int
+	endpointDelay        map[string]time.Duration
+	activeByPath         map[string]int
+	maxActiveByPath      map[string]int
+	maxActiveAtMethod    map[string]int
+	activeDeleteByPath   map[string]int
+	maxActiveWhileDelete map[string]int
+	requests             []Request
+	closeOnce            sync.Once
 }
 
 // clusterKey is the (service, group, cluster) identity of one stored cluster
@@ -166,7 +171,12 @@ type instanceKey struct {
 
 // Start starts a Nacos mock on a loopback-only HTTP listener.
 func Start() *Server {
-	s := &Server{instances: make(map[instanceKey]*Instance), clusters: make(map[clusterKey]*ClusterConfig), endpointStatus: make(map[string]int), endpointDelay: make(map[string]time.Duration)}
+	s := &Server{
+		instances: make(map[instanceKey]*Instance), clusters: make(map[clusterKey]*ClusterConfig),
+		endpointStatus: make(map[string]int), endpointDelay: make(map[string]time.Duration),
+		activeByPath: make(map[string]int), maxActiveByPath: make(map[string]int), maxActiveAtMethod: make(map[string]int),
+		activeDeleteByPath: make(map[string]int), maxActiveWhileDelete: make(map[string]int),
+	}
 	s.server = httptest.NewServer(http.HandlerFunc(s.serveHTTP))
 	return s
 }
@@ -275,6 +285,33 @@ func (s *Server) Requests() []Request {
 	return requests
 }
 
+// MaxConcurrentRequests reports the maximum number of requests concurrently
+// inside one endpoint handler. It is an E2E assertion seam for bounded client
+// concurrency; the value includes injected response delay.
+func (s *Server) MaxConcurrentRequests(path string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.maxActiveByPath[path]
+}
+
+// MaxConcurrentAtMethod reports the highest same-path active request count at
+// the moment a request with method/path entered. With one seeded stale host,
+// DELETE >= 2 proves prune overlapped another mutation instead of merely
+// contributing to the aggregate maximum at a different time.
+func (s *Server) MaxConcurrentAtMethod(method, path string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.maxActiveAtMethod[method+" "+path]
+}
+
+// MaxConcurrentWhileDelete reports the highest same-path active request count
+// observed while at least one DELETE was in flight.
+func (s *Server) MaxConcurrentWhileDelete(path string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.maxActiveWhileDelete[path]
+}
+
 // ClusterConfig returns a snapshot of the stored cluster configuration of
 // one (service, group, cluster), or nil when the pair was never configured
 // (an empty group addresses the DEFAULT_GROUP, like the real server). The
@@ -365,6 +402,32 @@ func (s *Server) Close() {
 }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, request *http.Request) {
+	path := request.URL.Path
+	s.mu.Lock()
+	s.activeByPath[path]++
+	if request.Method == http.MethodDelete {
+		s.activeDeleteByPath[path]++
+	}
+	if s.activeByPath[path] > s.maxActiveByPath[path] {
+		s.maxActiveByPath[path] = s.activeByPath[path]
+	}
+	methodKey := request.Method + " " + path
+	if s.activeByPath[path] > s.maxActiveAtMethod[methodKey] {
+		s.maxActiveAtMethod[methodKey] = s.activeByPath[path]
+	}
+	if s.activeDeleteByPath[path] > 0 && s.activeByPath[path] > s.maxActiveWhileDelete[path] {
+		s.maxActiveWhileDelete[path] = s.activeByPath[path]
+	}
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.activeByPath[path]--
+		if request.Method == http.MethodDelete {
+			s.activeDeleteByPath[path]--
+		}
+		s.mu.Unlock()
+	}()
+
 	// The official SDK sends naming mutations as application/x-www-form-
 	// urlencoded bodies, while the compatibility client places the same
 	// fields on the query string. Normalize both wire shapes into the query

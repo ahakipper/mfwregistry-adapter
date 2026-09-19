@@ -144,7 +144,11 @@ func waitForPersistentBatch(c *Client, key persistentBatchKey, params []Instance
 		for _, h := range hosts {
 			p, ok := want[h.InstanceID]
 			groupedService := effectiveGroup(p.GroupName) + "@@" + p.ServiceName
-			if !ok || matched[h.InstanceID] || h.IP != p.IP || h.Port != p.Port || h.ClusterName != p.ClusterName || (h.ServiceName != p.ServiceName && h.ServiceName != groupedService) || h.Ephemeral || h.Enabled != p.Enabled || h.Healthy != p.Enabled {
+			healthy := p.Enabled
+			if p.Healthy != nil {
+				healthy = *p.Healthy
+			}
+			if !ok || matched[h.InstanceID] || h.IP != p.IP || h.Port != p.Port || h.ClusterName != p.ClusterName || (h.ServiceName != p.ServiceName && h.ServiceName != groupedService) || h.Ephemeral || h.Enabled != p.Enabled || h.Healthy != healthy {
 				continue
 			}
 			matched[h.InstanceID] = true
@@ -194,7 +198,6 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 		scopeBatches[scope] = append(scopeBatches[scope], batch)
 	}
 
-	semaphore := make(chan struct{}, currentPushConcurrency())
 	errs := make([]error, len(instances))
 	var scopes sync.WaitGroup
 	for _, scope := range scopeOrder {
@@ -216,17 +219,8 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 							errs[batch.Indexes[position]] = nil
 							continue
 						}
-						enabled := ins.Enabled
-						if ins.Status == instance.InstanceStatusUnhealthy {
-							enabled = false
-						}
-						if s.shouldApplyHealthPolicy() {
-							if err := s.ensureClusterHealthCheckDisabled(ins.AppCode, clusterOf(ins)); err != nil {
-								errs[batch.Indexes[position]] = err
-								continue
-							}
-						}
-						params = append(params, InstanceParams{ServiceName: ins.AppCode, IP: ins.Ip, Port: firstPort(ins), ClusterName: clusterOf(ins), GroupName: batch.Key.Group, NamespaceID: batch.Key.Namespace, Enabled: enabled, Ephemeral: false, Metadata: metadataOf(ins)})
+						enabled, healthy := persistentWireFlags(ins, true)
+						params = append(params, InstanceParams{ServiceName: ins.AppCode, IP: ins.Ip, Port: firstPort(ins), ClusterName: clusterOf(ins), GroupName: batch.Key.Group, NamespaceID: batch.Key.Namespace, Enabled: enabled, Healthy: &healthy, Ephemeral: false, Metadata: metadataOf(ins)})
 					}
 					if len(params) > 0 {
 						validIndexes := make([]int, 0, len(params))
@@ -242,9 +236,14 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 							wg.Add(1)
 							go func() {
 								defer wg.Done()
-								semaphore <- struct{}{}
-								err := s.client.sdk.RegisterPersistent(p)
-								<-semaphore
+								err := s.withPushPermit(func() error {
+									if s.shouldApplyHealthPolicy() {
+										if err := s.ensureClusterHealthCheckDisabled(p.ServiceName, p.ClusterName); err != nil {
+											return err
+										}
+									}
+									return s.client.sdk.RegisterPersistent(p)
+								})
 								if err != nil {
 									mu.Lock()
 									errs[validIndexes[pos]] = err
@@ -276,9 +275,7 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 					items.Add(1)
 					go func() {
 						defer items.Done()
-						semaphore <- struct{}{}
-						err := s.pushOne(ins)
-						<-semaphore
+						err := s.withPushPermit(func() error { return s.pushOne(ins) })
 						errs[batch.Indexes[position]] = err
 					}()
 				}

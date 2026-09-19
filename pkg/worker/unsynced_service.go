@@ -447,6 +447,7 @@ func (s *UnsyncedService) pushSinkOnce(sink string, batch map[retryKey]pendingPu
 					Sink: sink, Operate: ports.OperateTypeSyncAll, Provider: pending.Scope,
 					Scope: pending.Scope, BatchID: pending.BatchID, Sequence: pending.FullRevision,
 					Trigger: pending.Trigger, Instances: pending.Batch, Revalidate: pending.Revalidate,
+					EmptyConfirmed: pending.EmptyConfirmed,
 				})
 			} else if withRevalidate, ok := s.fanout.(interface {
 				PushAllToWithRevalidate(string, int64, string, string, []*instance.Instance, func() ([]*instance.Instance, bool)) error

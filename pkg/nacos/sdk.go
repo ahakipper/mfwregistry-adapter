@@ -438,6 +438,9 @@ func (f *sdkNamingFacade) healthy() bool {
 // authoritative compare need.  It is therefore the SDK equivalent of the
 // old catalog HTTP endpoint for the production path.
 func (f *sdkNamingFacade) catalog(service, cluster string) ([]Host, error) {
+	if f.vendor != nil {
+		return f.vendor.SelectAll(service, cluster, f.group)
+	}
 	return f.list(service, cluster)
 }
 

@@ -527,29 +527,32 @@ func TestBlackboxSinkPushAttemptsEveryInstance(t *testing.T) {
 
 	// Every instance is registered exactly once (plan §7.4: Push applies the
 	// per-instance policy), each pair is configured exactly once, and each
-	// pair's cluster update FOLLOWS that pair's register — the
-	// register-then-configure discipline. The completion ORDER across
+	// pair's cluster update follows the first-register request that owns the
+	// pair claim. Sibling register completion may occur later. The order across
 	// instances is nondeterministic under the bounded-parallelism group
 	// (dsca-2 DS-2-1: distinct composite ids, idempotent upserts — order is
 	// explicitly not part of the contract), so the per-request ordering is
 	// asserted PER PAIR, not globally.
 	requests := server.Requests()
-	lastRegisterIndex := map[string]int{} // "service/cluster" -> last POST index
+	firstRegisterIndex := map[string]int{} // "service/cluster" -> first POST index
 	for i, request := range requests {
 		if request.Method == "POST" {
-			lastRegisterIndex[request.Query.Get("serviceName")+"/"+request.Query.Get("clusterName")] = i
+			pair := request.Query.Get("serviceName") + "/" + request.Query.Get("clusterName")
+			if _, exists := firstRegisterIndex[pair]; !exists {
+				firstRegisterIndex[pair] = i
+			}
 		}
 	}
-	if len(lastRegisterIndex) != 2 {
-		t.Fatalf("distinct registered pairs = %d, want 2 (pay-user/k8s, other-app/ecs); requests = %v", len(lastRegisterIndex), requests)
+	if len(firstRegisterIndex) != 2 {
+		t.Fatalf("distinct registered pairs = %d, want 2 (pay-user/k8s, other-app/ecs); requests = %v", len(firstRegisterIndex), requests)
 	}
 	updatesByPair := map[string]int{}
 	for i, request := range requests {
 		if request.Method == "PUT" && request.Path == "/nacos/v1/ns/cluster" {
 			pair := request.Query.Get("serviceName") + "/" + request.Query.Get("clusterName")
 			updatesByPair[pair]++
-			if registerIndex, ok := lastRegisterIndex[pair]; !ok || i < registerIndex {
-				t.Fatalf("cluster update of %s at request %d does not follow that pair's register (last register at %v); requests = %v",
+			if registerIndex, ok := firstRegisterIndex[pair]; !ok || i < registerIndex {
+				t.Fatalf("cluster update of %s at request %d does not follow that pair's first register (first register at %v); requests = %v",
 					pair, i, registerIndex, requests)
 			}
 		}

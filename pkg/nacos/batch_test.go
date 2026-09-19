@@ -191,11 +191,39 @@ func (r *batchRecorder) DeregisterInstance(p vo.DeregisterInstanceParam) (bool, 
 	return err == nil, err
 }
 func (r *batchRecorder) UpdateInstance(vo.UpdateInstanceParam) (bool, error) { return true, nil }
-func (r *batchRecorder) SelectAllInstances(vo.SelectAllInstancesParam) ([]model.Instance, error) {
+func (r *batchRecorder) SelectAllInstances(query vo.SelectAllInstancesParam) ([]model.Instance, error) {
 	r.mu.Lock()
 	r.listCall++
+	registered := append([]vo.RegisterInstanceParam(nil), r.registered...)
 	r.mu.Unlock()
-	return nil, nil
+	result := make([]model.Instance, 0, len(registered))
+	for _, p := range registered {
+		if query.ServiceName != "" && p.ServiceName != query.ServiceName {
+			continue
+		}
+		if len(query.Clusters) > 0 {
+			matched := false
+			for _, cluster := range query.Clusters {
+				if cluster == p.ClusterName {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		healthy := p.Enable
+		if !p.Healthy {
+			healthy = false
+		}
+		result = append(result, model.Instance{
+			InstanceId: fmt.Sprintf("%s#%d#%s#%s@@%s", p.Ip, p.Port, p.ClusterName, effectiveGroup(p.GroupName), p.ServiceName),
+			Ip:         p.Ip, Port: p.Port, ClusterName: p.ClusterName, ServiceName: p.ServiceName,
+			Enable: p.Enable, Healthy: healthy, Ephemeral: p.Ephemeral, Metadata: p.Metadata,
+		})
+	}
+	return result, nil
 }
 func (r *batchRecorder) GetAllServicesInfo(vo.GetAllServiceInfoParam) (model.ServiceList, error) {
 	return model.ServiceList{}, nil
@@ -211,6 +239,53 @@ func (successfulBatchAdmin) UpdateHealthChecker(context.Context, string, string,
 	return nil
 }
 func (successfulBatchAdmin) Close(context.Context) error { return nil }
+
+type persistentVisibilityVendor struct {
+	mu    sync.Mutex
+	items map[string]InstanceParams
+}
+
+func (v *persistentVisibilityVendor) RegisterPersistent(p InstanceParams) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.items == nil {
+		v.items = map[string]InstanceParams{}
+	}
+	v.items[instanceID(p)] = p
+	return nil
+}
+func (v *persistentVisibilityVendor) DeregisterPersistent(p InstanceParams) error {
+	v.mu.Lock()
+	delete(v.items, instanceID(p))
+	v.mu.Unlock()
+	return nil
+}
+func (v *persistentVisibilityVendor) SelectAll(service, cluster, group string) ([]Host, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	hosts := make([]Host, 0, len(v.items))
+	for id, p := range v.items {
+		if p.ServiceName != service || p.ClusterName != cluster {
+			continue
+		}
+		healthy := p.Enabled
+		if p.Healthy != nil {
+			healthy = *p.Healthy
+		}
+		hosts = append(hosts, Host{InstanceID: id, IP: p.IP, Port: p.Port, ClusterName: p.ClusterName, ServiceName: p.ServiceName, Enabled: p.Enabled, Healthy: healthy, Ephemeral: p.Ephemeral, Metadata: p.Metadata})
+	}
+	return hosts, nil
+}
+func (*persistentVisibilityVendor) ListServices(int, int, string, string) ([]string, int, error) {
+	return nil, 0, nil
+}
+func (*persistentVisibilityVendor) Subscribe(string, string, []string, func([]Host, error)) error {
+	return nil
+}
+func (*persistentVisibilityVendor) Unsubscribe(string, string, []string, func([]Host, error)) error {
+	return nil
+}
+func (*persistentVisibilityVendor) Close() error { return nil }
 
 func newBatchTestSink(recorder *batchRecorder) *Sink {
 	return &Sink{
@@ -282,6 +357,113 @@ func TestPushPersistentBatchesLimitsRequestsAndPreservesApplicationOrder(t *test
 	}
 	if secondBatchPosition <= lastFirstBatchPosition {
 		t.Fatalf("application scope batch order was not serialized: second batch at %d, first batch ended at %d; order=%v", secondBatchPosition, lastFirstBatchPosition, order)
+	}
+}
+
+// The concurrency contract is Sink-wide, not per method invocation. A watch
+// burst, a full snapshot, and a retry may enter the same Sink concurrently;
+// independent local semaphores would multiply the configured limit.
+func TestSinkWidePushLimiterCapsConcurrentIncrementalAndFullCalls(t *testing.T) {
+	recorder := &batchRecorder{errByIP: map[string]error{}, delay: 5 * time.Millisecond}
+	sink := newBatchTestSink(recorder)
+	SetPushConcurrency(3)
+	t.Cleanup(func() { SetPushConcurrency(DefaultPushConcurrency) })
+
+	makeItems := func(prefix, app string, count int) []*instance.Instance {
+		items := make([]*instance.Instance, count)
+		for i := range items {
+			items[i] = &instance.Instance{
+				InstanceId: fmt.Sprintf("%s-%02d", prefix, i),
+				AppCode:    app,
+				Provider:   "k8s",
+				Ip:         fmt.Sprintf("10.%d.%d.%d", len(prefix), len(app), i+1),
+				Status:     instance.InstanceStatusOnline,
+				Enabled:    true,
+			}
+		}
+		return items
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 4)
+	for i := 0; i < 2; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- sink.Push(time.Now().UnixNano(), makeItems(fmt.Sprintf("inc-%d", i), fmt.Sprintf("inc-app-%d", i), 20))
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- sink.pushPersistentBatches(makeItems(fmt.Sprintf("full-%d", i), fmt.Sprintf("full-app-%d", i), 20))
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent push error: %v", err)
+		}
+	}
+
+	recorder.mu.Lock()
+	max, calls := recorder.max, len(recorder.order)
+	recorder.mu.Unlock()
+	if max > 3 {
+		t.Fatalf("maximum concurrent SDK calls = %d, want <= 3 across all Sink entry points", max)
+	}
+	if calls != 80 {
+		t.Fatalf("SDK calls = %d, want all 80 items attempted", calls)
+	}
+}
+
+func TestWaitForPersistentBatchUsesExplicitUnhealthyWireState(t *testing.T) {
+	recorder := &batchRecorder{errByIP: map[string]error{}}
+	healthy := false
+	param := InstanceParams{
+		ServiceName: "pay-user", IP: "10.0.0.9", Port: 8080,
+		ClusterName: "k8s", GroupName: DefaultGroup,
+		Enabled: true, Healthy: &healthy, Ephemeral: false,
+		Metadata: map[string]string{"instanceId": "pod-uh"},
+	}
+	if ok, err := recorder.RegisterInstance(vo.RegisterInstanceParam{
+		Ip: param.IP, Port: uint64(param.Port), ClusterName: param.ClusterName,
+		ServiceName: param.ServiceName, GroupName: param.GroupName,
+		Enable: param.Enabled, Healthy: false, Ephemeral: false, Metadata: param.Metadata,
+	}); err != nil || !ok {
+		t.Fatalf("seed unhealthy visibility recorder: ok=%t err=%v", ok, err)
+	}
+	client := &Client{sdk: &sdkNamingFacade{client: recorder, group: DefaultGroup}, config: ClientConfig{}}
+	key := persistentBatchKey{Namespace: DefaultNamespaceID, Group: DefaultGroup, Service: "pay-user", Cluster: "k8s", Operation: batchRegister}
+	if err := waitForPersistentBatch(client, key, []InstanceParams{param}); err != nil {
+		t.Fatalf("waitForPersistentBatch(unhealthy enabled=true healthy=false): %v", err)
+	}
+}
+
+func TestPersistentVendorBatchRegistersAndObservesUnhealthyWireShape(t *testing.T) {
+	vendor := &persistentVisibilityVendor{}
+	sink := &Sink{
+		client: &Client{sdk: &sdkNamingFacade{vendor: vendor, group: DefaultGroup}, config: ClientConfig{}},
+		logger: nopBatchLogger{}, groupName: DefaultGroup,
+	}
+	item := &instance.Instance{
+		InstanceId: "pod-uh", AppCode: "pay-user", Provider: "k8s",
+		Ip: "10.0.0.9", Ports: []*instance.PortInfo{{Port: 8080}},
+		Status: instance.InstanceStatusUnhealthy, Enabled: false, Reversion: 42,
+	}
+	if err := sink.pushPersistentBatches([]*instance.Instance{item}); err != nil {
+		t.Fatalf("persistent vendor unhealthy batch: %v", err)
+	}
+	vendor.mu.Lock()
+	defer vendor.mu.Unlock()
+	if len(vendor.items) != 1 {
+		t.Fatalf("vendor entries=%d, want 1", len(vendor.items))
+	}
+	for _, got := range vendor.items {
+		if !got.Enabled || got.Healthy == nil || *got.Healthy || got.Ephemeral {
+			t.Fatalf("unhealthy vendor wire shape=%+v, want enabled=true healthy=false persistent", got)
+		}
 	}
 }
 
