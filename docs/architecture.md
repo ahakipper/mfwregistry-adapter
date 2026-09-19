@@ -15,7 +15,8 @@ configuration, metrics and failure runbook) and [../README.md](../README.md)
 > 3. Atlas and AppCenter are excluded from the current deliverable. The Atlas
 > flow described in the historical sections is retained only as compatibility
 > scaffolding/provenance; it is not a current implementation, validation, or
-> release-gate task. AppCenter is log-only/fail-closed by scope.
+> release-gate task. AppCenter transport/configuration is deleted; generic
+> operational notices are fail-closed by scope.
 
 ## Overview
 
@@ -81,7 +82,7 @@ Key external touch points:
 | --- | --- | --- |
 | CLI entry | `cmd/` (`root.go`, `adapter.go`), `main.go` | Cobra command tree + Viper config discovery; the `adapter` subcommand parses flags, applies an env preset, initializes logging and notices, then starts the server. |
 | Orchestration | `internal/server.go` | `Server`: creates the elector, subscribes to leader-change notifications on `leaderChCh`, and starts/stops the provider set on leadership transitions; also owns the Prometheus HTTP server. |
-| Provider layer | `pkg/providers/` (`iface.go`, `common.go`, `cache.go`), `pkg/providers/k8s/`, `pkg/providers/consul/`, `pkg/providers/aggregate/` | The `Provider` interface, shared filters/constants and the instance cache; the Kubernetes provider and the Consul provider implementations; an (unfinished) aggregate controller. |
+| Provider layer | `pkg/providers/` (`iface.go`, `common.go`, `cache.go`), `pkg/providers/k8s/`, `pkg/providers/consul/` | The `Provider` interface, shared filters/constants and the Kubernetes/Consul implementations. The obsolete aggregate controller is deleted. |
 | Push layer | `pkg/worker/` (`worker.go`, `types.go`, `elector.go`, `unsynced_service.go`, `worker_fack.go`), `pkg/discoverycenter/` | `DefaultWorker` routes events to handlers; `UnsyncedService` retries failed pushes; `pkg/discoverycenter` holds the gRPC client and the `Pusher` contract. |
 | Distributed coordination | `pkg/distribute/election/`, `pkg/distribute/discovery/`, `pkg/etcd/` | etcd client construction, the `Candidate` leader-election implementation, and the `Node` register/keepalive/watch mechanism. |
 | Multi-cluster K8s access | `pkg/k8srobot/` | The multi-cluster informer "robot" consumed by the K8s provider. |
@@ -535,12 +536,12 @@ binary into `/usr/bin` and uses `/usr/bin/spotter` as the entrypoint.
    package header of `v2.go`.
 2. **Historical notice shim (removed 2026-09-15).** The former
    `pkg/notice/appcenternotice` local no-op logger and package-global notice
-   API were deleted. The supported runtime uses the explicit
-   `internal/infra/notice` HTTP adapter when a deployment contract is supplied,
-   otherwise it remains fail-closed and log-only.
-3. **`pkg/providers/aggregate/controller.go` is an unfinished refactor.** All
-   methods are commented out; the intent was to deduplicate `CompareAndFlush`
-   across providers, but each provider still carries its own copy.
+   API were deleted. The later AppCenter HTTP adapter and all of its CLI/config
+   surfaces are also deleted; the supported default is generic fail-closed
+   notice accounting with no external I/O.
+3. **Historical aggregate scaffold (removed 2026-09-19).** The unfinished
+   `pkg/providers/aggregate/controller.go` and its package-global registry are
+   deleted. Provider-specific compare policies remain explicit.
 4. **etcd key rename.** The campaign key is now `/paas/spotter`
    (and `/paas/spotter-test`), and the node registration prefix is
    `/paas/spotter/register/`. An old deployment still campaigning under the
@@ -562,7 +563,8 @@ binary into `/usr/bin` and uses `/usr/bin/spotter` as the entrypoint.
    `go 1.25`; older files retain their original style, but changed files are
    gofmt-checked.
 9. **Nacos transport boundary.** All production Nacos operations route through
-   the official `nacos-sdk-go/v2` facade: naming lifecycle/query/subscribe,
+   pinned official `nacos-sdk-go/v3` commit `93a93504cc2f`: persistent gRPC
+   lifecycle plus naming query/subscribe,
    service-list, complete SelectAll-based catalog/prune, and SDK readiness
    read/write canary. SDK mode does not allocate the compatibility HTTP client.
    The pinned SDK has no cluster health-check Admin API, so that operation
@@ -586,6 +588,14 @@ delivery and real Atlas protobuf wire compatibility are explicitly excluded,
 not open Spotter implementation defects. Nacos deployment auth/TLS,
 non-public namespaces, HA/leaderless recovery, and Consul scale remain outside
 the current Spotter data-plane gate.
+
+Implementation baseline `0e6de37` makes Nacos the only implicit active Sink,
+requires `--atlas-compat` for any Atlas wiring, compares the complete canonical
+Instance (including labels, ports, images, source fields and Reversion), shares
+one mutation limit across incremental/full/retry/prune work, deletes the
+AppCenter HTTP transport and legacy aggregate scaffold, and keeps notice
+delivery resource-free/fail-closed. The fresh two-hour final-code observation
+is the remaining in-scope evidence gate.
 
 ## References
 

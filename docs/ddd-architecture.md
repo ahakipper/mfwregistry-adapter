@@ -5,29 +5,24 @@
 > preserved notifier/Warnf semantics. The fabricated empty CatalogService
 > issue is closed for migrated callers. Consul scale remains a non-goal.
 
-> **Implementation status (2026-09-13):** The composition root and
-> `internal/ports` are active, and the server's production provider graph now
-> receives explicit logger/notifier/metrics/config dependencies (`42ecb89`).
-> Legacy constructors and `cmd/adapter.go`'s compatibility bridge remain for
-> older callers; `pkg/providers/aggregate` is isolated behind the
-> `legacyaggregate` build tag. Notifications have a real transport seam and
-> fail-closed behavior. AppCenter integration is explicitly excluded from the
-> current Spotter deliverable; no endpoint/auth/SLA evidence is a current gate.
-> Legacy shim retirement is a separate, explicitly deferred migration decision.
+> **Implementation status (2026-09-19, baseline `0e6de37`):** The composition
+> root and `internal/ports` own explicit logger/notifier/metrics/config
+> dependencies. Package-global config/log/notice bridges, compatibility
+> constructors, and `pkg/providers/aggregate` are deleted. AppCenter transport
+> and configuration are deleted; notices default to resource-free fail-closed
+> accounting.
 
-> **Current-status addendum (code baseline `356aa75`):** The active graph
-> has explicit ports and no direct legacy imports; `legacycompat` is the sole
-> compatibility read boundary and aggregate is excluded by build tag. Nacos
-> real-gate and Observe harness lifecycles are bounded and fail-closed. Atlas
+> **Current-status addendum:** The active Nacos-only graph has explicit ports
+> and no legacy global boundary. Nacos real-gate and Observe harness lifecycles
+> are bounded and fail-closed. Atlas
 > and AppCenter are deliberately excluded from the current release scope;
 > their real evidence is not a release blocker. Discovery-center
 > empty-provider retrieval and provider cache deletion now preserve unfiltered,
 > nil-safe, deep-copy and unique-legacy-identity semantics.
 > Nacos exported constructors and `CheckReadiness` are SDK-default; HTTP
 > compatibility is isolated behind explicitly named helpers.
-> The injected `NacosClusterAdmin` boundary performs pre-register health-check
-> setup with per-pair claim/wait and bounded, idempotent close; default
-> composition intentionally supplies no unverified implementation.
+> Optional admin-managed health setup has per-pair claim/wait and bounded,
+> idempotent close; the deployment-owned default requires no admin facade.
 
 > **Scope correction (2026-09-19):** The Nacos 3 + KWOK data-plane reliability
 > gate passed the fresh 20-minute/1000-Pod run. Atlas real protobuf compatibility
@@ -36,13 +31,10 @@
 > historical plan material unless a future scope decision explicitly reopens
 > them.
 
-The remaining compatibility reads are centralized in
-`internal/infra/legacycompat`; provider, conversion, elector, and metrics
-packages no longer import `pkg/log`, `pkg/notice`, or the mutable `config`
-package directly. `internal/composition/boundary_test.go` is a static gate for
-this rule. The `New*Provider`/`NewElector` and `formatInstance` entry points
-remain deprecated source-compatibility wrappers only; the server's active
-graph calls the `WithDeps` constructors.
+`internal/composition/boundary_test.go` and
+`scripts/check_no_legacy_globals.sh` statically prevent reintroduction of the
+deleted global packages and constructors. The server's active graph calls only
+explicit dependency-injected constructors.
 The empty campaign-key fallback in `pkg/distribute/election` is also routed
 through `legacycompat`; `NewCandidateWithDeps` remains explicit and never
 consults ambient configuration when a key is supplied.

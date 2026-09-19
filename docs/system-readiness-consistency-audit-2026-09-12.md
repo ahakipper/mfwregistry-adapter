@@ -19,6 +19,17 @@
 > are intentionally excluded from the current Spotter scope; they are not open
 > release tasks.
 
+> **Final current-state correction (2026-09-19, baseline `0e6de37`):** Nacos
+> is the default and only implicit active Sink; Atlas requires
+> `--atlas-compat`. Reconcile compares the complete canonical Instance and
+> heals Reversion in either direction. Batch/retry/prune mutations share one
+> Sink-wide cap, confirmed-empty prune authority survives retry, AppCenter
+> transport/configuration is deleted, and legacy globals/aggregate are deleted.
+> The active module is official `nacos-sdk-go/v3` pseudo-version
+> `v3.0.0-20260831100852-93a93504cc2f`. Historical v2/Admin/global rows below
+> are provenance, not current blockers. The fresh final-code two-hour run is
+> the remaining in-scope evidence gate.
+
 **审计日期：** 2026-09-12（当前状态增量更新至 2026-09-13）
 
 > Current scope: Atlas is an existing compatibility Sink/mock only; Atlas
@@ -132,11 +143,11 @@ amd64，QEMU 下 Java 持续高 CPU 超过 5 分钟仍无 readiness 响应。容
 | Observe `logSlice` + ledger/apply 竞态 | **HARNESS FIXED; 2H PENDING** | zap JSON `ts`/行首时间解析和 apply/delete 前 ledger clock 已修复并有 deterministic tests；完整自包含 2h 观察尚未执行 | 是：旧缺口已修复，长时证据仍缺 |
 | Consul 同等规模观察 | **ACCEPTED NON-GOAL** | 2h/1000 观察只启动 `--providers k8s`；当前没有机器部署场景，按本次范围暂不展开 | 否；范围边界已明确 |
 | Nacos HTTP/SDK Sink | **NACOS 3 DATA-PLANE PASS** | The v2 evidence below is retained for provenance; the active v3.2.4 ARM64 SDK/gRPC path passed the fresh 20-minute data-plane gate. Deployment HA/multi-node/TLS/auth/namespace/leaderless checks are out of scope. | 是 |
-| Nacos 官方 SDK gRPC 能力 | **NACOS 3 TARGET / REAL NOT VERIFIED** | Current branch pins the official v3 development pseudo-version and adds a vendor seam; Task 1.2 must prove persistent register/deregister request types use gRPC. | 是 |
-| Nacos SDK 统一接入约束 | **CODE PASS / RELEASE NOT VERIFIED (P1)** | SDK query/list/subscribe/batch/reconnect/Admin evidence is partial; deployment HA/multi-node/TLS/auth/namespace/leaderless checks are out of scope. | 是 |
+| Nacos 官方 SDK gRPC 能力 | **NACOS 3 REAL PASS** | Pinned official v3 development version; persistent register/deregister request-type gate and real ARM64 lifecycle passed. | 原行已过时 |
+| Nacos SDK 统一接入约束 | **CODE + REAL DATA-PLANE PASS** | SDK query/list/subscribe/application-batch/reconcile/readiness are covered; deployment HA/TLS/auth/namespace/leaderless remain outside scope. | 原行已过时 |
 | Atlas 真实 protobuf wire | **EXCLUDED** | Historical limitation retained for provenance; no current Atlas implementation or wire gate. | No current release task |
-| Notice / appcenter 告警 | **EXCLUDED / LOG-ONLY** | AppCenter endpoint/payload/auth/SLA are not part of this release; notifier remains fail-closed/log-only. | No current release task |
-| DDD 目标架构 | **CODE PARTIAL / SHIM RETIREMENT PENDING** | active provider/elector/conversion/metrics graph 已使用显式依赖；legacy constructors/bridge 保留兼容，aggregate 已由 `legacyaggregate` build tag 隔离 | 是 |
+| Notice / appcenter 告警 | **APPCENTER DELETED / GENERIC FAIL-CLOSED** | AppCenter HTTP/config/CLI code is deleted; only the injected generic Notifier port remains. | No current release task |
+| DDD 目标架构 | **PASS** | Active graph uses explicit dependencies; legacy globals/constructors and aggregate scaffold are deleted and statically forbidden. | 原行已过时 |
 | `go vet ./...` | **PASS** | `eb6bf0c` 修复 cache printf 和 K8s unkeyed literal；当前命令退出 0 | 是 |
 
 **总体判定（历史基线）：** 本段旧结论不作为当前发布判定。当前 Nacos 3 + KWOK
@@ -148,12 +159,12 @@ Consul 规模观察仍属于范围外。历史 Nacos 2/Atlas/2h/通知缺口仅�
 
 ### 3.1 已经具备的能力
 
-当前 `pkg/nacos` 正在从官方 `nacos-sdk-go/v2` 迁移到 pinned `nacos-sdk-go/v3` development facade；v2 的 HTTP 路由记录仅作为历史证据。Nacos 3 生产路径不允许兼容 HTTP 业务写入。
+当前 `pkg/nacos` 已迁移到 pinned `nacos-sdk-go/v3` development facade；v2 的 HTTP 路由记录仅作为历史证据。Nacos 3 生产路径不允许兼容 HTTP 业务写入。
 HTTP 客户端仍保留，但只能由显式 `TransportHTTPCompat` 选择。SDK mode 不分配
 compatibility `net/http` client，也不会在任何不支持的 SDK 操作上偷偷回退裸 HTTP。
 
 - 生产 Nacos 操作统一经官方 SDK（或官方 SDK 暴露的等价 facade）；不得在业务路径新增散落裸 `net/http` 调用。
-- persistent register/deregister、service-list、SelectAll/query、subscribe/unsubscribe、catalog/prune 和 readiness read/write canary 必须通过官方 Nacos 3 SDK gRPC facade；Task 1.2 的 request-type gate 尚未通过。
+- persistent register/deregister、service-list、SelectAll/query、subscribe/unsubscribe、catalog/prune 和 readiness read/write canary 通过官方 Nacos 3 SDK gRPC facade；persistent request-type gate 已通过。
 - catalog/prune 在 SDK mode 通过 `SelectAllInstances` 完整视图实现（包含 `enabled=false`、unhealthy 和 zero-weight host），避免依赖 Admin catalog HTTP endpoint；HTTP catalog 仅保留在明确标注的兼容 fixture。
 - cluster health-check `UpdateCluster` is a deployment-owned management concern. Its absence from the naming SDK must not block ordinary runtime naming calls; any future Admin/Maintainer preflight is explicit and SDK-only.
 - product 环境启动拒绝 `TransportHTTPCompat`；兼容 transport 只用于测试或有审批的迁移回滚。
@@ -161,7 +172,7 @@ compatibility `net/http` client，也不会在任何不支持的 SDK 操作上�
 现有实现证据：
 
 - `NewClientWithConfig` 在 SDK mode 只构造官方 SDK facade；显式兼容模式才构造 tuned `http.Transport`（`MaxIdleConnsPerHost=8`、`MaxConnsPerHost=8`，外层超时 10s）；证据：`pkg/nacos/client.go`、`pkg/nacos/sdk.go`。
-- `Sink.Push` 支持：online 注册、unhealthy 注册为 `enabled=false`、offline 删除、unknown 跳过；证据：`pkg/nacos/nacos.go:227-245,480-516`。
+- `Sink.Push` 支持：online 注册、unhealthy 在 SDK wire 上注册为 `enabled=true/healthy=false` 并在 canonical payload 保留 provider Enabled、offline 删除、unknown 跳过；证据：`pkg/nacos/nacos.go`。
 - `PushAll = Push + prune`；SDK mode 的 prune 通过 `SelectAllInstances` 读取完整视图，能看见 `enabled=false` 实例，并按 `(service, cluster)` 作用域清理；证据：`pkg/nacos/nacos.go`、`pkg/nacos/client.go`。
 - `GetAll` 读取 SDK service list，再按 provider 对应的 Nacos cluster 读取 SDK complete view，重建可参与 compare 的实例；证据：`pkg/nacos/nacos.go`、`pkg/nacos/sdk.go`。
 - `APIError.Permanent()` 将 4xx 判为永久错误、5xx 判为可重试；证据：`pkg/nacos/client.go:397-420`。

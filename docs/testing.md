@@ -12,6 +12,12 @@ not change any code by itself.
 1000-Pod gate passed with exact three-watch correlation and full Instance
 equality. Atlas real tags and AppCenter delivery are intentionally excluded
 from the current release gate; their absence is not a pending Spotter task.
+The active implementation baseline is `0e6de37`: Nacos-only composition is the
+default, canonical reconcile covers every Instance field, application batches
+share one Sink-wide mutation limit, confirmed-empty retries preserve prune
+authority, external AppCenter/HTTP notification code is deleted, and the
+legacy aggregate scaffold is deleted. The remaining in-scope evidence gate is
+the fresh two-hour/1000-Pod run on this final code.
 
 **Historical status (2026-09-13, code baseline `33606fa`):** the default unit, full and
 race suites are green and `go vet ./...` is clean. The Nacos naming path is
@@ -30,13 +36,12 @@ until ECS/machine deployment is re-enabled.
 
 Composition tests also cover the per-start `ClusterAdminFactory`: each
 leadership start receives a fresh admin, factory errors fail before readiness,
-and a nil factory retains the SDK startup block without selecting HTTP
-compatibility.
+and explicit admin-managed mode fails when its factory is absent. The default
+deployment-owned policy does not construct or require that factory.
 
-The historical release-gate text below is retained for provenance. The current
-release gate is the completed Nacos 3 + KWOK data-plane run; SDK-only Nacos product startup is
-blocked before readiness until official cluster-admin support exists;
-`http-compat` is test/rollback only. Guarded Nacos/Atlas real tags and the
+The historical release-gate text below is retained for provenance. SDK-only
+Nacos product startup uses the deployment-owned health policy and does not
+require cluster-admin support; `http-compat` is test/rollback only. Guarded Nacos/Atlas real tags and the
 Observe harness skip as `NOT VERIFIED` when no scratch target exists. The
 current code evidence includes `go vet ./...`, race package gates,
 `go test -race -tags=observe ./tests/observe/...`, and guarded
@@ -69,10 +74,9 @@ the white-box constructor gate asserts that the default path has no raw HTTP
 client and that SDK sink capability failure occurs before remote writes.
 The exported `CheckReadiness` is also SDK-default; HTTP readiness fixtures use
 only `CheckReadinessHTTPCompat`.
-The approved-admin test seam covers pre-register ordering, same-pair claim/wait,
+The optional approved-admin test seam covers pre-register ordering, same-pair claim/wait,
 typed retryable/permanent failures, timeout/cancellation, and bounded
-idempotent close; without a real Admin/Maintainer implementation these remain
-mock evidence and production stays `BLOCKED / NOT VERIFIED`.
+idempotent close. It is not part of the deployment-owned naming gate.
 An ARM64 scratch result for both real SDK lifecycle tags is recorded in
 [`docs/evidence/nacos-arm64-scratch-2026-09-13.md`](evidence/nacos-arm64-scratch-2026-09-13.md);
 it is real scratch evidence only and leaves production Admin/TLS/auth/HA
@@ -88,10 +92,8 @@ reconnects with the official SDK, verifies persistent canary visibility, and
 cleans up before closing the client. Missing guards skip as `NOT VERIFIED`; no
 arbitrary container or production endpoint is touched.
 Historical v2.3.5 runs exposed a race in the automatic reconnect path during
-server restart; that old result is retained as provenance. The current
-pseudo-pin `0024865` has a separate guarded single-client ARM64 `-race` run
-recorded as PASS, while untagged SDK, HA, TLS, Admin, and production evidence
-remain NOT VERIFIED.
+server restart; that old result is retained as provenance only. The active SDK
+is the v3 pseudo-version recorded in [nacos-sdk-provenance.md](nacos-sdk-provenance.md).
 The pre-restart client is first warmed by a bounded service-list call so a
 startup-session Close race is not mistaken for the vendor restart result.
 
@@ -121,7 +123,13 @@ All tiers must run fully offline: no corporate etcd, Consul, or gRPC endpoints
 be dialed by a test). The only listeners allowed are `127.0.0.1` sockets
 created by the testkit mocks.
 
-## 2. Current state (audit results)
+## 2. Historical state (initial audit results)
+
+The counts and package inventory in this section are the original audit
+baseline. They are retained for provenance and are not the current matrix;
+several listed legacy packages, including config/log/notice/aggregate, have
+since been deleted. Current gates are defined by the addenda above and the
+Makefile targets.
 
 Commands run on this repository (Go toolchain in use builds the module without
 errors):
@@ -544,18 +552,19 @@ external read-only OBS-mini mode; teardown never deletes it. Fake-PATH shell
 contract checks should run with `bash scripts/observe_lifecycle_test.sh` (and
 `bash -n scripts/observe-*.sh`); missing
 kwokctl/docker/nc and occupied ports remain explicit EnvError/InfraError.
-The 2h/1000+ real run remains `NOT VERIFIED` when kwokctl or its prerequisites
-are unavailable.
+The final-code 2h/1000+ real run remains `NOT VERIFIED` until a fresh artifact
+passes; missing prerequisites must still report `EnvError`, never PASS.
 The owned lifecycle writes state before creation and uses an EXIT cleanup trap;
 state hashes and residual markers permit safe retry after partial failure.
 When `OBS_KUBECONFIG` is set, `make test-observe` runs only read-only
 `TestObserveUnit` cases and exits before any apply/delete driver operation.
 
-## Current Status Addendum (2026-09-15)
+## Current Status Addendum (2026-09-19)
 
-Commit `1c9912a` completed the legacy dependency removal and tightened
+The current tree completed the legacy dependency removal and tightened
 `scripts/check_no_legacy_globals.sh` to scan production and test Go files
-without compatibility exemptions. The full unit suite, focused race suite,
+without compatibility exemptions. The obsolete aggregate controller is also
+deleted. The full unit suite, focused race suite,
 E2E compile gate, static boundary check, and `go vet ./...` pass on the current
 tree. The remaining in-scope runtime test is the two-hour KWork burst with
 per-tick full-Instance equality; it is intentionally kept separate from the
@@ -565,15 +574,15 @@ completed one-hour evidence.
 Nacos 2.1.0 records in this document are historical compatibility evidence;
 they do not establish the current target. The active gate is a real
 `nacos/nacos-server:v3.2.4-slim` ARM64 target. Nacos 3 runtime naming supports
-persistent gRPC operations, but the adapter must prove the exact official Go
-SDK route rather than infer it from a module version string.
+persistent gRPC operations. The guarded v3.2.4 ARM64 gate proved the exact
+request path, final catalog, and cleanup.
 
 Spotter's application batch remains distinct from a Nacos protocol batch: one
 namespace/group/application/cluster/operation scope, maximum 100 items, global
-item-call cap 8, and no prune after a failed registration phase. A 201-item
-test must observe all 201 persistent composite identities after the final
-`100 + 100 + 1` work units. The test must fail if a protocol batch replaces the
-previous chunk or if any item silently routes through `/v1/ns` HTTP.
+item-call cap 8 shared across incremental/full/retry/prune mutations, and no
+prune after a failed registration phase. The 201-item test observes all 201
+persistent composite identities after `100 + 100 + 1` work units and fails if
+any business write routes through `/v1/ns` HTTP.
 
 The guarded Nacos 3 gate records the immutable image digest, SDK module and
 checksum, transport/request type, namespace/group, exact catalog hash, retry
@@ -589,8 +598,8 @@ Admin/Maintainer preflight is separate from runtime naming writes.
 
 `scripts/observe-up.sh` and `scripts/observe-down.sh` provide the OBS-full
 self-contained kwok lifecycle with dedicated kubeconfig, API/etcd ports,
-readyz and node-capacity checks. The 2h/1000-instance OBS-full run has not
-been executed here because `kwokctl` is unavailable. OBS-mini may use
+readyz and node-capacity checks. The final-code 2h/1000-instance OBS-full run
+remains pending. OBS-mini may use
 `OBS_KUBECONFIG` external read-only mode; teardown never deletes that cluster.
 Run `scripts/observe_lifecycle_test.sh` for fake-PATH failure and cleanup
 coverage.
@@ -598,9 +607,9 @@ coverage.
 Plain Chinese terminology: Nacos 协议 batch 是一次请求提交多个实例，当前
 目标服务端只验证到临时实例路径；Spotter application batch 则是按同一应用
 分组、每批最多 100 条，再用官方 SDK 逐条写入持久实例。cluster-admin
-health-check 是 Nacos 服务器主动探测实例健康的管理开关；AppCenter
-endpoint/payload/auth/SLA 分别是告警地址、消息格式、认证信息和时效承诺；
-legacy shim/globals 是为旧调用方保留的兼容包装和进程级全局变量。
+health-check 是 Nacos 服务器主动探测实例健康的管理开关，默认由部署方负责；
+AppCenter 的 endpoint/auth/retry/HTTP 代码和 CLI 配置已经删除；legacy
+package globals 与 aggregate scaffold 也已经删除。
 
 Atlas excluded 表示本版本不实现、不验证真实 Atlas 协议，也不代表 Atlas 已可用于生产。
 Deployment-level Nacos checks out-of-scope 表示本阶段不搭建或验收 HA/TLS 等部署条件，

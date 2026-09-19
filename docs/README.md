@@ -8,7 +8,8 @@ the current Nacos Sink.
 > **Current release scope (2026-09-19):** Nacos 3 is the active Sink and data
 > plane. Atlas and AppCenter are explicitly excluded from this release. Atlas
 > references below are historical/compatibility provenance only; AppCenter
-> remains log-only/fail-closed and has no delivery integration task.
+> transport and configuration are deleted, while generic notices remain
+> fail-closed. The current implementation baseline is `0e6de37`.
 
 | Document | Description |
 | --- | --- |
@@ -19,7 +20,7 @@ the current Nacos Sink.
 | [system-readiness-consistency-remediation-plan-2026-09-12.md](system-readiness-consistency-remediation-plan-2026-09-12.md) | v6 remediation plan: mandatory official Nacos SDK/facade adoption, ordered P0/P1/P2 work packages, complete SDK test matrix, E2E gates, migration/rollback rules and release blockers. |
 | [atlas-wire-compatibility.md](atlas-wire-compatibility.md) | **Excluded-scope record:** historical Atlas JSON-mirror limitations and the guarded `atlas_real` test; no current Atlas implementation gate. |
 | [evidence/nacos-arm64-scratch-2026-09-13.md](evidence/nacos-arm64-scratch-2026-09-13.md) | Real ARM64 local Nacos SDK lifecycle evidence with immutable image, port mappings, cleanup status, and explicit production evidence limits. |
-| [nacos-sdk-provenance.md](nacos-sdk-provenance.md) | Pinned upstream SDK race fix provenance, expiry, and lifecycle CI gate. |
+| [nacos-sdk-provenance.md](nacos-sdk-provenance.md) | Pinned official SDK v3 commit/checksums, persistent gRPC boundary, expiry, and lifecycle CI gate. |
 | [remediation-execution-status-2026-09-13.md](remediation-execution-status-2026-09-13.md) | Current implementation, test evidence, release blockers, and external verification boundary. |
 | [superpowers/plans/2026-09-14-nacos3-kwok-global-cleanup.md](superpowers/plans/2026-09-14-nacos3-kwok-global-cleanup.md) | Active Nacos 3, real kwok scale, health-policy, batching, and legacy-global removal plan. |
 | [evidence/nacos3-kwok-target-2026-09-14.md](evidence/nacos3-kwok-target-2026-09-14.md) | Current Nacos 3 SDK provenance, ARM64 target, kwok acceptance schema, and evidence status. |
@@ -29,7 +30,8 @@ the current Nacos Sink.
 | [evidence/nacos3-kwok-20m-root-cause-2026-09-19.md](evidence/nacos3-kwok-20m-root-cause-2026-09-19.md) | Failed 20-minute/1000-Pod run root cause: harness no-op deletes, K8s cache resurrection race, remediation evidence, and the mandatory revalidation gate. |
 | [evidence/nacos3-kwok-reconcile-race-closure-2026-09-19.md](evidence/nacos3-kwok-reconcile-race-closure-2026-09-19.md) | Three-run fail/find/fix closure for mixed-time reconcile deletion and crash/recovery ownership, ending in a clean 10-minute/1000-Pod collision PASS. |
 | [evidence/nacos3-kwok-20m-pass-2026-09-19.md](evidence/nacos3-kwok-20m-pass-2026-09-19.md) | Fresh 20-minute/1000-Pod Nacos 3 + KWOK PASS with exact three-watch correlation, full Instance equality, burst wall/per-item timings, and P90/P95/P99 latency. |
-| [superpowers/plans/2026-09-15-remaining-closure.md](superpowers/plans/2026-09-15-remaining-closure.md) | Remaining in-scope closure plan: legacy deletion, two-hour burst gate, status reconciliation, and safe historical commit-message rewrite. |
+| [superpowers/plans/2026-09-19-nacos-only-stability-e2e-plan.md](superpowers/plans/2026-09-19-nacos-only-stability-e2e-plan.md) | Authoritative Nacos-only implementation, canonical reconcile, batch/retry, E2E, Observe, and final release plan. |
+| [superpowers/plans/2026-09-15-remaining-closure.md](superpowers/plans/2026-09-15-remaining-closure.md) | Superseded historical closure plan; retained for provenance only. |
 
 Start with [architecture.md](architecture.md) for the big picture; see the
 [project README](../README.md) for build and usage basics.

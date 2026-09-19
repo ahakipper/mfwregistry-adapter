@@ -4,11 +4,23 @@
 **Branch:** `refactor/all`  
 **Owner:** lead agent with delegated implementation and review agents
 
+## Execution status
+
+| Stage | Status | Commit / evidence |
+|---|---|---|
+| 0 — baseline and plan | **PASS** | `6b37bec` |
+| 1 — Nacos-only composition | **PASS** | `91fb3a7`; independent review PASS |
+| 2 — canonical all-field reconcile | **PASS** | `52b787c`; independent adversarial review PASS |
+| 3 — batch/ordering/failure recovery | **PASS** | `92712fb`; independent adversarial review PASS |
+| 4 — E2E/Observe qualification | **PARTIAL** | Expanded E2E landed; final-code two-hour run pending |
+| 5 — cleanup/release gate | **IN PROGRESS** | AppCenter removal `d80aa42`; aggregate deletion `0e6de37`; final matrix/docs pending |
+
 ## Scope decision
 
 The active Spotter release is the Nacos 3 data plane. Atlas and AppCenter are
 explicitly excluded: Atlas may remain only behind an intentional compatibility
-boundary, and AppCenter remains log-only/fail-closed. Nacos deployment HA,
+boundary; AppCenter transport/configuration is removed, and only the generic
+notice port remains fail-closed. Nacos deployment HA,
 TLS/auth policy, non-public namespace authorization, leaderless recovery, and
 Consul machine-scale observation remain deployment or future-scope concerns.
 

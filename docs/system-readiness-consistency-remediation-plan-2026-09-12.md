@@ -15,6 +15,17 @@
 > target. Deployment Nacos HA/TLS/auth/namespace/leaderless checks are outside
 > scope.
 
+> **Final implementation correction (2026-09-19, baseline `0e6de37`):**
+> Nacos is now the only implicit active Sink; Atlas requires explicit
+> `--atlas-compat`. Nacos reconcile uses complete canonical Instance equality,
+> including labels, ports, images, source fields and Reversion. Application
+> batches share one Sink-wide mutation cap across incremental/full/retry/prune;
+> confirmed-empty retries retain deletion authority. AppCenter HTTP/config and
+> the legacy aggregate/global dependency tree are deleted. Official SDK v3
+> provenance is in `docs/nacos-sdk-provenance.md`. Historical v2/Admin-blocker,
+> deferred-global, and future-Atlas work packages below are superseded. The
+> final-code two-hour/1000-Pod Observe run is the remaining evidence gate.
+
 > **Authoritative current addendum (2026-09-15):** The successor Nacos3/kwok
 > plan has delivered complete Instance metadata round-trip, all-label and
 > `Reversion` equality, fresh SDK snapshots, and linearized one-hour evidence

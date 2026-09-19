@@ -4,59 +4,45 @@ Operational reference for building, running, monitoring and troubleshooting
 spotter. See [architecture.md](architecture.md) for design background and
 [data-model.md](data-model.md) for the pushed data model.
 
-## Current release status (2026-09-14, target baseline `refactor/all`)
+## Current release status (2026-09-19, implementation baseline `0e6de37`)
 
 - The supported Nacos target is `nacos/nacos-server:v3.2.4-slim` on
   `linux/arm64`. The historical Nacos 2.1.0 scratch records below are
   compatibility evidence only, not Nacos 3 release evidence.
-- Nacos 3 business operations must use the official Go SDK's gRPC-capable
-  naming facade. The current v3 development pseudo-version is pinned in
-  `go.mod`; the Nacos 3 integration gate remains **NOT VERIFIED** until a real
-  v3.2.4 target passes the persistent lifecycle and 201-instance batch tests.
+- Nacos 3 business operations use pinned official SDK v3 commit
+  `93a93504cc2f`. Persistent register/deregister use the adapter's v3 gRPC
+  request seam; query, Subscribe, service-list, readiness and catalog/reconcile
+  remain SDK-backed. Real Nacos 3.2.4 ARM64 lifecycle, 201-instance application
+  batch, and 20-minute/1000-Pod KWOK gates passed.
 - `healthChecker=NONE` is a service/cluster management setting provisioned by
   the Nacos deployment. It is not a prerequisite for the SDK's register,
   deregister, query, or subscribe calls. Spotter does not silently fall back to
   raw HTTP when an Admin/Maintainer SDK is unavailable.
 - Real Nacos deployment HA, multi-node failover, TLS/auth policy, namespace
   authorization, and leaderless recovery remain outside this Spotter release
-  scope; the Nacos 3 single-Sink runtime gate is still required.
-- Atlas remains compatibility scaffolding only and is explicitly excluded from
-  the current release. Real protobuf/method/TLS/auth compatibility is not a
-  current task or release gate; the Atlas address flag below is legacy wiring.
+  scope.
+- Nacos is the only active Sink by default. Atlas is never dialed unless the
+  operator explicitly enables `--atlas-compat`; no implicit Atlas fallback
+  exists.
 - Observe unit/race harness safety and the fresh 20-minute/1000-Pod gate are
   complete. Consul scale observation is an accepted non-goal until ECS
   deployment returns.
-- DDD active paths use injected logger/notifier/metrics ports. The deprecated
-  global packages remain only as compatibility scaffolding. AppCenter is not
-  integrated in this release; notification output is log-only/fail-closed and
-  no endpoint/payload/auth/SLA work is scheduled.
+- DDD active paths use injected logger/notifier/metrics ports. Package-global
+  config/logger/notice bridges and the aggregate scaffold are deleted.
+  AppCenter endpoint/auth/retry/HTTP code and flags are deleted; the default
+  generic notifier performs no external I/O.
 
-Current code gates: `go vet ./...`, package race tests, observe-tagged unit/race
-tests, and guarded Nacos compatibility tests. The `atlas_real` tag is retained
-only as historical compatibility scaffolding and is not a current release gate.
+Current code gates: `go vet ./...`, package race tests, expanded tagged E2E,
+observe-tagged unit/race tests, and guarded real Nacos tests. The `atlas_real`
+tag is historical compatibility scaffolding, not a current release gate.
 The exported Nacos `NewClient`, `NewSink`, and `CheckReadiness` constructors
 are SDK-default; raw HTTP is available only through the explicitly named
 `NewHTTPCompat*` and `CheckReadinessHTTPCompat` rollback/test helpers.
-An approved `NacosClusterAdmin` must be injected to unlock SDK startup; its
-health-check update precedes business registration, concurrent first claims are
-coalesced, failures are typed for retry policy, and close is bounded/idempotent.
-The server obtains it through a per-start factory, so leadership restarts never
-reuse a closed admin; absent or failed factories remain a startup block.
-The ARM64 local Nacos SDK lifecycle result is recorded in
-[`docs/evidence/nacos-arm64-scratch-2026-09-13.md`](evidence/nacos-arm64-scratch-2026-09-13.md).
-It is not a production readiness approval; the missing Admin/Maintainer
-cluster-health capability is the current Nacos integration blocker. Deployment
-TLS/auth, HA/restart and non-public namespace evidence are outside this
-Spotter release scope.
-The scratch artifact includes guarded username/password and token runs plus
-the `tenant-a`/`blue` scope; these record only SDK/client scratch behavior.
-Deployment HA/TLS/auth/namespace/leaderless checks are out of scope in this
-phase and must not be interpreted as passed.
-The historical v2.3.5 `nacos_restart` race run exposed a vendor SDK reconnect
-race and is `FAIL / RACE_BLOCKED`. The current pseudo-pin `0024865` has a
-separate guarded ARM64 single-client `-race` scratch PASS; untagged SDK/Admin
-capability and production SDK lifecycle remain `NOT VERIFIED`; deployment
-HA/TLS/auth/namespace/leaderless checks are out of scope.
+The default health policy is `deployment-owned`; ordinary naming startup never
+requires `NacosClusterAdmin`. Explicit `admin-managed` mode is optional and
+fails closed when no facade is injected. It never falls back to raw HTTP.
+SDK provenance and the pin review date are recorded in
+[nacos-sdk-provenance.md](nacos-sdk-provenance.md).
 
 ## Build
 
@@ -86,7 +72,8 @@ repository root. The official build is performed by the internal CI pipeline
 Typical production invocation:
 
 ```bash
-./spotter adapter -e product -r k8s,ecs -g <legacy-atlas-grpc-addr> -i 21600
+./spotter adapter -e product -r k8s \
+  --nacos-addr <nacos-host:8848> --nacos-transport sdk -i 21600
 ```
 
 The `adapter` subcommand requires `--env` to be one of `test`, `dev` or
@@ -103,6 +90,9 @@ process is normally started from the directory that contains `config/`.
 | `-e, --env` | `test` | Environment preset (etcd, kubeconfigs, consul, campaign key). |
 | `-i, --push-interval` | `21600` | Full-push interval, in seconds (21600 = 6 h). |
 | `-g, --grpc-addr` | `172.16.130.71:50051` | Legacy Atlas compatibility address; not used by the current Nacos-only release. |
+| `--atlas-compat` | `false` | Explicitly add the legacy Atlas Sink; never enabled implicitly. |
+| `--nacos-addr` | empty | Nacos server address; required unless explicit Atlas compatibility is selected. |
+| `--reconcile-source` | empty | Resolves to `nacos` in the default Nacos-only graph. |
 
 ### Nacos sink transport
 
@@ -116,15 +106,9 @@ is rejected when `Env=product`. SDK mode allocates no compatibility
 username/password, TLS CA/server name, and timeout flags are passed to the same
 client configuration. Catalog/prune uses the SDK complete view (including
 disabled/unhealthy entries), and readiness uses the SDK service-list RPC plus a
-persistent register/deregister canary. The pinned v3 development SDK is not
-accepted as Nacos 3 evidence until the real v3.2.4 gate proves that persistent
-operations use gRPC rather than `/v1/ns` HTTP. The explicit `http-compat`
-transport is test-only and is never a product fallback.
-
-AppCenter notification flags are retained only for compatibility with older
-callers. The current release does not configure or send AppCenter requests;
-the runtime remains log-only/fail-closed, and local log output is not treated
-as AppCenter alert delivery.
+persistent register/deregister canary. The real v3.2.4 gate proved persistent
+gRPC operation and cleanup. The explicit `http-compat` transport is test-only
+and is never a product fallback.
 | `-w, --disable-worker` | `false` | Disable the real push; pushes are logged only. Testing flag. |
 | `--appcodes` | `[]` | Restrict pushes to these appcodes. Testing flag. |
 | `--metrics-addr` | `:8090` | Prometheus metrics listen address. |
@@ -210,10 +194,11 @@ and three "Instance data inconsistency" variants emitted during full pushes.
 - [../README.md](../README.md) — project README.
 ### Nacos 3 production startup gate
 
-Offline SDK routing tests are not sufficient for release. Production startup
-requires the Nacos 3.2.4 ARM64 integration gate to prove persistent gRPC
-register/deregister, complete reads, retry, and 201-instance application
-batching. Missing Admin/Maintainer support does not disable ordinary naming
-operations; it only means Spotter cannot change the deployment's
-`healthChecker=NONE` setting itself. The deployment must provision that policy
-before startup, or an approved Admin/Maintainer SDK preflight must be injected.
+The real Nacos 3.2.4 ARM64 gate has proved persistent gRPC
+register/deregister, complete reads, retry, cleanup, and 201-instance
+application batching. The remaining reliability evidence gate is the fresh
+two-hour/1000-Pod corrected three-watch run on the final code.
+
+Missing Admin/Maintainer support does not disable ordinary naming operations.
+Spotter assumes cluster health policy is deployment-owned and does not attempt
+to configure it unless the optional `admin-managed` mode is explicitly chosen.
