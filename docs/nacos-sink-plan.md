@@ -27,27 +27,29 @@
 > allocate the compatibility `net/http` client. See
 > [system-readiness-consistency-remediation-plan-2026-09-12.md](system-readiness-consistency-remediation-plan-2026-09-12.md) §10 for the
 > mandatory migration and complete test gate.
-> The historical v2/Admin-blocker paragraph below is superseded for the current
+> **Historical v2/Admin provenance (not current):** The paragraph below is
+> superseded for the current
 > Nacos 3 release: deployment-owned health policy is the default, ordinary SDK
 > naming startup does not require a cluster-admin facade, and no HTTP fallback
 > is used in product wiring. Real Nacos tests
 > are guarded and cleanup-safe with local ARM64 scratch evidence, so mock/race evidence
 > does not promote the production status.
-> Exported `NewClient` and `NewSink` are SDK-default and therefore inherit
-> that fail-closed capability gate. Raw HTTP tests/rollback callers must use
+> Exported `NewClient` and `NewSink` are SDK-default for ordinary naming
+> operations; they do not require the optional admin-managed health facade.
+> Raw HTTP tests/rollback callers must use
 > the explicitly named `NewHTTPCompatClient` and `NewHTTPCompatSink` helpers;
 > no unnamed constructor may allocate the compatibility client. `CheckReadiness`
 > follows the same SDK-default rule; only `CheckReadinessHTTPCompat` is
 > permitted in HTTP fixture/rollback code.
 > An injected `NacosClusterAdmin` seam now permits an approved official
 > Admin/Maintainer implementation to run the health-check update before any
-> business registration; the default server composition still supplies none,
-> so the fail-closed block remains active until a real adapter is verified.
+> business registration when `admin-managed` is explicitly selected; the
+> deployment-owned default supplies none and remains fully usable.
 > The seam uses per-pair claim/wait coordination, typed retryable/permanent
 > errors, and context-bounded/idempotent close; readiness joins close failures.
 > Server composition accepts a per-start `ClusterAdminFactory`; each Nacos sink
 > lifecycle receives a fresh admin and closes it with the sink. A nil factory
-> intentionally preserves the SDK fail-closed block.
+> intentionally leaves the optional admin-managed operation unavailable.
 > The ARM64 local scratch lifecycle evidence is recorded in
 > [evidence/nacos-arm64-scratch-2026-09-13.md](evidence/nacos-arm64-scratch-2026-09-13.md);
 > it is a real scratch check only and does not unlock production.
