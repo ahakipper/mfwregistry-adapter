@@ -23,6 +23,7 @@ the discovery center ("Atlas") over gRPC.
 | [evidence/nacos3-kwok-continuous-watch-scale-pass-2026-09-17.md](evidence/nacos3-kwok-continuous-watch-scale-pass-2026-09-17.md) | Full 1/10/100/500/1000 KWOK continuous-watch scale evidence with 10,220 per-instance samples and strict batch min/median/max. |
 | [evidence/nacos3-kwok-20m-root-cause-2026-09-19.md](evidence/nacos3-kwok-20m-root-cause-2026-09-19.md) | Failed 20-minute/1000-Pod run root cause: harness no-op deletes, K8s cache resurrection race, remediation evidence, and the mandatory revalidation gate. |
 | [evidence/nacos3-kwok-reconcile-race-closure-2026-09-19.md](evidence/nacos3-kwok-reconcile-race-closure-2026-09-19.md) | Three-run fail/find/fix closure for mixed-time reconcile deletion and crash/recovery ownership, ending in a clean 10-minute/1000-Pod collision PASS. |
+| [evidence/nacos3-kwok-20m-pass-2026-09-19.md](evidence/nacos3-kwok-20m-pass-2026-09-19.md) | Fresh 20-minute/1000-Pod Nacos 3 + KWOK PASS with exact three-watch correlation, full Instance equality, burst wall/per-item timings, and P90/P95/P99 latency. |
 | [superpowers/plans/2026-09-15-remaining-closure.md](superpowers/plans/2026-09-15-remaining-closure.md) | Remaining in-scope closure plan: legacy deletion, two-hour burst gate, status reconciliation, and safe historical commit-message rewrite. |
 
 Start with [architecture.md](architecture.md) for the big picture; see the
