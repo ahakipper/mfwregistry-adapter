@@ -56,17 +56,13 @@ func TestProductionCompositionHasNoLegacyGlobalImports(t *testing.T) {
 	}
 }
 
-func TestLegacyAggregateIsExcludedFromNormalBuild(t *testing.T) {
+func TestLegacyAggregateIsDeleted(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
 	path := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", "..", "pkg", "providers", "aggregate", "controller.go"))
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read aggregate controller: %v", err)
-	}
-	if !strings.HasPrefix(string(data), "//go:build legacyaggregate") {
-		t.Fatalf("aggregate controller lacks legacyaggregate build gate")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("legacy aggregate controller still exists or cannot be checked: %v", err)
 	}
 }
