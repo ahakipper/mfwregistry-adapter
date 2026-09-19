@@ -124,12 +124,9 @@ func TestNacosRealPersistentApplicationBatch(t *testing.T) {
 	if err := sink.PushAll(time.Now().UnixNano(), items); err != nil {
 		t.Fatalf("persistent application batch retry: %v", err)
 	}
-	hosts, err := verifierCatalogHosts(cfg.client, service, cluster)
+	hosts, err := waitForNacosCatalogCount(cfg.client, service, cluster, len(items), 30*time.Second)
 	if err != nil {
-		t.Fatalf("fresh catalog verification: %v", err)
-	}
-	if len(hosts) != len(items) {
-		t.Fatalf("fresh catalog entries=%d, want exactly %d", len(hosts), len(items))
+		t.Fatalf("fresh catalog convergence verification: %v", err)
 	}
 	for _, host := range hosts {
 		if host.Metadata["spotterOwner"] != "spotter" {
@@ -156,6 +153,22 @@ func verifierCatalogHosts(cfg nacos.ClientConfig, service, cluster string) ([]na
 		return nil, closeErr
 	}
 	return hosts, nil
+}
+
+func waitForNacosCatalogCount(cfg nacos.ClientConfig, service, cluster string, want int, timeout time.Duration) ([]nacos.Host, error) {
+	deadline := time.Now().Add(timeout)
+	var hosts []nacos.Host
+	var lastErr error
+	for {
+		hosts, lastErr = verifierCatalogHosts(cfg, service, cluster)
+		if lastErr == nil && len(hosts) == want {
+			return hosts, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("catalog convergence timeout: entries=%d want=%d last_error=%v", len(hosts), want, lastErr)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 func verifyNacosCatalogEmpty(cfg nacos.ClientConfig, service, cluster string) error {
@@ -192,7 +205,7 @@ func catalogHash(hosts []nacos.Host) string {
 
 // TestNacosReal is the opt-in real-Nacos gate named by the remediation plan.
 // It intentionally skips without NACOS_SERVER; a skip is not production
-// evidence. The target must be Nacos 2.x with the gRPC port (server port +
+// evidence. The target must be Nacos 3.x with the gRPC port (server port +
 // 1000) reachable from the test host.
 func TestNacosReal(t *testing.T) {
 	if strings.TrimSpace(os.Getenv("NACOS_SERVER")) == "" {

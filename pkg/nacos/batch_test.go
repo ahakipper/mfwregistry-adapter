@@ -241,13 +241,23 @@ func (successfulBatchAdmin) UpdateHealthChecker(context.Context, string, string,
 func (successfulBatchAdmin) Close(context.Context) error { return nil }
 
 type persistentVisibilityVendor struct {
-	mu    sync.Mutex
-	items map[string]InstanceParams
+	mu               sync.Mutex
+	items            map[string]InstanceParams
+	registerErrByIP  map[string]error
+	registerAttempts []string
+	deregistered     []InstanceParams
+	hiddenIPs        map[string]bool
+	selectErr        error
+	selectCalls      int
 }
 
 func (v *persistentVisibilityVendor) RegisterPersistent(p InstanceParams) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	v.registerAttempts = append(v.registerAttempts, p.IP)
+	if err := v.registerErrByIP[p.IP]; err != nil {
+		return err
+	}
 	if v.items == nil {
 		v.items = map[string]InstanceParams{}
 	}
@@ -256,6 +266,7 @@ func (v *persistentVisibilityVendor) RegisterPersistent(p InstanceParams) error 
 }
 func (v *persistentVisibilityVendor) DeregisterPersistent(p InstanceParams) error {
 	v.mu.Lock()
+	v.deregistered = append(v.deregistered, p)
 	delete(v.items, instanceID(p))
 	v.mu.Unlock()
 	return nil
@@ -263,9 +274,13 @@ func (v *persistentVisibilityVendor) DeregisterPersistent(p InstanceParams) erro
 func (v *persistentVisibilityVendor) SelectAll(service, cluster, group string) ([]Host, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	v.selectCalls++
+	if v.selectErr != nil {
+		return nil, v.selectErr
+	}
 	hosts := make([]Host, 0, len(v.items))
 	for id, p := range v.items {
-		if p.ServiceName != service || p.ClusterName != cluster {
+		if p.ServiceName != service || p.ClusterName != cluster || v.hiddenIPs[p.IP] {
 			continue
 		}
 		healthy := p.Enabled
@@ -418,29 +433,6 @@ func TestSinkWidePushLimiterCapsConcurrentIncrementalAndFullCalls(t *testing.T) 
 	}
 }
 
-func TestWaitForPersistentBatchUsesExplicitUnhealthyWireState(t *testing.T) {
-	recorder := &batchRecorder{errByIP: map[string]error{}}
-	healthy := false
-	param := InstanceParams{
-		ServiceName: "pay-user", IP: "10.0.0.9", Port: 8080,
-		ClusterName: "k8s", GroupName: DefaultGroup,
-		Enabled: true, Healthy: &healthy, Ephemeral: false,
-		Metadata: map[string]string{"instanceId": "pod-uh"},
-	}
-	if ok, err := recorder.RegisterInstance(vo.RegisterInstanceParam{
-		Ip: param.IP, Port: uint64(param.Port), ClusterName: param.ClusterName,
-		ServiceName: param.ServiceName, GroupName: param.GroupName,
-		Enable: param.Enabled, Healthy: false, Ephemeral: false, Metadata: param.Metadata,
-	}); err != nil || !ok {
-		t.Fatalf("seed unhealthy visibility recorder: ok=%t err=%v", ok, err)
-	}
-	client := &Client{sdk: &sdkNamingFacade{client: recorder, group: DefaultGroup}, config: ClientConfig{}}
-	key := persistentBatchKey{Namespace: DefaultNamespaceID, Group: DefaultGroup, Service: "pay-user", Cluster: "k8s", Operation: batchRegister}
-	if err := waitForPersistentBatch(client, key, []InstanceParams{param}); err != nil {
-		t.Fatalf("waitForPersistentBatch(unhealthy enabled=true healthy=false): %v", err)
-	}
-}
-
 func TestPersistentVendorBatchRegistersAndObservesUnhealthyWireShape(t *testing.T) {
 	vendor := &persistentVisibilityVendor{}
 	sink := &Sink{
@@ -455,15 +447,119 @@ func TestPersistentVendorBatchRegistersAndObservesUnhealthyWireShape(t *testing.
 	if err := sink.pushPersistentBatches([]*instance.Instance{item}); err != nil {
 		t.Fatalf("persistent vendor unhealthy batch: %v", err)
 	}
-	vendor.mu.Lock()
-	defer vendor.mu.Unlock()
-	if len(vendor.items) != 1 {
-		t.Fatalf("vendor entries=%d, want 1", len(vendor.items))
+	hosts, err := vendor.SelectAll("pay-user", "k8s", DefaultGroup)
+	if err != nil {
+		t.Fatalf("read persistent vendor state after acknowledged write: %v", err)
 	}
-	for _, got := range vendor.items {
-		if !got.Enabled || got.Healthy == nil || *got.Healthy || got.Ephemeral {
-			t.Fatalf("unhealthy vendor wire shape=%+v, want enabled=true healthy=false persistent", got)
-		}
+	if len(hosts) != 1 {
+		t.Fatalf("vendor entries=%d, want 1", len(hosts))
+	}
+	if got := hosts[0]; !got.Enabled || got.Healthy || got.Ephemeral {
+		t.Fatalf("unhealthy vendor wire shape=%+v, want enabled=true healthy=false persistent", got)
+	}
+}
+
+func TestPersistentVendorBatchDoesNotSynchronouslyPollCatalog(t *testing.T) {
+	vendor := &persistentVisibilityVendor{selectErr: errors.New("catalog snapshot is deliberately unavailable")}
+	sink := &Sink{
+		client: &Client{sdk: &sdkNamingFacade{vendor: vendor, group: DefaultGroup}, config: ClientConfig{}},
+		logger: nopBatchLogger{}, groupName: DefaultGroup,
+	}
+	item := &instance.Instance{
+		InstanceId: "pod-ack", AppCode: "pay-user", Provider: "k8s",
+		Ip: "10.0.0.10", Ports: []*instance.PortInfo{{Port: 8080}},
+		Status: instance.InstanceStatusOnline, Enabled: true, Reversion: 43,
+	}
+	if err := sink.pushPersistentBatches([]*instance.Instance{item}); err != nil {
+		t.Fatalf("acknowledged persistent write must not depend on synchronous catalog visibility: %v", err)
+	}
+	vendor.mu.Lock()
+	selectCalls, registered := vendor.selectCalls, len(vendor.items)
+	vendor.mu.Unlock()
+	if selectCalls != 0 {
+		t.Fatalf("SelectAll calls=%d, want 0 in the write path", selectCalls)
+	}
+	if registered != 1 {
+		t.Fatalf("registered entries=%d, want 1 acknowledged write", registered)
+	}
+}
+
+func TestPersistentVendorBatchReturnsFirstRPCErrorAndSkipsPrune(t *testing.T) {
+	first := errors.New("first persistent RPC failed")
+	vendor := &persistentVisibilityVendor{registerErrByIP: map[string]error{
+		"10.0.1.1": first,
+		"10.0.1.2": errors.New("second persistent RPC failed"),
+	}}
+	sink := &Sink{
+		client:     &Client{sdk: &sdkNamingFacade{vendor: vendor, group: DefaultGroup}, config: ClientConfig{}},
+		logger:     nopBatchLogger{},
+		groupName:  DefaultGroup,
+		remembered: map[clusterKeyOf]bool{},
+	}
+	items := []*instance.Instance{
+		{InstanceId: "one", AppCode: "pay-user", Provider: "k8s", Ip: "10.0.1.1", Status: instance.InstanceStatusOnline, Enabled: true},
+		{InstanceId: "two", AppCode: "pay-user", Provider: "k8s", Ip: "10.0.1.2", Status: instance.InstanceStatusOnline, Enabled: true},
+		{InstanceId: "three", AppCode: "pay-user", Provider: "k8s", Ip: "10.0.1.3", Status: instance.InstanceStatusOnline, Enabled: true},
+	}
+	if err := sink.PushAll(1, items); !errors.Is(err, first) {
+		t.Fatalf("PushAll() error=%v, want first input-order RPC error %v", err, first)
+	}
+	vendor.mu.Lock()
+	attempts := append([]string(nil), vendor.registerAttempts...)
+	selectCalls := vendor.selectCalls
+	vendor.mu.Unlock()
+	if len(attempts) != len(items) {
+		t.Fatalf("persistent RPC attempts=%v, want all %d items attempted", attempts, len(items))
+	}
+	if selectCalls != 0 {
+		t.Fatalf("prune SelectAll calls after failed write=%d, want 0", selectCalls)
+	}
+}
+
+func TestPushAllNeverDeletesDesiredInstanceMissingFromLaggingCatalog(t *testing.T) {
+	healthy := true
+	ghost := &instance.Instance{
+		InstanceId: "ghost", AppCode: "pay-user", Provider: "k8s",
+		Ip: "10.0.2.99", Ports: []*instance.PortInfo{{Port: 8080}},
+		Status: instance.InstanceStatusOnline, Enabled: true, Reversion: 40,
+	}
+	ghostParam := InstanceParams{
+		ServiceName: ghost.AppCode, IP: ghost.Ip, Port: firstPort(ghost),
+		ClusterName: clusterOf(ghost), GroupName: DefaultGroup,
+		Enabled: true, Healthy: &healthy, Ephemeral: false, Metadata: metadataOf(ghost),
+	}
+	vendor := &persistentVisibilityVendor{
+		items:     map[string]InstanceParams{instanceID(ghostParam): ghostParam},
+		hiddenIPs: map[string]bool{"10.0.2.10": true},
+	}
+	sink := &Sink{
+		client: &Client{sdk: &sdkNamingFacade{
+			client: &batchRecorder{errByIP: map[string]error{}}, vendor: vendor, group: DefaultGroup,
+		}, config: ClientConfig{}},
+		logger:     nopBatchLogger{},
+		groupName:  DefaultGroup,
+		remembered: map[clusterKeyOf]bool{},
+	}
+	desired := &instance.Instance{
+		InstanceId: "desired", AppCode: "pay-user", Provider: "k8s",
+		Ip: "10.0.2.10", Ports: []*instance.PortInfo{{Port: 8080}},
+		Status: instance.InstanceStatusOnline, Enabled: true, Reversion: 41,
+	}
+	if err := sink.PushAll(2, []*instance.Instance{desired}); err != nil {
+		t.Fatalf("PushAll() with lagging catalog: %v", err)
+	}
+	vendor.mu.Lock()
+	deregistered := append([]InstanceParams(nil), vendor.deregistered...)
+	remaining := make([]InstanceParams, 0, len(vendor.items))
+	for _, item := range vendor.items {
+		remaining = append(remaining, item)
+	}
+	vendor.mu.Unlock()
+	if len(deregistered) != 1 || deregistered[0].IP != ghost.Ip {
+		t.Fatalf("deregistered=%+v, want only visible owned ghost %s", deregistered, ghost.Ip)
+	}
+	if len(remaining) != 1 || remaining[0].IP != desired.Ip {
+		t.Fatalf("remaining=%+v, want acknowledged desired instance %s preserved despite lagging catalog", remaining, desired.Ip)
 	}
 }
 

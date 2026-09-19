@@ -1,9 +1,7 @@
 package nacos
 
 import (
-	"fmt"
 	"sync"
-	"time"
 
 	"spotter/internal/domain/instance"
 )
@@ -129,38 +127,6 @@ type persistentBatchScope struct {
 	cluster   string
 }
 
-func waitForPersistentBatch(c *Client, key persistentBatchKey, params []InstanceParams) error {
-	want := make(map[string]InstanceParams, len(params))
-	for _, p := range params {
-		want[instanceID(p)] = p
-	}
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		hosts, err := c.ListCatalogInstances(key.Service, key.Cluster)
-		if err != nil {
-			return err
-		}
-		matched := make(map[string]bool, len(want))
-		for _, h := range hosts {
-			p, ok := want[h.InstanceID]
-			groupedService := effectiveGroup(p.GroupName) + "@@" + p.ServiceName
-			healthy := p.Enabled
-			if p.Healthy != nil {
-				healthy = *p.Healthy
-			}
-			if !ok || matched[h.InstanceID] || h.IP != p.IP || h.Port != p.Port || h.ClusterName != p.ClusterName || (h.ServiceName != p.ServiceName && h.ServiceName != groupedService) || h.Ephemeral || h.Enabled != p.Enabled || h.Healthy != healthy {
-				continue
-			}
-			matched[h.InstanceID] = true
-		}
-		if len(matched) == len(want) {
-			return nil
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	return fmt.Errorf("nacos: persistent batch convergence timeout for %s/%s (%d items)", key.Service, key.Cluster, len(params))
-}
-
 // pushPersistentBatches executes a full snapshot as application-scoped,
 // bounded batches. Batches sharing namespace/group/service/cluster are
 // serialized in first-seen order; independent scopes overlap. A single global
@@ -252,20 +218,15 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 							}()
 						}
 						wg.Wait()
-						failed := false
-						for _, idx := range validIndexes {
-							if errs[idx] != nil {
-								failed = true
-								break
-							}
-						}
-						if !failed && s.client.sdk.hasPersistentVendor() {
-							if err := waitForPersistentBatch(s.client, batch.Key, params); err != nil {
-								for _, idx := range validIndexes {
-									errs[idx] = err
-								}
-							}
-						}
+						// A successful official-SDK RPC acknowledgement completes this
+						// write attempt. Do not synchronously poll SelectAll for this
+						// exact batch: SDK/catalog visibility may lag an acknowledged RPC
+						// under sustained churn, which made a healthy, already-converged
+						// service look like a failed write and queued obsolete full
+						// snapshots for retry. PushAll's prune uses
+						// the local desired identity set and cannot delete a desired item
+						// merely because a catalog read lags. Periodic canonical
+						// reconcile and the external Observe oracle own convergence proof.
 					}
 					continue
 				}
