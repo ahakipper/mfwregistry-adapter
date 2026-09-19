@@ -721,7 +721,7 @@ func (c *Client) UpdateCluster(serviceName, clusterName string) error {
 			}
 			return nil
 		}
-		return fmt.Errorf("%w: cluster-health-check-update (official naming SDK v2.3.5 has no admin cluster API)", ErrUnsupportedOperation)
+		return fmt.Errorf("%w: cluster-health-check-update is not part of the official Nacos v3 naming SDK", ErrUnsupportedOperation)
 	}
 	values := url.Values{}
 	values.Set("serviceName", serviceName)

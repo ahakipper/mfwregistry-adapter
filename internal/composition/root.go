@@ -10,7 +10,6 @@ package composition
 import (
 	"fmt"
 	"io"
-	"time"
 
 	infraconfig "spotter/internal/infra/config"
 	infralogging "spotter/internal/infra/logging"
@@ -18,12 +17,6 @@ import (
 	infranotice "spotter/internal/infra/notice"
 	"spotter/internal/ports"
 	"spotter/pkg/nacos"
-)
-
-// Notice identifiers for the deployment-owned default AppCenter contract.
-const (
-	noticeAppCode = "spotter-mtech"
-	noticeKey     = "KZ60vWUzdM65ibQCGn03sPF9c1trlIfA"
 )
 
 // Deps carries the collaborators injected into the composition root.
@@ -40,15 +33,11 @@ type Deps struct {
 	LogCloser io.Closer
 	// Notifier overrides the constructed notice adapter.
 	Notifier ports.Notifier
-	// NoticeRequestBuilder supplies the deployment-owned appcenter payload
-	// contract. It is intentionally required for HTTP delivery; this repo does
-	// not invent the private appcenter request schema.
-	NoticeRequestBuilder infranotice.RequestBuilder
 	// MetricsRecorder overrides the constructed metrics recorder.
 	Metrics ports.MetricsRecorder
 	// NacosClusterAdminFactory creates a fresh admin facade for each Nacos
-	// sink lifecycle. A nil factory intentionally leaves SDK startup
-	// fail-closed until an approved implementation is supplied.
+	// sink lifecycle when the optional admin-managed policy is selected. The
+	// deployment-owned default never requires this facade.
 	NacosClusterAdminFactory func() (nacos.NacosClusterAdmin, error)
 	// NacosHealthPolicy controls cluster-health-check ownership.
 	// Empty (zero value) defaults to deployment-owned, so no admin facade
@@ -86,10 +75,9 @@ type Runtime struct {
 //
 // It builds the zap-based logging adapter from the log settings of cfg
 // (when LogFilePath is set, which is always the case for a config produced
-// by infra/config.Load), the notice adapter from the legacy app code, key
-// and cfg.Env, and the Prometheus metrics recorder. When deps overrides a
-// collaborator, the override wins and the corresponding default is not
-// constructed.
+// by infra/config.Load), a resource-free fail-closed notifier, and the
+// Prometheus metrics recorder. When deps overrides a collaborator, the
+// override wins and the corresponding default is not constructed.
 func Build(cfg infraconfig.Config, deps Deps) (*Runtime, error) {
 	runtime := &Runtime{
 		Config:  cfg,
@@ -127,35 +115,13 @@ func Build(cfg infraconfig.Config, deps Deps) (*Runtime, error) {
 		}
 	}
 
-	// Notice: send failures are reported through the runtime logger. HTTP
-	// delivery is enabled only when endpoint, auth, timeout and a deployment
-	// request builder are all supplied; otherwise the result is explicitly
-	// fail-closed rather than pretending logs are appcenter alerts.
+	// Notice: external delivery is explicitly outside the current release.
+	// Keep the generic notifier seam for internal diagnostics, but never create
+	// an outbound HTTP notifier from configuration or an injected request
+	// builder. This prevents a deployment flag from silently widening scope.
 	runtime.Notifier = deps.Notifier
 	if runtime.Notifier == nil {
-		if cfg.AppCenterNoticeEndpoint != "" || cfg.AppCenterNoticeAuthToken != "" || cfg.AppCenterNoticeTimeout != 0 {
-			var timeout time.Duration
-			if cfg.AppCenterNoticeTimeout > 0 {
-				timeout = time.Duration(cfg.AppCenterNoticeTimeout) * time.Second
-			}
-			httpNotifier, err := infranotice.NewHTTP(infranotice.HTTPConfig{
-				Endpoint:     cfg.AppCenterNoticeEndpoint,
-				AppCode:      noticeAppCode,
-				AuthToken:    cfg.AppCenterNoticeAuthToken,
-				Env:          cfg.Env,
-				Timeout:      timeout,
-				MaxRetries:   cfg.AppCenterNoticeRetries,
-				RetryBackoff: 100 * time.Millisecond,
-				BuildRequest: deps.NoticeRequestBuilder,
-			}, runtime.Logger)
-			if err == nil {
-				runtime.Notifier = httpNotifier
-			} else {
-				runtime.Notifier = infranotice.NewFailClosed(err.Error(), runtime.Logger)
-			}
-		} else {
-			runtime.Notifier = infranotice.NewFailClosed("appcenter endpoint/auth/timeout are not configured", runtime.Logger)
-		}
+		runtime.Notifier = infranotice.NewFailClosed("external notice delivery is excluded from this Spotter release", runtime.Logger)
 	}
 
 	// Metrics: the Prometheus recorder observing the package-level

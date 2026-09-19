@@ -177,13 +177,6 @@ type Flags struct {
 	LeaderElection *bool
 	// MetricsAddr is the Prometheus metrics address.
 	MetricsAddr string
-	// AppCenterNoticeEndpoint is the deployment-owned appcenter notice URL.
-	// Empty means notifications are fail-closed (never falsely reported as
-	// delivered). The request payload contract is injected by composition.
-	AppCenterNoticeEndpoint  string
-	AppCenterNoticeAuthToken string
-	AppCenterNoticeTimeout   int
-	AppCenterNoticeRetries   int
 	// NacosAddr is the Nacos v1 OpenAPI base address (e.g.
 	// http://127.0.0.1:18848); empty disables the Nacos sink (plan §7.6).
 	// A plain string: the empty default IS the legal "disabled" value, so
@@ -292,15 +285,6 @@ type Config struct {
 
 	// MetricsAddr is the Prometheus metrics address.
 	MetricsAddr string
-
-	// AppCenterNoticeEndpoint is the deployment-owned appcenter notice URL.
-	// Empty means notifications are fail-closed. The request payload contract
-	// is injected by composition because this repository does not own the
-	// private appcenter API schema.
-	AppCenterNoticeEndpoint  string
-	AppCenterNoticeAuthToken string
-	AppCenterNoticeTimeout   int
-	AppCenterNoticeRetries   int
 
 	// NacosAddr is the Nacos v1 OpenAPI base address; empty disables the
 	// Nacos sink, which keeps the pre-F5 behavior exactly (plan §7.6:
@@ -429,11 +413,6 @@ func Load(env string, flags Flags) (Config, error) {
 
 	// Metrics settings.
 	cfg.MetricsAddr = strOrDefault(flags.MetricsAddr, defaultMetricsAddr)
-	cfg.AppCenterNoticeEndpoint = flags.AppCenterNoticeEndpoint
-	cfg.AppCenterNoticeAuthToken = flags.AppCenterNoticeAuthToken
-	cfg.AppCenterNoticeTimeout = flags.AppCenterNoticeTimeout
-	cfg.AppCenterNoticeRetries = flags.AppCenterNoticeRetries
-
 	// Nacos sink: additive flag of plan §7.6 — empty means disabled (no
 	// default, no preset involvement), so the flag-empty path is exactly
 	// the pre-F5 configuration.

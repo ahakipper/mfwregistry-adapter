@@ -11,6 +11,7 @@ import (
 	"spotter/internal/composition"
 	"spotter/internal/domain/instance"
 	infraconfig "spotter/internal/infra/config"
+	infranotice "spotter/internal/infra/notice"
 	"spotter/internal/testkit/etcdmock"
 	"spotter/internal/testkit/fakes"
 	"spotter/internal/testkit/nacosmock"
@@ -49,13 +50,15 @@ func TestE2ENacosOnlyCompositionPublishesWithoutAtlas(t *testing.T) {
 		t.Fatalf("resolved active graph = atlas_compat:%t reconcile:%q, want false/%q", cfg.EnableAtlasCompatibility, cfg.ReconcileSource, nacos.SinkName)
 	}
 	runtime, err := composition.Build(cfg, composition.Deps{
-		Logger:   &fakes.FakeLogger{},
-		Notifier: recordingNotifier{},
-		Metrics:  fakes.NewFakeMetricsRecorder(),
-		LocalIP:  func() (string, error) { return "127.0.0.1", nil },
+		Logger:  &fakes.FakeLogger{},
+		Metrics: fakes.NewFakeMetricsRecorder(),
+		LocalIP: func() (string, error) { return "127.0.0.1", nil },
 	})
 	if err != nil {
 		t.Fatalf("composition.Build: %v", err)
+	}
+	if _, ok := runtime.Notifier.(*infranotice.FailClosedNotifier); !ok {
+		t.Fatalf("default notifier=%T, want fail-closed with no external AppCenter transport", runtime.Notifier)
 	}
 	s, err := NewServerFromDeps(runtime)
 	if err != nil {

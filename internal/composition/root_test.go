@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"io/ioutil"
-	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -119,7 +118,7 @@ func TestBuildEnvPropagated(t *testing.T) {
 		t.Errorf("Config.Env = %q, want %q", rt.Config.Env, "product")
 	}
 	if rt.Notifier == nil {
-		t.Fatal("Notifier = nil, want the appcenter notice adapter")
+		t.Fatal("Notifier = nil, want the fail-closed notice adapter")
 	}
 }
 
@@ -218,32 +217,18 @@ func TestBuildInvalidConfig(t *testing.T) {
 	}
 }
 
-func TestBuildSelectsConfiguredHTTPNotifierOrFailClosed(t *testing.T) {
+func TestBuildDefaultsToFailClosedNotifierByScope(t *testing.T) {
 	cfg := testConfig(t)
-	cfg.AppCenterNoticeEndpoint = "https://notice.example.test/api"
-	cfg.AppCenterNoticeAuthToken = "token"
-	cfg.AppCenterNoticeTimeout = 2
-	builder := func(ctx context.Context, endpoint string, message infranotice.Message) (*http.Request, error) {
-		return http.NewRequestWithContext(ctx, http.MethodPost, endpoint, http.NoBody)
-	}
 	logger := &fakes.FakeLogger{}
-	rt, err := Build(cfg, Deps{Logger: logger, NoticeRequestBuilder: builder})
+	rt, err := Build(cfg, Deps{Logger: logger})
 	if err != nil {
-		t.Fatalf("Build(configured notifier) error = %v", err)
-	}
-	if _, ok := rt.Notifier.(*infranotice.HTTPNotifier); !ok {
-		t.Fatalf("configured notifier = %T, want *HTTPNotifier", rt.Notifier)
+		t.Fatalf("Build() error = %v", err)
 	}
 	if rt.LogCloser != nil {
-		_ = rt.LogCloser.Close()
-	}
-
-	rt, err = Build(cfg, Deps{Logger: logger})
-	if err != nil {
-		t.Fatalf("Build(missing builder) error = %v", err)
+		defer func() { _ = rt.LogCloser.Close() }()
 	}
 	if _, ok := rt.Notifier.(*infranotice.FailClosedNotifier); !ok {
-		t.Fatalf("missing-builder notifier = %T, want *FailClosedNotifier", rt.Notifier)
+		t.Fatalf("default notifier = %T, want fail-closed", rt.Notifier)
 	}
 }
 

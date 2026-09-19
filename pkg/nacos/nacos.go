@@ -121,8 +121,9 @@ func (s *Sink) pushInstances(instances []*instance.Instance) error {
 // official Nacos SDK naming facade (plan §7.3) and owns the PushAll prune
 // reconcile (plan §7.4). In the explicit HTTP compatibility adapter it also
 // configures every (service, cluster) pair with the NONE health checker
-// (UpdateCluster). The pinned SDK has no cluster-admin method; SDK mode
-// reports that gap explicitly and never issues a hidden raw HTTP request.
+// (UpdateCluster). The deployment-owned default does not require cluster
+// administration; explicit admin-managed mode reports an unavailable facade
+// and never issues a hidden raw HTTP request.
 //
 // Instances are registered PERSISTENT (ephemeral=false): spotter is a
 // replicator asserting the desired state of other people's instances, not a

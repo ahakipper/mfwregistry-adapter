@@ -616,23 +616,19 @@ func TestLoadNacosSelectsNacosOnlyGraphUnlessAtlasCompatibilityIsExplicit(t *tes
 
 func TestLoadNacosOptionsAreCarriedAndServerListIsTrimmed(t *testing.T) {
 	got, err := Load("test", Flags{
-		Providers:                []string{"k8s"},
-		NacosAddr:                "http://nacos-primary:8848",
-		NacosServerList:          []string{" nacos-a:8848 ", "", "nacos-b:8848"},
-		NacosNamespace:           "tenant-a",
-		NacosGroup:               "blue",
-		NacosUsername:            "operator",
-		NacosPassword:            "secret",
-		NacosAccessToken:         "token",
-		NacosCAFile:              "/tmp/nacos-ca.pem",
-		NacosServerName:          "nacos.internal",
-		NacosInsecureSkipVerify:  true,
-		NacosTimeout:             17,
-		NacosTransport:           "http-compat",
-		AppCenterNoticeEndpoint:  "https://notice.example.test/api",
-		AppCenterNoticeAuthToken: "notice-secret",
-		AppCenterNoticeTimeout:   4,
-		AppCenterNoticeRetries:   2,
+		Providers:               []string{"k8s"},
+		NacosAddr:               "http://nacos-primary:8848",
+		NacosServerList:         []string{" nacos-a:8848 ", "", "nacos-b:8848"},
+		NacosNamespace:          "tenant-a",
+		NacosGroup:              "blue",
+		NacosUsername:           "operator",
+		NacosPassword:           "secret",
+		NacosAccessToken:        "token",
+		NacosCAFile:             "/tmp/nacos-ca.pem",
+		NacosServerName:         "nacos.internal",
+		NacosInsecureSkipVerify: true,
+		NacosTimeout:            17,
+		NacosTransport:          "http-compat",
 	})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -642,8 +638,7 @@ func TestLoadNacosOptionsAreCarriedAndServerListIsTrimmed(t *testing.T) {
 	}
 	if got.NacosAddr != "http://nacos-primary:8848" || got.NacosNamespace != "tenant-a" || got.NacosGroup != "blue" ||
 		got.NacosUsername != "operator" || got.NacosPassword != "secret" || got.NacosAccessToken != "token" ||
-		got.NacosCAFile != "/tmp/nacos-ca.pem" || got.NacosServerName != "nacos.internal" || !got.NacosInsecureSkipVerify || got.NacosTimeout != 17 || got.NacosTransport != "http-compat" ||
-		got.AppCenterNoticeEndpoint != "https://notice.example.test/api" || got.AppCenterNoticeAuthToken != "notice-secret" || got.AppCenterNoticeTimeout != 4 || got.AppCenterNoticeRetries != 2 {
+		got.NacosCAFile != "/tmp/nacos-ca.pem" || got.NacosServerName != "nacos.internal" || !got.NacosInsecureSkipVerify || got.NacosTimeout != 17 || got.NacosTransport != "http-compat" {
 		t.Fatalf("Nacos options not carried: %+v", got)
 	}
 }

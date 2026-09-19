@@ -47,17 +47,16 @@ type HTTPCompatibilityException struct {
 	RemovalCriteria string
 }
 
-// HTTPCompatibilityExceptions is reviewed at every B3 release gate. The
-// date is an expiry, not a promise that the exception is production-safe: the
-// operation remains a release blocker until its removal criteria are met.
+// HTTPCompatibilityExceptions is reviewed while the explicit rollback/test
+// adapter exists. These operations belong only to optional compatibility or
+// admin-managed modes; they are not blockers for deployment-owned naming.
 var HTTPCompatibilityExceptions = []HTTPCompatibilityException{
-	{Operation: "cluster-health-check-update", Owner: "spotter-maintainers", ExpiresOn: "2026-10-31", RemovalCriteria: "official Nacos Admin/Maintainer SDK equivalent verified against target version"},
+	{Operation: "cluster-health-check-update", Owner: "spotter-maintainers", ExpiresOn: "2026-10-31", RemovalCriteria: "remove with the HTTP compatibility adapter or replace only for an explicitly admin-managed deployment"},
 }
 
-// SDKUnsupportedOperations is the explicit production gap in the pinned
-// official SDK.  The sink reports this operation as a typed error in SDK mode
-// and never substitutes a raw HTTP request.  It remains a release blocker
-// until an official Admin/Maintainer SDK surface is verified.
+// SDKUnsupportedOperations records optional operations absent from the naming
+// SDK. The deployment-owned default never calls them; explicit admin-managed
+// mode returns a typed error and never substitutes raw HTTP.
 var SDKUnsupportedOperations = []string{"cluster-health-check-update"}
 
 func effectiveNamespace(namespace string) string {
