@@ -114,7 +114,7 @@ func NewServerFromDeps(rt *composition.Runtime) (*Server, error) {
 		return nil, err
 	}
 	// init Server
-	return &Server{
+	srv := &Server{
 		stopElectorFunc:   ecancel,
 		stopProviderFunc:  nil,
 		Providers:         nil,
@@ -128,10 +128,15 @@ func NewServerFromDeps(rt *composition.Runtime) (*Server, error) {
 		cfg:               rt.Config,
 		localIP:           rt.LocalIP,
 		waitRetry:         waitForRetry,
-		initializeProviders: func(ctx context.Context, w worker.Worker) ([]providers.Provider, error) {
-			return InitializeProvidersWithDeps(ctx, w, rt.Config, rt.Logger, rt.Notifier)
-		},
-	}, nil
+	}
+	// Resolve provider reconcile mode from the same effective config used by
+	// sink construction. Capturing the server (rather than the original
+	// runtime value) lets Nacos-only startup promote an omitted reconcile
+	// source to Nacos without introducing a second configuration path.
+	srv.initializeProviders = func(ctx context.Context, w worker.Worker) ([]providers.Provider, error) {
+		return InitializeProvidersWithDeps(ctx, w, srv.cfg, srv.logger, srv.notifier)
+	}
+	return srv, nil
 }
 
 // Run server
@@ -352,20 +357,36 @@ func (s *Server) startProviders() error {
 	s.stopProviderFunc = wcancel
 	s.Unlock()
 
-	client, err := s.dialDiscoveryWithRetry(wctx)
-	if err != nil {
+	// Nacos is the active service-discovery sink whenever it is configured.
+	// The Atlas client is constructed only for the explicit compatibility path.
+	// This boundary is intentionally before any Atlas dial so a Nacos-only
+	// process cannot fail because an excluded Atlas endpoint is unavailable.
+	nacosConfigured := s.cfg.NacosAddr != "" || len(s.cfg.NacosServerList) > 0
+	useAtlas := s.cfg.EnableAtlasCompatibility
+	if !nacosConfigured && !useAtlas {
 		s.clearStartup(generation, wcancel)
-		return errors.WithMessage(err, "dial discovery center")
+		return errors.New("no active discovery sink: configure Nacos or explicitly enable Atlas compatibility")
 	}
-	registry, err := discoverycenter.NewDiscoveryCenter(client, s.logger, s.notifier, s.cfg.DisablePushWorker)
-	if err != nil {
-		wcancel()
-		_ = client.Close()
-		s.clearStartup(generation, nil)
-		return errors.WithMessage(err, "new discovery center")
+	var err error
+	var client *discoverycenter.Client
+	var registry *discoverycenter.DiscoveryCenter
+	if useAtlas {
+		client, err = s.dialDiscoveryWithRetry(wctx)
+		if err != nil {
+			s.clearStartup(generation, wcancel)
+			return errors.WithMessage(err, "dial discovery center")
+		}
+		registry, err = discoverycenter.NewDiscoveryCenter(client, s.logger, s.notifier, s.cfg.DisablePushWorker)
+		if err != nil {
+			wcancel()
+			_ = client.Close()
+			s.clearStartup(generation, nil)
+			return errors.WithMessage(err, "new discovery center")
+		}
 	}
 	var cleanupOnce sync.Once
 	var fanout *worker.FanoutSink
+	var nacosSink *nacos.Sink
 	cleanup := func() {
 		cleanupOnce.Do(func() {
 			wcancel()
@@ -373,21 +394,33 @@ func (s *Server) startProviders() error {
 				if closeErr := fanout.Close(); closeErr != nil {
 					s.logger.Errorf("close sink fanout: %s", closeErr)
 				}
-			} else if closeErr := registry.Close(); closeErr != nil {
-				s.logger.Errorf("close discovery center client: %s", closeErr)
+				return
+			}
+			if nacosSink != nil {
+				if closeErr := nacosSink.Close(); closeErr != nil {
+					s.logger.Errorf("close nacos sink: %s", closeErr)
+				}
+			}
+			if registry != nil {
+				if closeErr := registry.Close(); closeErr != nil {
+					s.logger.Errorf("close discovery center client: %s", closeErr)
+				}
+			} else if client != nil {
+				if closeErr := client.Close(); closeErr != nil {
+					s.logger.Errorf("close discovery center client: %s", closeErr)
+				}
 			}
 		})
 	}
 
-	// The fan-out of plan §6.5: the worker talks to named sinks instead of
-	// the concrete registry. Atlas is the first sink — the primary; the
-	// Nacos sink (plan §7.6, --nacos-addr) is added here as the second
-	// whenever the address is set. With one sink the error surface
-	// degenerates to nil-or-one and every observable behavior matches the
-	// pre-fanout direct push (the §6.6 single-sink degeneration test is the
-	// regression net).
-	sinks := []worker.NamedSink{{Name: worker.AtlasSinkName, Sink: registry}}
-	var nacosSink *nacos.Sink
+	// The worker still uses the named fan-out abstraction for retry and full
+	// reconcile operations. In the active graph this is normally a one-sink
+	// fan-out containing only Nacos; Atlas is appended only when the explicit
+	// compatibility switch is enabled.
+	sinks := make([]worker.NamedSink, 0, 2)
+	if registry != nil {
+		sinks = append(sinks, worker.NamedSink{Name: worker.AtlasSinkName, Sink: registry})
+	}
 	if s.cfg.NacosAddr != "" || len(s.cfg.NacosServerList) > 0 {
 		transportMode := s.cfg.NacosTransport
 		if transportMode == "" {
@@ -458,13 +491,14 @@ func (s *Server) startProviders() error {
 			if closeErr := nacosSink.Close(); closeErr != nil {
 				err = stderrors.Join(err, closeErr)
 			}
+			nacosSink = nil
 			cleanup()
 			s.clearStartup(generation, nil)
 			return errors.WithMessage(err, "nacos readiness check")
 		}
 		// The Nacos sink owns the official SDK naming client and closes its
-		// gRPC/redo resources with the fanout; the Atlas gRPC connection is
-		// closed by the same cleanup path.
+		// gRPC/redo resources with the fanout. In Nacos-only mode this is the
+		// sole registered sink, so no Atlas connection exists to close.
 		sinks = append(sinks, worker.NamedSink{Name: nacos.SinkName, Sink: nacosSink})
 		address := s.cfg.NacosAddr
 		if address == "" && len(s.cfg.NacosServerList) > 0 {
@@ -487,18 +521,15 @@ func (s *Server) startProviders() error {
 		return errors.WithMessage(err, "new fanout sink")
 	}
 
-	// The reconcile-source designation (dsca-3 §3.1): with
-	// --reconcile-source nacos, the fanout's GetAll — the view both
-	// providers' periodic CompareAndFlush reads — comes from the nacos
-	// sink instead of the primary, making nacos the authoritative external
-	// store the reconcile converges against. Pushes fan out to every sink
-	// either way; only the read view flips. Any other non-empty value
-	// fails startup fast (the name must resolve to a registered sink, the
-	// same fail-fast discipline as the fanout's own name validation), and
-	// "nacos" additionally requires the nacos sink to exist
-	// (--nacos-addr). Empty keeps the primary (Atlas) — the default,
-	// production-unchanged configuration.
-	if source := s.cfg.ReconcileSource; source != "" {
+	// The reconcile-source designation (dsca-3 §3.1) follows the active sink
+	// graph. Nacos-only mode defaults to the Nacos catalog even when the flag
+	// is omitted; an Atlas-compatible graph keeps its historical primary view
+	// unless the operator explicitly selects another registered sink.
+	source := s.cfg.ReconcileSource
+	if source == "" && nacosConfigured && !useAtlas {
+		source = nacos.SinkName
+	}
+	if source != "" {
 		if source == nacos.SinkName && nacosSink == nil {
 			cleanup()
 			s.clearStartup(generation, nil)
@@ -722,9 +753,12 @@ func initializeProvidersWithDeps(ctx context.Context, w worker.Worker, cfg infra
 	}
 	// The nacos-reconcile mode the providers' compares run in (dsca-3
 	// §3.3): true exactly when the reconcile source designates the nacos
-	// sink — the same config the fanout designation above reads, so the
-	// read routing and the diff semantics always agree on the mode.
-	reconcileNacos := cfg.ReconcileSource == nacos.SinkName
+	// sink — including the implicit source used by the Nacos-only graph. The
+	// sink wiring and provider diff semantics therefore agree even when the
+	// operator omits --reconcile-source.
+	nacosConfigured := cfg.NacosAddr != "" || len(cfg.NacosServerList) > 0
+	reconcileNacos := cfg.ReconcileSource == nacos.SinkName ||
+		(cfg.ReconcileSource == "" && nacosConfigured && !cfg.EnableAtlasCompatibility)
 	prs = []providers.Provider{}
 	for _, pname := range cfg.Providers {
 		switch pname {

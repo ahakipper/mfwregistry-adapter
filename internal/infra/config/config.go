@@ -155,6 +155,11 @@ type Flags struct {
 	PushAllInterval int
 	// GrpcAddr is the Atlas gRPC address.
 	GrpcAddr string
+	// EnableAtlasCompatibility keeps the historical Atlas sink in the active
+	// fan-out when Nacos is configured. It is an explicit compatibility escape
+	// hatch; the resolved default is always false. An Atlas-only deployment
+	// must opt in explicitly.
+	EnableAtlasCompatibility bool
 	// DisablePushWorker stops the real push action of the worker and only
 	// prints push info. This configuration is for test use only.
 	DisablePushWorker bool
@@ -206,10 +211,9 @@ type Flags struct {
 	// ReconcileSource is the --reconcile-source flag (dsca-3 §3.1): the
 	// fanout sink NAME whose view the periodic compare reads ("nacos"
 	// designates the nacos sink). A plain string mirroring NacosAddr's
-	// pattern: the empty default IS the legal value — it keeps the primary
-	// (Atlas) as the compare source, so the flag-empty binary behavior is
-	// exactly the pre-dsca-3 one. The value is validated at server wiring
-	// (it must name a registered sink), not here.
+	// pattern: an empty value resolves to Nacos in the active Nacos-only graph;
+	// an explicit Atlas compatibility graph may leave it empty to retain its
+	// historical primary. Server wiring validates named sinks.
 	ReconcileSource string
 	// KubeConfigPathFlag is the --kubeconfig flag: a comma list that
 	// overrides the preset's KubeConfigPath for local full-stack runs
@@ -268,6 +272,12 @@ type Config struct {
 	// GrpcAddr is the Atlas gRPC address.
 	GrpcAddr string
 
+	// EnableAtlasCompatibility keeps the historical Atlas sink alongside
+	// Nacos when explicitly requested. The current graph has no implicit Atlas
+	// fallback: configurations without Nacos must set this compatibility flag
+	// or startup fails with no active Sink.
+	EnableAtlasCompatibility bool
+
 	// DisablePushWorker stops the real push action (test use only).
 	DisablePushWorker bool
 
@@ -310,10 +320,8 @@ type Config struct {
 	NacosHealthPolicy       nacos.HealthPolicy
 
 	// ReconcileSource is the fanout sink name whose view the periodic
-	// compare reads (dsca-3 §3.1); empty keeps the primary (Atlas) — the
-	// default, production-unchanged configuration. "nacos" designates the
-	// nacos sink and requires NacosAddr to be set; the server wiring
-	// validates both and fails startup otherwise.
+	// compare reads. Empty resolves to Nacos for the default Nacos-only graph;
+	// an explicit compatibility graph may leave it empty to read Atlas.
 	ReconcileSource string
 }
 
@@ -404,6 +412,7 @@ func Load(env string, flags Flags) (Config, error) {
 
 	// gRPC and worker settings.
 	cfg.GrpcAddr = strOrDefault(flags.GrpcAddr, defaultGrpcAddr)
+	cfg.EnableAtlasCompatibility = flags.EnableAtlasCompatibility
 	cfg.DisablePushWorker = flags.DisablePushWorker
 
 	// Providers and appcodes.
@@ -443,13 +452,15 @@ func Load(env string, flags Flags) (Config, error) {
 	cfg.NacosTimeout = flags.NacosTimeout
 	cfg.NacosTransport = flags.NacosTransport
 	cfg.NacosHealthPolicy = flags.NacosHealthPolicy
-
-	// Reconcile source: additive flag of dsca-3 §3.1 — empty means the
-	// primary (Atlas) stays the compare source (no default, no preset
-	// involvement), so the flag-empty path is exactly the pre-dsca-3
-	// configuration. The name is resolved against the fanout's registered
-	// sinks at server wiring, which owns the fail-fast validation.
+	nacosConfigured := cfg.NacosAddr != "" || len(cfg.NacosServerList) > 0
+	// Reconcile source: Nacos-only deployments read their authoritative view
+	// from Nacos by default. The explicit flag still wins, and the empty value
+	// retains Atlas as the compare source only when Atlas compatibility is
+	// active (or when no Nacos sink is configured).
 	cfg.ReconcileSource = strOrDefault(flags.ReconcileSource, "")
+	if cfg.ReconcileSource == "" && nacosConfigured && !cfg.EnableAtlasCompatibility {
+		cfg.ReconcileSource = nacos.SinkName
+	}
 
 	// Local-source flags of plan §8.4 (kubeconfig / consul / etcd): each
 	// comma list overrides its preset counterpart when non-empty, and an

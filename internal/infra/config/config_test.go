@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+
+	"spotter/pkg/nacos"
 )
 
 // boolPtr is a helper for building tri-state LeaderElection flag values.
@@ -156,23 +158,24 @@ func TestLoadDefaults(t *testing.T) {
 	}
 
 	want := Config{
-		Endpoints:            wantEndpoints,
-		Env:                  "test",
-		LogFilePath:          "./logfiles/",
-		LogSize:              100,
-		LogLevel:             -1,
-		LogBackups:           10,
-		LogAge:               7,
-		LogEncoding:          "json",
-		LogToStd:             true,
-		PushAllInterval:      21600,
-		GrpcAddr:             "172.16.130.71:50051",
-		DisablePushWorker:    false,
-		Providers:            []string{"k8s"},
-		PushAppCodes:         []string{},
-		EnableLeaderElection: true,
-		MetricsAddr:          ":8090",
-		NacosAddr:            "",
+		Endpoints:                wantEndpoints,
+		Env:                      "test",
+		LogFilePath:              "./logfiles/",
+		LogSize:                  100,
+		LogLevel:                 -1,
+		LogBackups:               10,
+		LogAge:                   7,
+		LogEncoding:              "json",
+		LogToStd:                 true,
+		PushAllInterval:          21600,
+		GrpcAddr:                 "172.16.130.71:50051",
+		EnableAtlasCompatibility: false,
+		DisablePushWorker:        false,
+		Providers:                []string{"k8s"},
+		PushAppCodes:             []string{},
+		EnableLeaderElection:     true,
+		MetricsAddr:              ":8090",
+		NacosAddr:                "",
 	}
 
 	if !reflect.DeepEqual(got, want) {
@@ -227,6 +230,7 @@ func TestLoadFlagValues(t *testing.T) {
 		EnableLeaderElection: false,
 		MetricsAddr:          ":9091",
 		NacosAddr:            "http://127.0.0.1:18848",
+		ReconcileSource:      nacos.SinkName,
 	}
 
 	if !reflect.DeepEqual(got, want) {
@@ -581,6 +585,32 @@ func TestLoadNacosAddr(t *testing.T) {
 				t.Errorf("NacosAddr = %q, want %q", got.NacosAddr, tt.want)
 			}
 		})
+	}
+}
+
+func TestLoadNacosSelectsNacosOnlyGraphUnlessAtlasCompatibilityIsExplicit(t *testing.T) {
+	active, err := Load("test", Flags{Providers: []string{"k8s"}, NacosAddr: "127.0.0.1:8848"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.EnableAtlasCompatibility || active.ReconcileSource != nacos.SinkName {
+		t.Fatalf("default Nacos graph = atlas_compat:%t reconcile:%q, want false/%q", active.EnableAtlasCompatibility, active.ReconcileSource, nacos.SinkName)
+	}
+
+	compat, err := Load("test", Flags{Providers: []string{"k8s"}, NacosAddr: "127.0.0.1:8848", EnableAtlasCompatibility: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compat.EnableAtlasCompatibility || compat.ReconcileSource != "" {
+		t.Fatalf("explicit compatibility graph = atlas_compat:%t reconcile:%q, want true/empty legacy primary", compat.EnableAtlasCompatibility, compat.ReconcileSource)
+	}
+
+	atlasOnly, err := Load("test", Flags{Providers: []string{"k8s"}, EnableAtlasCompatibility: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !atlasOnly.EnableAtlasCompatibility || atlasOnly.NacosAddr != "" || atlasOnly.ReconcileSource != "" {
+		t.Fatalf("explicit Atlas-only graph = %+v, want compatibility=true and no Nacos/reconcile override", atlasOnly)
 	}
 }
 

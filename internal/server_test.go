@@ -105,6 +105,7 @@ func TestStartProvidersCancelsDialWhenLeadershipIsLost(t *testing.T) {
 		logger:   logger,
 		notifier: recordingNotifier{},
 		localIP:  func() (string, error) { return "", nil },
+		cfg:      infraconfig.Config{EnableAtlasCompatibility: true},
 		dialDiscovery: func(ctx context.Context) (*discoverycenter.Client, error) {
 			startedOnce.Do(func() { close(dialStarted) })
 			<-ctx.Done()
@@ -160,6 +161,7 @@ func TestStopCancelsDialDuringProviderStartup(t *testing.T) {
 		logger:   logger,
 		notifier: recordingNotifier{},
 		localIP:  func() (string, error) { return "", nil },
+		cfg:      infraconfig.Config{EnableAtlasCompatibility: true},
 		dialDiscovery: func(ctx context.Context) (*discoverycenter.Client, error) {
 			startedOnce.Do(func() { close(dialStarted) })
 			select {
@@ -222,6 +224,7 @@ func TestStopAndStartProvidersSerializesConcurrentGenerations(t *testing.T) {
 		logger:          logger,
 		notifier:        recordingNotifier{},
 		localIP:         func() (string, error) { return "", nil },
+		cfg:             infraconfig.Config{EnableAtlasCompatibility: true},
 		lifecycleLocker: locker,
 		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
 			return discoverycenter.NewClient(noopDiscoveryService{}, nil, nil)
@@ -419,8 +422,9 @@ func TestDialDiscoveryRetriesThreeTimesAtFiveSecondCadence(t *testing.T) {
 func newElectorDrivenServer(logger *zap.SugaredLogger, elector ports.LeaderElector, initialize func(context.Context) []providers.Provider) *Server {
 	return &Server{
 		cfg: infraconfig.Config{
-			EnableLeaderElection: true,
-			MetricsAddr:          "127.0.0.1:0",
+			EnableLeaderElection:     true,
+			MetricsAddr:              "127.0.0.1:0",
+			EnableAtlasCompatibility: true,
 		},
 		elector:    elector,
 		leaderChCh: make(chan bool, 8),
@@ -714,10 +718,11 @@ func startProvidersWithNacosAddr(t *testing.T, nacosAddr string) (worker.Worker,
 		notifier: recordingNotifier{},
 		localIP:  func() (string, error) { return "127.0.0.1", nil },
 		cfg: infraconfig.Config{
-			EnableLeaderElection: true,
-			MetricsAddr:          "127.0.0.1:0",
-			NacosAddr:            nacosAddr,
-			NacosTransport:       string(nacos.TransportHTTPCompat),
+			EnableLeaderElection:     true,
+			MetricsAddr:              "127.0.0.1:0",
+			NacosAddr:                nacosAddr,
+			NacosTransport:           string(nacos.TransportHTTPCompat),
+			EnableAtlasCompatibility: true,
 		},
 		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
 			return discoverycenter.NewClient(noopDiscoveryService{}, nil, nil)
@@ -732,6 +737,107 @@ func startProvidersWithNacosAddr(t *testing.T, nacosAddr string) (worker.Worker,
 	go func() { result <- s.startProviders() }()
 	<-providerStarted
 	return captured, s, result
+}
+
+func TestStartProvidersRequiresExplicitActiveSink(t *testing.T) {
+	atlasDialCalls := 0
+	s := &Server{
+		isLeader: true,
+		stop:     make(chan struct{}),
+		logger:   zap.NewNop().Sugar(),
+		notifier: recordingNotifier{},
+		localIP:  func() (string, error) { return "127.0.0.1", nil },
+		cfg:      infraconfig.Config{MetricsAddr: "127.0.0.1:0"},
+		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
+			atlasDialCalls++
+			return nil, errors.New("unexpected Atlas dial")
+		},
+	}
+	err := s.startProviders()
+	if err == nil || !strings.Contains(err.Error(), "no active discovery sink") {
+		t.Fatalf("startProviders() error = %v, want explicit no-active-sink failure", err)
+	}
+	if atlasDialCalls != 0 {
+		t.Fatalf("Atlas dial calls = %d, want 0 without explicit compatibility", atlasDialCalls)
+	}
+}
+
+// TestStartProvidersNacosOnlySkipsAtlasAndDefaultsReconcileToNacos proves the
+// active production graph boundary: configuring Nacos without the explicit
+// compatibility switch must not even invoke the Atlas dial seam, and the
+// worker's compare view must come from the Nacos catalog. The seeded catalog
+// entry makes a wrong Atlas fallback observable because the Atlas seam has no
+// state to serve.
+func TestStartProvidersNacosOnlySkipsAtlasAndDefaultsReconcileToNacos(t *testing.T) {
+	server := nacosmock.Start()
+	defer server.Close()
+	server.SetInstances([]nacosmock.Host{{
+		IP: "10.0.0.7", Port: 8080, Enabled: true, Ephemeral: false,
+		Metadata: map[string]string{
+			"instanceId": "pod-nacos-only", "envType": "test", "envGroup": "7",
+			"reversion": "42", "status": "1", "state": "running",
+			"idc": "", "cpu": "0", "version": "v1", "schemaVersion": "1",
+		},
+	}}, "DEFAULT_GROUP", "pay-user", "k8s")
+
+	logger := zap.NewNop().Sugar()
+	var captured worker.Worker
+	providerStarted := make(chan struct{})
+	atlasDialCalls := 0
+	s := &Server{
+		isLeader: true,
+		stop:     make(chan struct{}),
+		logger:   logger,
+		notifier: recordingNotifier{},
+		localIP:  func() (string, error) { return "127.0.0.1", nil },
+		cfg: infraconfig.Config{
+			EnableLeaderElection:     true,
+			MetricsAddr:              "127.0.0.1:0",
+			NacosAddr:                server.URL(),
+			NacosTransport:           string(nacos.TransportHTTPCompat),
+			EnableAtlasCompatibility: false,
+		},
+		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
+			atlasDialCalls++
+			return nil, errors.New("Atlas dial must not be attempted in Nacos-only mode")
+		},
+		initializeProviders: func(ctx context.Context, w worker.Worker) ([]providers.Provider, error) {
+			captured = w
+			return []providers.Provider{&capturedWorkerProvider{ctx: ctx, started: providerStarted}}, nil
+		},
+	}
+
+	result := make(chan error, 1)
+	go func() { result <- s.startProviders() }()
+	select {
+	case <-providerStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Nacos-only provider startup did not reach the provider run phase")
+	}
+	if atlasDialCalls != 0 {
+		t.Fatalf("Atlas dial calls = %d, want 0 in Nacos-only mode", atlasDialCalls)
+	}
+	if captured == nil {
+		t.Fatal("initializeProviders received a nil worker")
+	}
+
+	list, err := captured.GetAll([]int32{1}, "k8s")
+	if err != nil {
+		t.Fatalf("worker.GetAll([1], k8s) error = %v, want nil", err)
+	}
+	if len(list.Instance) != 1 || list.Instance[0].InstanceId != "pod-nacos-only" {
+		t.Fatalf("worker.GetAll() = %#v, want the seeded Nacos instance", list.Instance)
+	}
+
+	s.Stop()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("startProviders() returned %v after Stop, want nil", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("startProviders() did not return after Stop")
+	}
 }
 
 // TestStartProvidersWiresNacosSinkWhenAddrSet: with --nacos-addr set to a
@@ -997,11 +1103,12 @@ func startProvidersWithReconcileSource(t *testing.T, nacosAddr, reconcileSource 
 		notifier: recordingNotifier{},
 		localIP:  func() (string, error) { return "127.0.0.1", nil },
 		cfg: infraconfig.Config{
-			EnableLeaderElection: true,
-			MetricsAddr:          "127.0.0.1:0",
-			NacosAddr:            nacosAddr,
-			NacosTransport:       string(nacos.TransportHTTPCompat),
-			ReconcileSource:      reconcileSource,
+			EnableLeaderElection:     true,
+			MetricsAddr:              "127.0.0.1:0",
+			NacosAddr:                nacosAddr,
+			NacosTransport:           string(nacos.TransportHTTPCompat),
+			ReconcileSource:          reconcileSource,
+			EnableAtlasCompatibility: true,
 		},
 		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
 			return discoverycenter.NewClient(noopDiscoveryService{}, nil, nil)
@@ -1109,9 +1216,10 @@ func TestStartProvidersReconcileSourceNacosWithoutNacosAddrFails(t *testing.T) {
 		notifier: recordingNotifier{},
 		localIP:  func() (string, error) { return "127.0.0.1", nil },
 		cfg: infraconfig.Config{
-			EnableLeaderElection: true,
-			MetricsAddr:          "127.0.0.1:0",
-			ReconcileSource:      "nacos", // no NacosAddr: the sink is absent
+			EnableLeaderElection:     true,
+			MetricsAddr:              "127.0.0.1:0",
+			EnableAtlasCompatibility: true,
+			ReconcileSource:          "nacos", // no NacosAddr: the sink is absent
 		},
 		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
 			return discoverycenter.NewClient(noopDiscoveryService{}, nil, nil)
@@ -1147,9 +1255,10 @@ func TestStartProvidersReconcileSourceUnknownNameFails(t *testing.T) {
 		notifier: recordingNotifier{},
 		localIP:  func() (string, error) { return "127.0.0.1", nil },
 		cfg: infraconfig.Config{
-			EnableLeaderElection: true,
-			MetricsAddr:          "127.0.0.1:0",
-			ReconcileSource:      "bogus",
+			EnableLeaderElection:     true,
+			MetricsAddr:              "127.0.0.1:0",
+			EnableAtlasCompatibility: true,
+			ReconcileSource:          "bogus",
 		},
 		dialDiscovery: func(context.Context) (*discoverycenter.Client, error) {
 			return discoverycenter.NewClient(noopDiscoveryService{}, nil, nil)

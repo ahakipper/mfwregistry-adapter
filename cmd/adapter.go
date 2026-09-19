@@ -69,8 +69,9 @@ var adapterCmd = &cobra.Command{
 
 It watches the configured providers (Kubernetes clusters and Consul servers),
 converts the observed pods/endpoints into instance data, and pushes the
-	resulting instance events (incremental and full) to the discovery center
-	(Atlas) over gRPC.`,
+	resulting instance events (incremental and full) to the configured service
+	discovery sink (Nacos by default; Atlas only through explicit compatibility
+	mode).`,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("starting adapter")
 		if err := executeAdapter(cmd); err != nil {
@@ -138,6 +139,7 @@ func init() {
 	adapterCmd.Flags().StringP("env", "e", "test", "the environment, e.g: dev, product")
 	adapterCmd.Flags().IntP("push-interval", "i", 21600, "the time interval for full synchronization. the unit is seconds")
 	adapterCmd.Flags().StringP("grpc-addr", "g", "172.16.130.71:50051", "the Atlas grpc address")
+	adapterCmd.Flags().Bool("atlas-compat", false, "explicitly keep the legacy Atlas sink alongside Nacos")
 	adapterCmd.Flags().BoolP("disable-worker", "w", false, "disable push worker, just for testing")
 	adapterCmd.Flags().StringSliceP("appcodes", "", []string{}, "only push instances of the appcodes, just for testing")
 	adapterCmd.Flags().StringP("metrics-addr", "", ":8090", "the Prometheus metrics address")
@@ -160,13 +162,10 @@ func init() {
 	adapterCmd.Flags().Bool("nacos-insecure-skip-verify", false, "skip Nacos TLS verification")
 	adapterCmd.Flags().Int("nacos-timeout", 0, "Nacos request timeout seconds")
 	adapterCmd.Flags().String("nacos-transport", "sdk", "Nacos transport: sdk (required in product) or http-compat (test/approved migration rollback only)")
-	// --reconcile-source is the additive dsca-3 §3.1 flag: it designates
-	// which registered fanout sink the periodic compare READS (the nacos
-	// sink under "nacos" — the nacos-authoritative reconcile). Empty keeps
-	// the primary (Atlas) as the compare source, so the flag-empty binary
-	// behavior is exactly the pre-dsca-3 one; pushes fan out to every sink
-	// either way. "nacos" requires --nacos-addr.
-	adapterCmd.Flags().StringP("reconcile-source", "", "", "the fanout sink whose view the periodic compare reads, e.g. nacos; empty keeps the primary (Atlas)")
+	// --reconcile-source designates the fanout sink whose view the periodic
+	// compare reads. Empty resolves to Nacos in the active Nacos-only graph;
+	// only explicit --atlas-compat retains the historical Atlas primary.
+	adapterCmd.Flags().StringP("reconcile-source", "", "", "reconcile read sink; empty selects Nacos for the default Nacos-only graph")
 	// The three additive local-source flags of docs/nacos-sink-plan.md §8.4
 	// exist for the local full-stack soak, where the env presets point at
 	// unreachable network addresses: they override the preset endpoints for
@@ -195,6 +194,7 @@ func adapterFlags(cmd *cobra.Command) infraconfig.Flags {
 		LogEncoding:              flagString(cmd, "log-encoding"),
 		PushAllInterval:          flagInt(cmd, "push-interval"),
 		GrpcAddr:                 flagString(cmd, "grpc-addr"),
+		EnableAtlasCompatibility: flagBool(cmd, "atlas-compat"),
 		DisablePushWorker:        flagBool(cmd, "disable-worker"),
 		Providers:                flagStringSlice(cmd, "providers"),
 		PushAppCodes:             flagStringSlice(cmd, "appcodes"),

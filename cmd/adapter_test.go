@@ -7,6 +7,7 @@ package cmd
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -65,6 +66,7 @@ func newAdapterCommand() *cobra.Command {
 	cmd.Flags().StringP("env", "e", "test", "the environment")
 	cmd.Flags().IntP("push-interval", "i", 21600, "the time interval for full synchronization")
 	cmd.Flags().StringP("grpc-addr", "g", "172.16.130.71:50051", "the Atlas grpc address")
+	cmd.Flags().Bool("atlas-compat", false, "explicitly keep the legacy Atlas sink alongside Nacos")
 	cmd.Flags().BoolP("disable-worker", "w", false, "disable push worker")
 	cmd.Flags().StringSliceP("appcodes", "", []string{}, "only push instances of the appcodes")
 	cmd.Flags().StringP("metrics-addr", "", ":8090", "the Prometheus metrics address")
@@ -84,6 +86,7 @@ func newAdapterCommand() *cobra.Command {
 	cmd.Flags().Bool("nacos-insecure-skip-verify", false, "skip Nacos TLS verification")
 	cmd.Flags().Int("nacos-timeout", 0, "Nacos timeout seconds")
 	cmd.Flags().String("nacos-transport", "sdk", "Nacos transport")
+	cmd.Flags().String("reconcile-source", "", "reconcile read sink; empty selects Nacos for the default Nacos-only graph")
 	cmd.Flags().StringSliceP("kubeconfig", "", []string{}, "comma-separated kubeconfig paths")
 	cmd.Flags().StringSliceP("consul-addr", "", []string{}, "comma-separated consul addresses")
 	cmd.Flags().StringSliceP("etcd-endpoints", "", []string{}, "comma-separated etcd endpoints")
@@ -95,6 +98,16 @@ func newAdapterCommand() *cobra.Command {
 	cmd.Flags().BoolP("log-to-std", "s", true, "whether to output the log to standard output")
 	cmd.Flags().StringP("log-encoding", "c", "json", "output log format")
 	return cmd
+}
+
+func TestAdapterHelpDescribesNacosOnlyDefaults(t *testing.T) {
+	usage := adapterCmd.Flags().Lookup("reconcile-source").Usage
+	if !strings.Contains(usage, "empty selects Nacos") || strings.Contains(usage, "keeps the primary (Atlas)") {
+		t.Fatalf("reconcile-source help = %q, want the Nacos-only default", usage)
+	}
+	if got := adapterCmd.Flags().Lookup("atlas-compat").DefValue; got != "false" {
+		t.Fatalf("atlas-compat default = %q, want false", got)
+	}
 }
 
 // setFlag sets name=value and marks it changed (what a command-line
@@ -136,6 +149,7 @@ func TestAdapterFlagsMapsEveryDemoFlag(t *testing.T) {
 	setFlag(t, cmd, "push-interval", "30")
 	setFlag(t, cmd, "leader-elect", "false")
 	setFlag(t, cmd, "grpc-addr", "127.0.0.1:19999")
+	setFlag(t, cmd, "atlas-compat", "true")
 	setFlag(t, cmd, "log-file-path", "/tmp/soak/logs")
 	setFlag(t, cmd, "log-to-std", "false")
 	setFlag(t, cmd, "providers", "k8s,ecs")
@@ -167,6 +181,9 @@ func TestAdapterFlagsMapsEveryDemoFlag(t *testing.T) {
 	}
 	if flags.GrpcAddr != "127.0.0.1:19999" {
 		t.Fatalf("GrpcAddr = %q, want 127.0.0.1:19999", flags.GrpcAddr)
+	}
+	if !flags.EnableAtlasCompatibility {
+		t.Fatal("EnableAtlasCompatibility = false, want true for --atlas-compat")
 	}
 	if flags.LogFilePath != "/tmp/soak/logs" {
 		t.Fatalf("LogFilePath = %q, want /tmp/soak/logs", flags.LogFilePath)
