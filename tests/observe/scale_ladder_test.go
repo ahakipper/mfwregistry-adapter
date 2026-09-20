@@ -161,8 +161,8 @@ func TestObserveScaleLadder(t *testing.T) {
 
 	const appCode = "ladder-app-0"
 	driver := newChurnDriver(cfg.Kubeconfig, []string{appCode}, "ladder")
-	if _, err := driver.kubectlStdin("", "get", "nodes"); err != nil {
-		t.Skipf("NOT VERIFIED: EnvError kwok preflight: %v", err)
+	if err := driver.ping(); err != nil {
+		t.Skipf("NOT VERIFIED: client-go K8s preflight: %v", err)
 	}
 	if err := driver.deleteAll(); err != nil {
 		t.Fatalf("delete stale ladder pods: %v", err)

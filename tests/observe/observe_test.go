@@ -59,8 +59,8 @@ func TestObserveConsistency(t *testing.T) {
 		appCodes[i] = fmt.Sprintf("%s-app-%d", observePodPrefix, i)
 	}
 	driver := newChurnDriver(cfg.Kubeconfig, appCodes, observePodPrefix)
-	if _, err := driver.kubectlStdin("", "get", "nodes"); err != nil {
-		t.Skipf("NOT VERIFIED: EnvError kwok/kubectl preflight failed with %s: %v; cleanup_status=not_started", cfg.Kubeconfig, err)
+	if err := driver.ping(); err != nil {
+		t.Skipf("NOT VERIFIED: EnvError client-go K8s preflight failed with %s: %v; cleanup_status=not_started", cfg.Kubeconfig, err)
 	}
 
 	// --- harness workdir + record writers -------------------------------

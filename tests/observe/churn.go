@@ -18,6 +18,12 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
 
 	"spotter/internal/domain/instance"
 	"spotter/internal/ports"
@@ -46,6 +52,9 @@ type churnDriver struct {
 	kubeconfig string
 	appCodes   []string
 	prefix     string
+	clientMu   sync.Mutex
+	client     kubernetes.Interface
+	clientErr  error
 
 	mu              sync.Mutex
 	ledger          map[string]ledgerEntry // podName -> latest mutation
@@ -57,6 +66,38 @@ type churnDriver struct {
 	mutationActive  int                    // overlapping source mutation operations
 	counter         int                    // monotonically increasing pod-name suffix
 	applied         int                    // live pod count the driver tracks
+}
+
+// clientset lazily builds the official client-go client used by the observe
+// data path. Mutation and source reads therefore do not shell out to kubectl;
+// kubectl remains only in lifecycle shell tests and cluster bootstrap scripts.
+func (d *churnDriver) clientset() (kubernetes.Interface, error) {
+	d.clientMu.Lock()
+	defer d.clientMu.Unlock()
+	if d.client != nil || d.clientErr != nil {
+		return d.client, d.clientErr
+	}
+	config, err := clientcmd.BuildConfigFromFlags("", d.kubeconfig)
+	if err != nil {
+		d.clientErr = fmt.Errorf("build client-go config: %w", err)
+		return nil, d.clientErr
+	}
+	d.client, d.clientErr = kubernetes.NewForConfig(config)
+	if d.clientErr != nil {
+		d.clientErr = fmt.Errorf("build client-go client: %w", d.clientErr)
+	}
+	return d.client, d.clientErr
+}
+
+func (d *churnDriver) ping() error {
+	client, err := d.clientset()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), observeCommandTimeout)
+	defer cancel()
+	_, err = client.CoreV1().Nodes().List(ctx, metav1.ListOptions{Limit: 1})
+	return err
 }
 
 // ledgerEntry is one mutation's record (the in-flight clock source).
@@ -97,7 +138,13 @@ func (d *churnDriver) patchStatus(name string, issuedAt time.Time, op, patch str
 	d.mutationActive++
 	d.mu.Unlock()
 	defer d.finishMutation()
-	if _, err := d.kubectlStdin(patch, "patch", "pod", name, "--subresource=status", "--type=merge", "-p", patch); err != nil {
+	client, err := d.clientset()
+	if err != nil {
+		return fmt.Errorf("patch pod %s status (%s): %w", name, op, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), observeCommandTimeout)
+	defer cancel()
+	if _, err := client.CoreV1().Pods("default").Patch(ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}, "status"); err != nil {
 		return fmt.Errorf("patch pod %s status (%s): %w", name, op, err)
 	}
 	d.mu.Lock()
@@ -198,6 +245,19 @@ spec:
 `, podName, appCode, appCode, d.prefix)
 }
 
+func (d *churnDriver) podObject(appCode, podName string) *v1.Pod {
+	return &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: podName, Labels: map[string]string{
+			"app-code": appCode, "app": appCode, "K8S_CLUSTER_TYPE": "test",
+		}},
+		Spec: v1.PodSpec{
+			NodeSelector: map[string]string{"type": "kwok"},
+			Tolerations:  []v1.Toleration{{Key: "kwok.x-k8s.io/node", Operator: v1.TolerationOpExists, Effect: v1.TaintEffectNoSchedule}},
+			Containers:   []v1.Container{{Name: "application", Image: fmt.Sprintf("%s/fake-app:latest", d.prefix), Ports: []v1.ContainerPort{{Name: "http", ContainerPort: 8080, Protocol: v1.ProtocolTCP}}, Resources: v1.ResourceRequirements{Limits: v1.ResourceList{"cpu": resource.MustParse("100m"), "memory": resource.MustParse("128Mi")}}}},
+		},
+	}
+}
+
 // nextPodName derives a unique pod name.
 func (d *churnDriver) nextPodName() string {
 	d.mu.Lock()
@@ -278,19 +338,48 @@ func (d *churnDriver) applyBatch(count, batchSize int, issuedAt time.Time) ([]st
 		d.latestIssuedAt = chunkIssued
 		d.mutationSeq++
 		d.mu.Unlock()
-		var b strings.Builder
-		b.WriteString("apiVersion: v1\nkind: List\nitems:\n")
-		for _, p := range pods[start:end] {
-			b.WriteString(podListItem(d.podManifest(p.appCode, p.name)))
+		client, err := d.clientset()
+		if err != nil {
+			return appliedNames, err
 		}
-		if _, err := d.kubectlStdin(b.String(), "apply", "-f", "-"); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), observeCommandTimeout)
+		created := make(chan *v1.Pod, end-start)
+		errs := make(chan error, end-start)
+		sem := make(chan struct{}, 64)
+		var wg sync.WaitGroup
+		for _, p := range pods[start:end] {
+			p := p
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				createdPod, createErr := client.CoreV1().Pods("default").Create(ctx, d.podObject(p.appCode, p.name), metav1.CreateOptions{})
+				if createErr != nil {
+					errs <- fmt.Errorf("create pod %s: %w", p.name, createErr)
+					return
+				}
+				created <- createdPod
+			}()
+		}
+		wg.Wait()
+		close(created)
+		close(errs)
+		cancel()
+		var firstErr error
+		for err := range errs {
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+		if firstErr != nil {
 			d.mu.Lock()
 			for _, p := range pods[start:end] {
 				delete(d.ledger, p.name)
 			}
 			d.mu.Unlock()
 			sort.Strings(appliedNames)
-			return appliedNames, fmt.Errorf("apply batch (%d pods): %w", end-start, err)
+			return appliedNames, fmt.Errorf("apply batch (%d pods): %w", end-start, firstErr)
 		}
 		d.mu.Lock()
 		for _, p := range pods[start:end] {
@@ -352,14 +441,43 @@ func (d *churnDriver) deletePods(names []string, issuedAt time.Time) (int, error
 		d.latestIssuedAt = chunkIssued
 		d.mutationSeq++
 		d.mu.Unlock()
-		args := append([]string{"delete", "pod", "--ignore-not-found=true", "--wait=false", "--"}, actual[start:end]...)
-		if _, err := d.kubectlStdin("", args...); err != nil {
+		client, err := d.clientset()
+		if err != nil {
+			return deleted, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), observeCommandTimeout)
+		errs := make(chan error, end-start)
+		sem := make(chan struct{}, 64)
+		var wg sync.WaitGroup
+		for _, name := range actual[start:end] {
+			name := name
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				err := client.CoreV1().Pods("default").Delete(ctx, name, metav1.DeleteOptions{})
+				if err != nil && !apierrors.IsNotFound(err) {
+					errs <- fmt.Errorf("delete pod %s: %w", name, err)
+				}
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		cancel()
+		var firstErr error
+		for err := range errs {
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+		if firstErr != nil {
 			d.mu.Lock()
 			for _, name := range actual[start:] {
 				delete(d.deleting, name)
 			}
 			d.mu.Unlock()
-			return deleted, fmt.Errorf("delete pods (%d): %w", end-start, err)
+			return deleted, fmt.Errorf("delete pods (%d): %w", end-start, firstErr)
 		}
 		d.mu.Lock()
 		for _, name := range actual[start:end] {
@@ -446,8 +564,8 @@ type sourcePod struct {
 	Instance        *instance.Instance
 }
 
-// liveSourcePods reads the kwok cluster's pods in ONE kubectl call (the
-// §4.3 step-1 read), converting to the observation's source model: pods
+// liveSourcePods reads the kwok cluster's pods in one official client-go List
+// call (the §4.3 step-1 read), converting to the observation's source model: pods
 // of the harness's app-codes with their converter-relevant status.
 //
 // The Pending filter (dsca-4 batch-D contract): a Pending pod is filtered
@@ -455,15 +573,15 @@ type sourcePod struct {
 // so it is absent from nacos by design until it becomes Running; its
 // creationTimestamp is still the in-flight clock once it flips Running.
 func (d *churnDriver) liveSourcePods(labelSelector string) ([]sourcePod, error) {
-	out, err := d.kubectlStdin("", "get", "pods", "-l", labelSelector, "-o", "json")
+	client, err := d.clientset()
 	if err != nil {
 		return nil, err
 	}
-	var list struct {
-		Items []v1.Pod `json:"items"`
-	}
-	if err := jsonUnmarshalString(out, &list); err != nil {
-		return nil, fmt.Errorf("decode kubectl get pods: %w", err)
+	ctx, cancel := context.WithTimeout(context.Background(), observeCommandTimeout)
+	defer cancel()
+	list, err := client.CoreV1().Pods("").List(ctx, metav1.ListOptions{LabelSelector: labelSelector})
+	if err != nil {
+		return nil, fmt.Errorf("client-go list pods: %w", err)
 	}
 	// The harness's own app-code set scopes the observation: a foreign
 	// pod (none expected — the kwok cluster is dedicated) would surface as
@@ -546,15 +664,19 @@ func parseK8sTimestampOr(raw string, layout string) time.Time {
 // listPodNames returns the harness-prefixed pod names currently on the
 // cluster (teardown bookkeeping).
 func (d *churnDriver) listPodNames() ([]string, error) {
-	out, err := d.kubectlStdin("", "get", "pods", "-l", "app-code", "-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}")
+	client, err := d.clientset()
 	if err != nil {
 		return nil, err
 	}
-	names := []string{}
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		if line != "" {
-			names = append(names, line)
-		}
+	ctx, cancel := context.WithTimeout(context.Background(), observeCommandTimeout)
+	defer cancel()
+	pods, err := client.CoreV1().Pods("").List(ctx, metav1.ListOptions{LabelSelector: "app-code"})
+	if err != nil {
+		return nil, fmt.Errorf("client-go list pods for teardown: %w", err)
+	}
+	names := make([]string, 0, len(pods.Items))
+	for _, pod := range pods.Items {
+		names = append(names, pod.Name)
 	}
 	return names, nil
 }
@@ -575,18 +697,14 @@ func (d *churnDriver) deleteAll() error {
 	if len(filtered) == 0 {
 		return nil
 	}
-	// Keep teardown requests bounded just like applyBatch. Passing hundreds of
-	// pod names in one kubectl invocation can exceed the apiserver/client
-	// deadline on kwok, leaving a partial population that poisons the next
-	// observation run. Chunks remain name-filtered so foreign pods are never
-	// deleted.
+	// Keep teardown requests bounded just like applyBatch. Chunks remain
+	// name-filtered so foreign pods are never deleted.
 	for start := 0; start < len(filtered); start += 100 {
 		end := start + 100
 		if end > len(filtered) {
 			end = len(filtered)
 		}
-		args := append([]string{"delete", "pod", "--ignore-not-found=true", "--wait=false", "--"}, filtered[start:end]...)
-		if _, err := d.kubectlStdin("", args...); err != nil {
+		if _, err := d.deletePods(filtered[start:end], time.Now()); err != nil {
 			return fmt.Errorf("delete pods teardown chunk (%d pods): %w", end-start, err)
 		}
 	}
