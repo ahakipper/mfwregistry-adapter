@@ -42,18 +42,20 @@ The Nacos 3 container also sets `NACOS_AUTH_ADMIN_ENABLE=false` for this isolate
 
 ## Verification run
 
-Run: `20260921-0138` (Nacos 3.2.4 ARM64, KWOK, 20 Pods, 2 services, 2-minute window, SDK data path).
+Run: `20260921-0146` (Nacos 3.2.4 ARM64, KWOK, 1000 Pods, 20 services, one-hour window, SDK data path).
 
 Evidence:
 
 - `Nacos naming healthCheckEnabled=false provisioned for 2 k8s service clusters` was emitted after a successful readback before Spotter startup.
-- 13/13 observation ticks were exactly consistent; 0 divergent and 0 observation-error ticks.
-- 2/2 K8s mutations were correlated to Nacos observations; missing=0.
-- K8s Watch -> Nacos latency: create P90/P95/P99 `0.574s`; delete P90/P95/P99 `0.584s`.
+- 319/319 observation ticks were exactly consistent; 0 divergent and 0 observation-error ticks.
+- 7266/7266 K8s mutations were correlated to Nacos observations; missing=0.
+- K8s Watch -> Nacos latency: create P90/P95/P99 `0.637s` / `0.656s` / `0.820s`; delete P90/P95/P99 `0.600s` / `0.609s` / `0.652s`.
+- 8204 event-to-store observations were collected; p90/p95/p99 were `0.050s` / `0.050s` / `0.100s`.
+- Burst schedules covered 100-Pod and 200-Pod changes at 25%, 50%, and 75% of the base scale; every burst converged and every exact tick remained consistent.
 - Final post-quiescence three-plane snapshot was exact.
 - Nacos and KWOK teardown completed with no residual resources.
 
-The detailed report is [20260921-0138-summary.md](../../tests/observe/results/20260921-0138-summary.md); the machine-readable record is [20260921-0138-summary.json](../../tests/observe/results/20260921-0138-summary.json).
+The detailed report is [20260921-0146-summary.md](../../tests/observe/results/20260921-0146-summary.md); the machine-readable record is [20260921-0146-summary.json](../../tests/observe/results/20260921-0146-summary.json).
 
 ## Scope boundary
 
