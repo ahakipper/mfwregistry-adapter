@@ -13,8 +13,8 @@ spotter. See [architecture.md](architecture.md) for design background and
   `93a93504cc2f`. Persistent register/deregister use the adapter's v3 gRPC
   request seam; query, Subscribe, service-list, readiness and catalog/reconcile
   remain SDK-backed. Real Nacos 3.2.4 ARM64 lifecycle, 201-instance application
-  batch, and 20-minute/1000-Pod KWOK gates passed; the final two-hour gate is
-  currently running on the final code.
+  batch, 20-minute/1000-Pod KWOK gate, and final two-hour/1000-Pod KWOK gate
+  passed. See [the final evidence report](evidence/nacos3-kwok-2h-pass-2026-09-20.md).
 - Application batches are logical Spotter batches, not a Nacos persistent
   protocol batch: one application scope is partitioned at 100 items and sent
   through bounded official SDK item RPCs. RPC acknowledgement completes the
@@ -216,4 +216,5 @@ The durable run is launched outside the interactive shell through
 `scripts/observe-runner.sh` and macOS `launchctl`. Its terminal status, tick
 JSONL, summary, latency percentiles, and teardown status are authoritative. A
 run stopped by host/session interruption is evidence of test interruption, not
-a product PASS or FAIL.
+a product PASS or FAIL. The final run for commit `bb59885` completed with
+`EXIT_CODE=0`; its summary and hashes are recorded in the evidence report.

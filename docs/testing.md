@@ -19,8 +19,8 @@ authority, external AppCenter/HTTP notification code is deleted, and the
 legacy aggregate scaffold is deleted. Persistent application batch success is
 defined by acknowledged official SDK writes plus successful prune; immediate
 catalog read-after-write is deliberately not a hot-path requirement. The
-remaining in-scope evidence gate is the durable fresh two-hour/1000-Pod run on
-this final code.
+final durable two-hour/1000-Pod run passed; see
+`evidence/nacos3-kwok-2h-pass-2026-09-20.md`.
 
 **Historical status (2026-09-13, code baseline `33606fa`):** the default unit, full and
 race suites are green and `go vet ./...` is clean. The Nacos naming path is
@@ -555,8 +555,8 @@ external read-only OBS-mini mode; teardown never deletes it. Fake-PATH shell
 contract checks should run with `bash scripts/observe_lifecycle_test.sh` (and
 `bash -n scripts/observe-*.sh`); missing
 kwokctl/docker/nc and occupied ports remain explicit EnvError/InfraError.
-The final-code 2h/1000+ real run remains `NOT VERIFIED` until a fresh artifact
-passes; missing prerequisites must still report `EnvError`, never PASS.
+The final-code 2h/1000+ real run passed for `bb59885`; missing prerequisites
+for future runs must still report `EnvError`, never PASS.
 The owned lifecycle writes state before creation and uses an EXIT cleanup trap;
 state hashes and residual markers permit safe retry after partial failure.
 When `OBS_KUBECONFIG` is set, `make test-observe` runs only read-only
@@ -569,9 +569,9 @@ The current tree completed the legacy dependency removal and tightened
 without compatibility exemptions. The obsolete aggregate controller is also
 deleted. The full unit suite, focused race suite,
 E2E compile gate, static boundary check, and `go vet ./...` pass on the current
-tree. The remaining in-scope runtime test is the two-hour KWork burst with
-per-tick full-Instance equality; it is intentionally kept separate from the
-completed one-hour evidence.
+tree. The final in-scope runtime test is the completed two-hour KWork burst
+with per-tick full-Instance equality; it remains intentionally separate from
+the shorter one-hour evidence.
 ### Nacos 3 SDK and persistent application batches
 
 Nacos 2.1.0 records in this document are historical compatibility evidence;
@@ -602,7 +602,8 @@ Admin/Maintainer preflight is separate from runtime naming writes.
 `scripts/observe-up.sh` and `scripts/observe-down.sh` provide the OBS-full
 self-contained kwok lifecycle with dedicated kubeconfig, API/etcd ports,
 readyz and node-capacity checks. The final-code 2h/1000-instance OBS-full run
-remains pending. OBS-mini may use
+passed and is documented in `evidence/nacos3-kwok-2h-pass-2026-09-20.md`.
+OBS-mini may use
 `OBS_KUBECONFIG` external read-only mode; teardown never deletes that cluster.
 Run `scripts/observe_lifecycle_test.sh` for fake-PATH failure and cleanup
 coverage.

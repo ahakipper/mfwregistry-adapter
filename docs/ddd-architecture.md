@@ -869,8 +869,9 @@ The Nacos 3 ARM64 one-hour KWork evidence proves strict full-Instance equality,
 including labels, metadata, and Reversion, while the bounded application batch
 test proves 201 persistent registrations converge as `100 + 100 + 1`. The
 current in-scope code and 20-minute reliability gate are complete: the fresh
-Nacos 3 + KWOK burst run passed with exact K8s/Spotter/Nacos equality. The final
-two-hour gate is still pending until the durable final-code run produces a
-terminal summary and teardown evidence. AppCenter real delivery,
+Nacos 3 + KWOK burst run passed with exact K8s/Spotter/Nacos equality. The
+final two-hour gate passed on the durable final-code run; terminal summary,
+raw evidence hashes, and teardown are recorded in
+`evidence/nacos3-kwok-2h-pass-2026-09-20.md`. AppCenter real delivery,
 deployment-level Nacos operations, and real Atlas protobuf wire compatibility
 remain deliberately excluded by the current scope decision.

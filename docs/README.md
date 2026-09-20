@@ -38,6 +38,7 @@ the current Nacos Sink.
 | [evidence/nacos3-kwok-20m-root-cause-2026-09-19.md](evidence/nacos3-kwok-20m-root-cause-2026-09-19.md) | Failed 20-minute/1000-Pod run root cause: harness no-op deletes, K8s cache resurrection race, remediation evidence, and the mandatory revalidation gate. |
 | [evidence/nacos3-kwok-reconcile-race-closure-2026-09-19.md](evidence/nacos3-kwok-reconcile-race-closure-2026-09-19.md) | Three-run fail/find/fix closure for mixed-time reconcile deletion and crash/recovery ownership, ending in a clean 10-minute/1000-Pod collision PASS. |
 | [evidence/nacos3-kwok-20m-pass-2026-09-19.md](evidence/nacos3-kwok-20m-pass-2026-09-19.md) | Fresh 20-minute/1000-Pod Nacos 3 + KWOK PASS with exact three-watch correlation, full Instance equality, burst wall/per-item timings, and P90/P95/P99 latency. |
+| [evidence/nacos3-kwok-2h-pass-2026-09-20.md](evidence/nacos3-kwok-2h-pass-2026-09-20.md) | Final-code two-hour/1000-Pod Nacos 3 + KWOK PASS with 654 exact ticks, 13,366 correlated mutations, burst coverage, P90/P95/P99 latency, hashes, and teardown evidence. |
 | [superpowers/plans/2026-09-19-nacos-only-stability-e2e-plan.md](superpowers/plans/2026-09-19-nacos-only-stability-e2e-plan.md) | Authoritative Nacos-only implementation, canonical reconcile, batch/retry, E2E, Observe, and final release plan. |
 | [superpowers/plans/2026-09-15-remaining-closure.md](superpowers/plans/2026-09-15-remaining-closure.md) | Superseded historical closure plan; retained for provenance only. |
 

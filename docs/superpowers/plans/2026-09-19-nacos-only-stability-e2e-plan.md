@@ -12,8 +12,8 @@
 | 1 — Nacos-only composition | **PASS** | `91fb3a7`; independent review PASS |
 | 2 — canonical all-field reconcile | **PASS** | `52b787c`; independent adversarial review PASS |
 | 3 — batch/ordering/failure recovery | **PASS** | `92712fb`; independent adversarial review PASS |
-| 4 — E2E/Observe qualification | **RUNNING** | Expanded E2E landed; durable final-code two-hour run is executing after the batch-polling fix |
-| 5 — cleanup/release gate | **IN PROGRESS** | AppCenter removal `d80aa42`; aggregate deletion `0e6de37`; batch-polling fix `bb59885`; final matrix/docs pending |
+| 4 — E2E/Observe qualification | **PASS** | Final-code durable two-hour run passed; evidence: `docs/evidence/nacos3-kwok-2h-pass-2026-09-20.md` |
+| 5 — cleanup/release gate | **PASS** | AppCenter removal `d80aa42`; aggregate deletion `0e6de37`; batch-polling fix `bb59885`; final evidence and teardown recorded |
 
 ## Scope decision
 
