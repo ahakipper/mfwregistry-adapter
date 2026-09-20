@@ -707,7 +707,7 @@ func (t *watchTimeline) waitForMutationCoverage(entries []ledgerEntry, timeout t
 }
 
 type watchLatencyValues struct {
-	apiK8s, apiSpotter, spotterQueue, spotterNacos, apiNacos []float64
+	apiK8s, apiSpotter, spotterQueue, spotterNacos, k8sWatchNacos, apiNacos []float64
 }
 
 func (t *watchTimeline) summarizeMutations(entries []ledgerEntry, subscriptionsWanted, subscriptionsStarted int) (watchRunEvidence, []watchMutationRecord) {
@@ -758,6 +758,7 @@ func (t *watchTimeline) summarizeMutations(entries []ledgerEntry, subscriptionsW
 			record.SpotterQueueSec = boundary.SpotterSeen.Sub(boundary.SpotterTrigger).Seconds()
 		}
 		record.SpotterToNacosSec = boundary.NacosSeen.Sub(boundary.SpotterSeen).Seconds()
+		record.K8sWatchToNacosSec = boundary.NacosSeen.Sub(boundary.SourceSeen).Seconds()
 		record.APIToNacosSec = boundary.NacosSeen.Sub(entry.IssuedAt).Seconds()
 		group := values[entry.Op]
 		if group == nil {
@@ -768,6 +769,7 @@ func (t *watchTimeline) summarizeMutations(entries []ledgerEntry, subscriptionsW
 		group.apiSpotter = append(group.apiSpotter, record.APIToSpotterSec)
 		group.spotterQueue = append(group.spotterQueue, record.SpotterQueueSec)
 		group.spotterNacos = append(group.spotterNacos, record.SpotterToNacosSec)
+		group.k8sWatchNacos = append(group.k8sWatchNacos, record.K8sWatchToNacosSec)
 		group.apiNacos = append(group.apiNacos, record.APIToNacosSec)
 		records = append(records, record)
 	}
@@ -775,7 +777,8 @@ func (t *watchTimeline) summarizeMutations(entries []ledgerEntry, subscriptionsW
 		evidence.ByOperation[operation] = watchOperationSummary{
 			APIToK8s: watchPercentiles(group.apiK8s), APIToSpotter: watchPercentiles(group.apiSpotter),
 			SpotterQueue: watchPercentiles(group.spotterQueue), SpotterToNacos: watchPercentiles(group.spotterNacos),
-			APIToNacos: watchPercentiles(group.apiNacos),
+			K8sWatchToNacos: watchPercentiles(group.k8sWatchNacos),
+			APIToNacos:      watchPercentiles(group.apiNacos),
 		}
 	}
 	return evidence, records

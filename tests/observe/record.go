@@ -220,21 +220,22 @@ type runSummary struct {
 }
 
 type watchMutationRecord struct {
-	Operation         string  `json:"operation"`
-	AppCode           string  `json:"appCode"`
-	InstanceID        string  `json:"instanceId"`
-	IssuedAt          string  `json:"issuedAt"`
-	K8sWatchAt        string  `json:"k8sWatchAt,omitempty"`
-	SpotterAt         string  `json:"spotterAt,omitempty"`
-	NacosAt           string  `json:"nacosAt,omitempty"`
-	Reversion         int64   `json:"reversion,omitempty"`
-	CorrelationMode   string  `json:"correlationMode,omitempty"`
-	APIToK8sSec       float64 `json:"apiToK8sSec,omitempty"`
-	APIToSpotterSec   float64 `json:"apiToSpotterSec,omitempty"`
-	SpotterQueueSec   float64 `json:"spotterProviderTriggerToWorkerSec,omitempty"`
-	SpotterToNacosSec float64 `json:"spotterToNacosSec,omitempty"`
-	APIToNacosSec     float64 `json:"apiToNacosSec,omitempty"`
-	Missing           string  `json:"missing,omitempty"`
+	Operation          string  `json:"operation"`
+	AppCode            string  `json:"appCode"`
+	InstanceID         string  `json:"instanceId"`
+	IssuedAt           string  `json:"issuedAt"`
+	K8sWatchAt         string  `json:"k8sWatchAt,omitempty"`
+	SpotterAt          string  `json:"spotterAt,omitempty"`
+	NacosAt            string  `json:"nacosAt,omitempty"`
+	Reversion          int64   `json:"reversion,omitempty"`
+	CorrelationMode    string  `json:"correlationMode,omitempty"`
+	APIToK8sSec        float64 `json:"apiToK8sSec,omitempty"`
+	APIToSpotterSec    float64 `json:"apiToSpotterSec,omitempty"`
+	SpotterQueueSec    float64 `json:"spotterProviderTriggerToWorkerSec,omitempty"`
+	SpotterToNacosSec  float64 `json:"spotterToNacosSec,omitempty"`
+	K8sWatchToNacosSec float64 `json:"k8sWatchToNacosSec,omitempty"`
+	APIToNacosSec      float64 `json:"apiToNacosSec,omitempty"`
+	Missing            string  `json:"missing,omitempty"`
 }
 
 type watchLatencyPercentiles struct {
@@ -247,11 +248,12 @@ type watchLatencyPercentiles struct {
 }
 
 type watchOperationSummary struct {
-	APIToK8s       watchLatencyPercentiles `json:"apiToK8s"`
-	APIToSpotter   watchLatencyPercentiles `json:"apiToSpotter"`
-	SpotterQueue   watchLatencyPercentiles `json:"spotterProviderTriggerToWorker"`
-	SpotterToNacos watchLatencyPercentiles `json:"spotterToNacos"`
-	APIToNacos     watchLatencyPercentiles `json:"apiToNacos"`
+	APIToK8s        watchLatencyPercentiles `json:"apiToK8s"`
+	APIToSpotter    watchLatencyPercentiles `json:"apiToSpotter"`
+	SpotterQueue    watchLatencyPercentiles `json:"spotterProviderTriggerToWorker"`
+	SpotterToNacos  watchLatencyPercentiles `json:"spotterToNacos"`
+	K8sWatchToNacos watchLatencyPercentiles `json:"k8sWatchToNacos"`
+	APIToNacos      watchLatencyPercentiles `json:"apiToNacos"`
 }
 
 type watchRunEvidence struct {
@@ -355,8 +357,10 @@ func renderSummaryMarkdown(s runSummary) string {
 		}
 		sort.Strings(operations)
 		for _, operation := range operations {
-			latency := s.Watch.ByOperation[operation].APIToNacos
-			b.WriteString(fmt.Sprintf("- %s API→Nacos: n=%d p50=%.3fs p90=%.3fs p95=%.3fs p99=%.3fs max=%.3fs\n", operation, latency.Samples, latency.P50, latency.P90, latency.P95, latency.P99, latency.Max))
+			watchToNacos := s.Watch.ByOperation[operation].K8sWatchToNacos
+			apiToNacos := s.Watch.ByOperation[operation].APIToNacos
+			b.WriteString(fmt.Sprintf("- %s K8s Watch→Nacos: n=%d p50=%.3fs p90=%.3fs p95=%.3fs p99=%.3fs max=%.3fs\n", operation, watchToNacos.Samples, watchToNacos.P50, watchToNacos.P90, watchToNacos.P95, watchToNacos.P99, watchToNacos.Max))
+			b.WriteString(fmt.Sprintf("  auxiliary API→Nacos: n=%d p50=%.3fs p90=%.3fs p95=%.3fs p99=%.3fs max=%.3fs\n", apiToNacos.Samples, apiToNacos.P50, apiToNacos.P90, apiToNacos.P95, apiToNacos.P99, apiToNacos.Max))
 		}
 	}
 	b.WriteString("\n## Divergences\n\n")

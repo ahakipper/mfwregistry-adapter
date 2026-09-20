@@ -5,6 +5,7 @@ package observe
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -264,6 +265,47 @@ func TestObserveUnitWatchSummaryFailsClosedOnMissingMutation(t *testing.T) {
 	close(k8sEvents)
 	close(spotterEvents)
 	close(nacosEvents)
+}
+
+func TestObserveUnitWatchSummaryReportsK8sWatchToNacosLatency(t *testing.T) {
+	k8sEvents := make(chan k8sWatchEvent, 1)
+	spotterEvents := make(chan spotterWatchEvent, 1)
+	nacosEvents := make(chan nacosWatchEvent, 1)
+	timeline := newWatchTimeline(k8sEvents, spotterEvents, nacosEvents)
+	issued := time.Now().Add(-time.Second)
+	sourceAt := issued.Add(100 * time.Millisecond)
+	spotterAt := issued.Add(200 * time.Millisecond)
+	nacosAt := issued.Add(500 * time.Millisecond)
+	target := &sv.Instance{InstanceId: "pod-a", AppCode: "app-a", Provider: "k8s", SourceKey: "cluster-a/uid-a", SourceCluster: "cluster-a", Reversion: 42, Status: 1, Enabled: true}
+	canonical := domaininstance.CanonicalPayload(target)
+	k8sEvents <- k8sWatchEvent{Type: "MODIFIED", Pod: &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-a", UID: "uid-a", ResourceVersion: "42"},
+		Status:     v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.1", ContainerStatuses: []v1.ContainerStatus{{Ready: true, State: v1.ContainerState{Running: &v1.ContainerStateRunning{}}}}},
+	}, At: sourceAt}
+	spotterEvents <- spotterWatchEvent{Boundary: "provider-output/pre-worker", Operation: "Sync", Origin: "event-cache-applied", InstanceID: "pod-a", AppCode: "app-a", SourceKey: "cluster-a/uid-a", Reversion: 42, Status: 1, CanonicalPayload: canonical, TriggerAt: issued.Add(150 * time.Millisecond).Format(time.RFC3339Nano), ObservedAt: spotterAt.Format(time.RFC3339Nano)}
+	nacosEvents <- nacosWatchEvent{Service: "app-a", Hosts: []spotternacos.Host{{Metadata: map[string]string{"instanceId": "pod-a", "status": "1", "reversion": "42", "spotter.instance": domaininstance.CompressedCanonicalPayload(target)}}}, At: nacosAt}
+	close(k8sEvents)
+	close(spotterEvents)
+	close(nacosEvents)
+	entry := ledgerEntry{Op: "create", AppCode: "app-a", PodName: "pod-a", IssuedAt: issued}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := timeline.mutationBoundary(entry); ok {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	evidence, records := timeline.summarizeMutations([]ledgerEntry{entry}, 1, 1)
+	if evidence.Correlated != 1 || len(records) != 1 {
+		t.Fatalf("evidence=%+v records=%+v, want one correlated mutation", evidence, records)
+	}
+	if got := records[0].K8sWatchToNacosSec; math.Abs(got-0.4) > 0.001 {
+		t.Fatalf("K8sWatchToNacosSec=%.6f, want 0.400000", got)
+	}
+	latency := evidence.ByOperation["create"].K8sWatchToNacos
+	if latency.Samples != 1 || math.Abs(latency.P50-0.4) > 0.001 || math.Abs(latency.P90-0.4) > 0.001 || math.Abs(latency.P99-0.4) > 0.001 {
+		t.Fatalf("K8sWatchToNacos percentiles=%+v, want one 0.4s sample", latency)
+	}
 }
 
 func TestObserveUnitWatchSummaryRejectsReusedBoundary(t *testing.T) {
