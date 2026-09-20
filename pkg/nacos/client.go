@@ -55,12 +55,14 @@ const (
 
 // Paths of the v1 OpenAPI endpoints (and the console readiness probe).
 const (
-	pathInstance    = "/nacos/v1/ns/instance"
-	pathInstanceLis = "/nacos/v1/ns/instance/list"
-	pathServiceList = "/nacos/v1/ns/service/list"
-	pathReadiness   = "/nacos/v1/console/health/readiness"
-	pathCatalogList = "/nacos/v1/ns/catalog/instances"
-	pathCluster     = "/nacos/v1/ns/cluster"
+	pathInstance       = "/nacos/v1/ns/instance"
+	pathInstanceLis    = "/nacos/v1/ns/instance/list"
+	pathServiceList    = "/nacos/v1/ns/service/list"
+	pathReadiness      = "/nacos/v1/console/health/readiness"
+	pathCatalogList    = "/nacos/v1/ns/catalog/instances"
+	pathCluster        = "/nacos/v1/ns/cluster"
+	pathClusterV3Admin = "/nacos/v3/admin/ns/cluster"
+	pathServiceV3Admin = "/nacos/v3/admin/ns/service"
 )
 
 // InstanceParams is the wire form of one instance for register and
@@ -732,6 +734,47 @@ func (c *Client) UpdateCluster(serviceName, clusterName string) error {
 	values.Set("groupName", effectiveGroup(c.config.GroupName))
 	values.Set("namespaceId", effectiveNamespace(c.config.NamespaceID))
 	return c.doForm(http.MethodPut, pathCluster, values)
+}
+
+// UpdateClusterV3AdminCompat provisions a Nacos 3 deployment-owned cluster
+// health policy through the explicitly named HTTP compatibility adapter. It
+// is a test/deployment bootstrap seam only; production naming operations must
+// use the official SDK, and SDK mode rejects this operation without an
+// injected Maintainer/Admin facade.
+func (c *Client) UpdateClusterV3AdminCompat(serviceName, clusterName string) error {
+	if c == nil || c.http == nil {
+		return fmt.Errorf("%w: Nacos 3 admin compatibility transport is unavailable", ErrUnsupportedOperation)
+	}
+	values := url.Values{}
+	values.Set("serviceName", serviceName)
+	values.Set("clusterName", clusterName)
+	values.Set("checkPort", "0")
+	values.Set("useInstancePort4Check", "false")
+	values.Set("healthChecker", `{"type":"none"}`)
+	values.Set("groupName", effectiveGroup(c.config.GroupName))
+	values.Set("namespaceId", effectiveNamespace(c.config.NamespaceID))
+	// The Nacos 3 Spring controller accepts the documented form fields from
+	// the query string as well. The query form is deliberate here: the Go
+	// transport's request-body variant is closed by Nacos 3 with EOF, while
+	// the same fields in the URL are handled consistently with the v1
+	// compatibility path and return the structured Admin response.
+	return c.doForm(http.MethodPut, pathClusterV3Admin, values)
+}
+
+// CreateServiceV3AdminCompat creates the persistent service shell required by
+// the Nacos 3 cluster-admin endpoint. It is a deployment/test control-plane
+// seam only; Spotter instance registration and catalog operations remain on
+// the official naming SDK.
+func (c *Client) CreateServiceV3AdminCompat(serviceName string) error {
+	if c == nil || c.http == nil {
+		return fmt.Errorf("%w: Nacos 3 admin compatibility transport is unavailable", ErrUnsupportedOperation)
+	}
+	values := url.Values{}
+	values.Set("serviceName", serviceName)
+	values.Set("groupName", effectiveGroup(c.config.GroupName))
+	values.Set("namespaceId", effectiveNamespace(c.config.NamespaceID))
+	values.Set("ephemeral", "false")
+	return c.doForm(http.MethodPost, pathServiceV3Admin, values)
 }
 
 // ListInstances returns every instance of one service in the configured

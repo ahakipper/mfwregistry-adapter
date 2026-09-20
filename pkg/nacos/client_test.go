@@ -85,6 +85,45 @@ func TestBlackboxClientRegisterSendsPersistentFormParams(t *testing.T) {
 	}
 }
 
+func TestBlackboxNacos3AdminHealthBootstrapUsesExplicitCompatibilityPaths(t *testing.T) {
+	requests := make(chan *http.Request, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- r
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"code":0,"message":"success","data":"ok"}`)
+	}))
+	defer server.Close()
+	client, err := nacos.NewHTTPCompatClient(server.URL, &fakes.FakeLogger{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.CreateServiceV3AdminCompat("payments"); err != nil {
+		t.Fatalf("CreateServiceV3AdminCompat() error = %v", err)
+	}
+	if err := client.UpdateClusterV3AdminCompat("payments", "k8s"); err != nil {
+		t.Fatalf("UpdateClusterV3AdminCompat() error = %v", err)
+	}
+	for _, want := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/nacos/v3/admin/ns/service"},
+		{http.MethodPut, "/nacos/v3/admin/ns/cluster"},
+	} {
+		request := <-requests
+		if request.Method != want.method || request.URL.Path != want.path {
+			t.Fatalf("admin request = %s %s, want %s %s", request.Method, request.URL.Path, want.method, want.path)
+		}
+		if request.URL.Query().Get("serviceName") != "payments" || request.URL.Query().Get("groupName") != "DEFAULT_GROUP" || request.URL.Query().Get("namespaceId") != "public" {
+			t.Fatalf("admin query = %v, want service/group/public", request.URL.Query())
+		}
+		if want.method == http.MethodPut && request.URL.Query().Get("healthChecker") != `{"type":"none"}` {
+			t.Fatalf("healthChecker = %q, want NONE JSON", request.URL.Query().Get("healthChecker"))
+		}
+	}
+}
+
 func TestBlackboxClientRegisterErrorPropagates(t *testing.T) {
 	client, server := newClientAt(t)
 	_ = server

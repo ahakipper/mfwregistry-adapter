@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	spotternacos "spotter/pkg/nacos"
 )
 
 // The throwaway-Nacos lifecycle (dsca-4 §4.1): a fresh
@@ -32,6 +34,76 @@ const observeNacosContainer = "dsca-observe-nacos"
 const nacosImage = "nacos/nacos-server:v3.2.4-slim"
 const nacosImageDigest = "sha256:2a6d445d567b04c81404a3569309b07bfaf077216dbc3a92c0f56c9113034fb5"
 const nacosPlatform = "linux/arm64"
+
+// provisionObserveHealthChecker disables Nacos server-side active probing for
+// the synthetic persistent instances used by this harness. This is an
+// explicit deployment-control-plane fixture operation: the pinned official Go
+// naming SDK does not expose the Nacos Maintainer/Admin cluster update API,
+// while the Spotter business data path remains SDK-only. Without this
+// preflight, Nacos would probe every fake 10.0.x.x:7096 endpoint through the
+// Colima limactl usernet bridge and flood the host network with timeouts.
+func provisionObserveHealthChecker(addr string, services []string) error {
+	admin, err := spotternacos.NewHTTPCompatClient(addr, nil)
+	if err != nil {
+		return fmt.Errorf("create test-only Nacos admin compatibility client: %w", err)
+	}
+	defer func() { _ = admin.Close() }()
+	// Nacos 3 exposes service-shell creation only through its Admin surface,
+	// while the k8s cluster is materialized by the first persistent SDK
+	// registration. Establish both objects before the deployment-owned Admin
+	// update; otherwise Nacos 3 correctly answers "service not found" and the
+	// NONE policy is never written.
+	sdk, err := spotternacos.NewClientWithConfig(spotternacos.ClientConfig{
+		ServerURL: addr, TransportMode: spotternacos.TransportSDK,
+		NamespaceID: nacosNamespace, GroupName: nacosGroup, Timeout: 10 * time.Second,
+	}, nil)
+	if err != nil {
+		return fmt.Errorf("create test-only Nacos SDK bootstrap client: %w", err)
+	}
+	defer func() { _ = sdk.Close() }()
+	for idx, service := range services {
+		if err := retryObserveAdmin(func() error { return admin.CreateServiceV3AdminCompat(service) }); err != nil {
+			return fmt.Errorf("create persistent service shell %s through Nacos 3 admin compatibility: %w", service, err)
+		}
+		sentinel := spotternacos.InstanceParams{
+			ServiceName: service, IP: "127.0.0.1", Port: 1 + idx,
+			ClusterName: "k8s", GroupName: nacosGroup, NamespaceID: nacosNamespace,
+			Enabled: true, Ephemeral: false,
+			Metadata: map[string]string{"spotterOwner": "observe-health-bootstrap"},
+		}
+		if err := sdk.RegisterInstance(sentinel); err != nil {
+			return fmt.Errorf("bootstrap service %s/k8s through Nacos SDK: %w", service, err)
+		}
+		if err := retryObserveAdmin(func() error { return admin.UpdateClusterV3AdminCompat(service, "k8s") }); err != nil {
+			_ = sdk.DeregisterInstance(sentinel)
+			return fmt.Errorf("set healthChecker=NONE for %s/k8s: %w", service, err)
+		}
+		if err := sdk.DeregisterInstance(sentinel); err != nil {
+			return fmt.Errorf("remove health bootstrap sentinel for %s/k8s: %w", service, err)
+		}
+	}
+	return nil
+}
+
+// Nacos 3 can briefly close an HTTP admin connection while the naming gRPC
+// session has just finished its startup handshake. Retry only transport-level
+// EOF/reset failures; a structured 4xx remains fail-closed.
+func retryObserveAdmin(operation func() error) error {
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if err := operation(); err == nil {
+			return nil
+		} else {
+			lastErr = err
+			text := err.Error()
+			if !strings.Contains(text, "EOF") && !strings.Contains(text, "connection reset") && !strings.Contains(text, "broken pipe") {
+				return err
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return lastErr
+}
 
 // nacosHealthWait boot-waits a fresh standalone Nacos 3 instance. The gate is
 // the naming gRPC listener (container 9848, host port +1000), not a Nacos 2
@@ -148,6 +220,7 @@ func dockerRunNacos(hostPort int) error {
 	out, err := runCommand("docker", "run", "-d", "--name", observeNacosContainer,
 		"--platform", nacosPlatform,
 		"-e", "MODE=standalone", "-e", "NACOS_AUTH_ENABLE=false",
+		"-e", "NACOS_AUTH_ADMIN_ENABLE=false",
 		"-e", "NACOS_AUTH_IDENTITY_KEY=spotter-observe", "-e", "NACOS_AUTH_IDENTITY_VALUE=spotter-observe",
 		"-e", "NACOS_AUTH_TOKEN=c3BvdHRlci1vYnNlcnZlLW5hY29zMy10b2tlbi0yMDI2MDkxNA==",
 		"-e", "JVM_XMS=512m", "-e", "JVM_XMX=512m",
