@@ -90,6 +90,10 @@ func TestBlackboxNacos3AdminHealthBootstrapUsesExplicitCompatibilityPaths(t *tes
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests <- r
 		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodGet {
+			_, _ = io.WriteString(w, `{"code":0,"message":"success","data":{"healthCheckEnabled":false}}`)
+			return
+		}
 		_, _ = io.WriteString(w, `{"code":0,"message":"success","data":"ok"}`)
 	}))
 	defer server.Close()
@@ -98,28 +102,20 @@ func TestBlackboxNacos3AdminHealthBootstrapUsesExplicitCompatibilityPaths(t *tes
 		t.Fatal(err)
 	}
 	defer client.Close()
-	if err := client.CreateServiceV3AdminCompat("payments"); err != nil {
-		t.Fatalf("CreateServiceV3AdminCompat() error = %v", err)
+	if err := client.SetNamingHealthCheckEnabledV3AdminCompat(false); err != nil {
+		t.Fatalf("SetNamingHealthCheckEnabledV3AdminCompat() error = %v", err)
 	}
-	if err := client.UpdateClusterV3AdminCompat("payments", "k8s"); err != nil {
-		t.Fatalf("UpdateClusterV3AdminCompat() error = %v", err)
+	enabled, err := client.GetNamingHealthCheckEnabledV3AdminCompat()
+	if err != nil || enabled {
+		t.Fatalf("healthCheckEnabled readback = %v, error = %v, want false", enabled, err)
 	}
-	for _, want := range []struct {
-		method string
-		path   string
-	}{
-		{http.MethodPost, "/nacos/v3/admin/ns/service"},
-		{http.MethodPut, "/nacos/v3/admin/ns/cluster"},
-	} {
+	for _, wantMethod := range []string{http.MethodPut, http.MethodGet} {
 		request := <-requests
-		if request.Method != want.method || request.URL.Path != want.path {
-			t.Fatalf("admin request = %s %s, want %s %s", request.Method, request.URL.Path, want.method, want.path)
+		if request.Method != wantMethod || request.URL.Path != "/nacos/v3/admin/ns/ops/switches" {
+			t.Fatalf("admin request = %s %s, want %s /nacos/v3/admin/ns/ops/switches", request.Method, request.URL.Path, wantMethod)
 		}
-		if request.URL.Query().Get("serviceName") != "payments" || request.URL.Query().Get("groupName") != "DEFAULT_GROUP" || request.URL.Query().Get("namespaceId") != "public" {
-			t.Fatalf("admin query = %v, want service/group/public", request.URL.Query())
-		}
-		if want.method == http.MethodPut && request.URL.Query().Get("healthChecker") != `{"type":"none"}` {
-			t.Fatalf("healthChecker = %q, want NONE JSON", request.URL.Query().Get("healthChecker"))
+		if wantMethod == http.MethodPut && (request.URL.Query().Get("entry") != "healthCheckEnabled" || request.URL.Query().Get("value") != "false") {
+			t.Fatalf("admin query = %v, want healthCheckEnabled=false", request.URL.Query())
 		}
 	}
 }

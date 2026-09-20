@@ -55,14 +55,16 @@ const (
 
 // Paths of the v1 OpenAPI endpoints (and the console readiness probe).
 const (
-	pathInstance       = "/nacos/v1/ns/instance"
-	pathInstanceLis    = "/nacos/v1/ns/instance/list"
-	pathServiceList    = "/nacos/v1/ns/service/list"
-	pathReadiness      = "/nacos/v1/console/health/readiness"
-	pathCatalogList    = "/nacos/v1/ns/catalog/instances"
-	pathCluster        = "/nacos/v1/ns/cluster"
-	pathClusterV3Admin = "/nacos/v3/admin/ns/cluster"
-	pathServiceV3Admin = "/nacos/v3/admin/ns/service"
+	pathInstance         = "/nacos/v1/ns/instance"
+	pathInstanceLis      = "/nacos/v1/ns/instance/list"
+	pathServiceList      = "/nacos/v1/ns/service/list"
+	pathReadiness        = "/nacos/v1/console/health/readiness"
+	pathCatalogList      = "/nacos/v1/ns/catalog/instances"
+	pathCluster          = "/nacos/v1/ns/cluster"
+	pathClusterV3Admin   = "/nacos/v3/admin/ns/cluster"
+	pathServiceV3Admin   = "/nacos/v3/admin/ns/service"
+	pathInstanceV3Admin  = "/nacos/v3/admin/ns/instance"
+	pathNamingOpsV3Admin = "/nacos/v3/admin/ns/ops/switches"
 )
 
 // InstanceParams is the wire form of one instance for register and
@@ -750,9 +752,9 @@ func (c *Client) UpdateClusterV3AdminCompat(serviceName, clusterName string) err
 	values.Set("clusterName", clusterName)
 	values.Set("checkPort", "0")
 	values.Set("useInstancePort4Check", "false")
-	values.Set("healthChecker", `{"type":"none"}`)
+	values.Set("healthChecker", `{"type":"NONE"}`)
 	values.Set("groupName", effectiveGroup(c.config.GroupName))
-	values.Set("namespaceId", effectiveNamespace(c.config.NamespaceID))
+	setNacos3AdminNamespace(values, c.config.NamespaceID)
 	// The Nacos 3 Spring controller accepts the documented form fields from
 	// the query string as well. The query form is deliberate here: the Go
 	// transport's request-body variant is closed by Nacos 3 with EOF, while
@@ -772,9 +774,103 @@ func (c *Client) CreateServiceV3AdminCompat(serviceName string) error {
 	values := url.Values{}
 	values.Set("serviceName", serviceName)
 	values.Set("groupName", effectiveGroup(c.config.GroupName))
-	values.Set("namespaceId", effectiveNamespace(c.config.NamespaceID))
+	setNacos3AdminNamespace(values, c.config.NamespaceID)
 	values.Set("ephemeral", "false")
 	return c.doForm(http.MethodPost, pathServiceV3Admin, values)
+}
+
+// RegisterInstanceV3AdminCompat creates the persistent control-plane sentinel
+// that Nacos 3's Admin cluster metadata API can see. A persistent instance
+// registered through the naming gRPC runtime path is not necessarily exposed
+// through the Admin resource view, so the Observe health-policy bootstrap uses
+// this explicit Admin operation before Spotter starts its SDK data path.
+func (c *Client) RegisterInstanceV3AdminCompat(params InstanceParams) error {
+	if c == nil || c.http == nil {
+		return fmt.Errorf("%w: Nacos 3 admin compatibility transport is unavailable", ErrUnsupportedOperation)
+	}
+	if params.Ephemeral {
+		return fmt.Errorf("nacos: Admin health bootstrap requires a persistent sentinel")
+	}
+	values := url.Values{}
+	values.Set("serviceName", params.ServiceName)
+	values.Set("groupName", effectiveGroup(params.GroupName))
+	values.Set("clusterName", params.ClusterName)
+	values.Set("ip", params.IP)
+	values.Set("port", strconv.Itoa(params.Port))
+	values.Set("ephemeral", "false")
+	values.Set("healthy", strconv.FormatBool(params.Healthy == nil || *params.Healthy))
+	values.Set("enabled", strconv.FormatBool(params.Enabled))
+	if len(params.Metadata) > 0 {
+		encoded, err := json.Marshal(params.Metadata)
+		if err != nil {
+			return fmt.Errorf("nacos: encode Admin sentinel metadata: %w", err)
+		}
+		values.Set("metadata", string(encoded))
+	}
+	setNacos3AdminNamespace(values, params.NamespaceID)
+	return c.doForm(http.MethodPost, pathInstanceV3Admin, values)
+}
+
+// DeregisterInstanceV3AdminCompat removes the persistent control-plane
+// sentinel after the cluster health policy has been applied.
+func (c *Client) DeregisterInstanceV3AdminCompat(params InstanceParams) error {
+	if c == nil || c.http == nil {
+		return fmt.Errorf("%w: Nacos 3 admin compatibility transport is unavailable", ErrUnsupportedOperation)
+	}
+	values := url.Values{}
+	values.Set("serviceName", params.ServiceName)
+	values.Set("groupName", effectiveGroup(params.GroupName))
+	values.Set("clusterName", params.ClusterName)
+	values.Set("ip", params.IP)
+	values.Set("port", strconv.Itoa(params.Port))
+	values.Set("ephemeral", "false")
+	setNacos3AdminNamespace(values, params.NamespaceID)
+	return c.doForm(http.MethodDelete, pathInstanceV3Admin, values)
+}
+
+// SetNamingHealthCheckEnabledV3AdminCompat changes Nacos 3's naming-module
+// healthCheckEnabled switch. This is the actual server-wide guard required by
+// the Observe fixture: it disables TCP/HTTP probe scheduling for all runtime
+// persistent registrations before synthetic 10.0.x.x instances are written.
+// The method is intentionally an explicit Admin compatibility seam; ordinary
+// Spotter naming operations remain on the official Go SDK.
+func (c *Client) SetNamingHealthCheckEnabledV3AdminCompat(enabled bool) error {
+	if c == nil || c.http == nil {
+		return fmt.Errorf("%w: Nacos 3 admin compatibility transport is unavailable", ErrUnsupportedOperation)
+	}
+	values := url.Values{}
+	values.Set("entry", "healthCheckEnabled")
+	values.Set("value", strconv.FormatBool(enabled))
+	return c.doForm(http.MethodPut, pathNamingOpsV3Admin, values)
+}
+
+// GetNamingHealthCheckEnabledV3AdminCompat reads back the Nacos 3 naming
+// switch so a successful HTTP status cannot be mistaken for an effective
+// health-check policy.
+func (c *Client) GetNamingHealthCheckEnabledV3AdminCompat() (bool, error) {
+	if c == nil || c.http == nil {
+		return false, fmt.Errorf("%w: Nacos 3 admin compatibility transport is unavailable", ErrUnsupportedOperation)
+	}
+	var response struct {
+		Data struct {
+			HealthCheckEnabled bool `json:"healthCheckEnabled"`
+		} `json:"data"`
+	}
+	if err := c.doJSON(http.MethodGet, pathNamingOpsV3Admin, nil, &response); err != nil {
+		return false, err
+	}
+	return response.Data.HealthCheckEnabled, nil
+}
+
+// setNacos3AdminNamespace keeps the Nacos 3 Admin representation aligned with
+// the official Go SDK: the public namespace is encoded as an empty namespace
+// in gRPC requests, so the Admin compatibility request must omit namespaceId
+// and let Nacos apply its public-namespace default. Non-public namespaces are
+// explicit and remain unsupported by the current Observe fixture.
+func setNacos3AdminNamespace(values url.Values, namespace string) {
+	if namespace != "" && namespace != DefaultNamespaceID {
+		values.Set("namespaceId", namespace)
+	}
 }
 
 // ListInstances returns every instance of one service in the configured

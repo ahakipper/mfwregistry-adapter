@@ -98,16 +98,16 @@ func TestObserveConsistency(t *testing.T) {
 		t.Skipf("NOT VERIFIED: EnvError/InfraError throwaway Nacos health failed: %v; cleanup_status=pending", err)
 	}
 	harnessLog.event("throwaway nacos ready at %s", cfg.NacosAddr)
+	if err := provisionObserveHealthChecker(cfg.NacosAddr, appCodes); err != nil {
+		t.Skipf("NOT VERIFIED: EnvError/InfraError configure Nacos healthCheckEnabled=false: %v; cleanup_status=pending", err)
+	}
+	harnessLog.event("Nacos naming healthCheckEnabled=false provisioned for %d k8s service clusters", len(appCodes))
 	view := newNacosView(cfg.NacosAddr)
 	defer view.close()
 	if err := waitForNacosSDKReadiness(cfg.NacosAddr, 10*time.Minute); err != nil {
 		t.Skipf("NOT VERIFIED: EnvError/InfraError Nacos 3 SDK read/write readiness failed: %v; cleanup_status=pending", err)
 	}
 	harnessLog.event("Nacos 3 SDK read/write readiness passed at %s", cfg.NacosAddr)
-	if err := provisionObserveHealthChecker(cfg.NacosAddr, appCodes); err != nil {
-		t.Skipf("NOT VERIFIED: EnvError/InfraError configure Nacos healthChecker=NONE: %v; cleanup_status=pending", err)
-	}
-	harnessLog.event("Nacos healthChecker=NONE provisioned for %d k8s service clusters", len(appCodes))
 	metrics := newMetricsView(cfg.MetricsPort)
 
 	// The embedded etcd (the child's elector campaigns here — the demo's

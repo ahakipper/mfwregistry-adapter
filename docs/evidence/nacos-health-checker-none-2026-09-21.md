@@ -30,32 +30,30 @@ Nacos's current health documentation describes persistent instances as being mai
 
 ## Observe harness protection
 
-The Nacos 3 Observe harness now performs an explicit, test/deployment-control-plane preflight for every synthetic `obs-app-*` service:
+The Nacos 3 Observe harness now performs an explicit test/deployment-control-plane preflight before any synthetic instance is registered:
 
-1. Create the persistent service shell through the explicitly named Nacos 3 Admin compatibility adapter.
-2. Register a loopback sentinel through the official Nacos Go naming SDK so the `k8s` cluster exists.
-3. Set `healthChecker={"type":"none"}` through the Nacos 3 Admin compatibility adapter.
-4. Deregister the sentinel through the official SDK.
-5. Start Spotter and send all business register, deregister, query, and subscribe operations through the official SDK.
+1. Set Nacos 3 naming `healthCheckEnabled=false` through `/nacos/v3/admin/ns/ops/switches`.
+2. Read the same switch back and fail closed unless the value is actually `false`.
+3. Start Spotter and send all business register, deregister, query, and subscribe operations through the official SDK.
 
-The Admin compatibility calls are not the Spotter data path. They exist only because the pinned official Go naming SDK does not expose the Nacos Maintainer/Admin cluster-metadata operation. If that control-plane preflight cannot be completed, the harness fails closed instead of running with an unknown probe policy.
+The switch is the Nacos 3 server-wide health-check guard; a per-cluster Admin update returned success while leaving the gRPC runtime cluster unchanged, so it is not used as the acceptance guard. The Admin compatibility call is not the Spotter data path. If this control-plane preflight cannot be completed or read back as false, the harness fails closed instead of running with an unknown probe policy.
 
 The Nacos 3 container also sets `NACOS_AUTH_ADMIN_ENABLE=false` for this isolated local fixture. This is a test-only startup setting; production authentication and deployment policy remain outside the Spotter scope.
 
 ## Verification run
 
-Run: `20260921-0023` (Nacos 3.2.4 ARM64, KWOK, 20 Pods, 2 services, 2-minute window, SDK data path).
+Run: `20260921-0138` (Nacos 3.2.4 ARM64, KWOK, 20 Pods, 2 services, 2-minute window, SDK data path).
 
 Evidence:
 
-- `Nacos healthChecker=NONE provisioned for 2 k8s service clusters` was emitted before Spotter startup.
+- `Nacos naming healthCheckEnabled=false provisioned for 2 k8s service clusters` was emitted after a successful readback before Spotter startup.
 - 13/13 observation ticks were exactly consistent; 0 divergent and 0 observation-error ticks.
 - 2/2 K8s mutations were correlated to Nacos observations; missing=0.
-- K8s Watch -> Nacos latency: create P90/P95/P99 `0.568s`; delete P90/P95/P99 `0.584s`.
+- K8s Watch -> Nacos latency: create P90/P95/P99 `0.574s`; delete P90/P95/P99 `0.584s`.
 - Final post-quiescence three-plane snapshot was exact.
 - Nacos and KWOK teardown completed with no residual resources.
 
-The detailed report is [20260921-0023-summary.md](../../tests/observe/results/20260921-0023-summary.md); the machine-readable record is [20260921-0023-summary.json](../../tests/observe/results/20260921-0023-summary.json).
+The detailed report is [20260921-0138-summary.md](../../tests/observe/results/20260921-0138-summary.md); the machine-readable record is [20260921-0138-summary.json](../../tests/observe/results/20260921-0138-summary.json).
 
 ## Scope boundary
 

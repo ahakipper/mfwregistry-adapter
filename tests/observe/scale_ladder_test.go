@@ -179,11 +179,11 @@ func TestObserveScaleLadder(t *testing.T) {
 	if err := nacosHealthWait(cfg.NacosAddr, 10*time.Minute); err != nil {
 		t.Fatalf("Nacos health: %v", err)
 	}
+	if err := provisionObserveHealthChecker(cfg.NacosAddr, []string{appCode}); err != nil {
+		t.Fatalf("Nacos healthCheckEnabled=false: %v", err)
+	}
 	if err := waitForNacosSDKReadiness(cfg.NacosAddr, 10*time.Minute); err != nil {
 		t.Fatalf("Nacos SDK readiness: %v", err)
-	}
-	if err := provisionObserveHealthChecker(cfg.NacosAddr, []string{appCode}); err != nil {
-		t.Fatalf("Nacos healthChecker=NONE: %v", err)
 	}
 	view := newNacosView(cfg.NacosAddr)
 	t.Cleanup(view.close)

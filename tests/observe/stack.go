@@ -36,7 +36,8 @@ const nacosImageDigest = "sha256:2a6d445d567b04c81404a3569309b07bfaf077216dbc3a9
 const nacosPlatform = "linux/arm64"
 
 // provisionObserveHealthChecker disables Nacos server-side active probing for
-// the synthetic persistent instances used by this harness. This is an
+// the synthetic persistent instances used by this harness through Nacos 3's
+// naming-module healthCheckEnabled switch. This is an
 // explicit deployment-control-plane fixture operation: the pinned official Go
 // naming SDK does not expose the Nacos Maintainer/Admin cluster update API,
 // while the Spotter business data path remains SDK-only. Without this
@@ -48,39 +49,23 @@ func provisionObserveHealthChecker(addr string, services []string) error {
 		return fmt.Errorf("create test-only Nacos admin compatibility client: %w", err)
 	}
 	defer func() { _ = admin.Close() }()
-	// Nacos 3 exposes service-shell creation only through its Admin surface,
-	// while the k8s cluster is materialized by the first persistent SDK
-	// registration. Establish both objects before the deployment-owned Admin
-	// update; otherwise Nacos 3 correctly answers "service not found" and the
-	// NONE policy is never written.
-	sdk, err := spotternacos.NewClientWithConfig(spotternacos.ClientConfig{
-		ServerURL: addr, TransportMode: spotternacos.TransportSDK,
-		NamespaceID: nacosNamespace, GroupName: nacosGroup, Timeout: 10 * time.Second,
-	}, nil)
-	if err != nil {
-		return fmt.Errorf("create test-only Nacos SDK bootstrap client: %w", err)
+	_ = services
+	if err := retryObserveAdmin(func() error {
+		return admin.SetNamingHealthCheckEnabledV3AdminCompat(false)
+	}); err != nil {
+		return fmt.Errorf("disable Nacos naming health checks: %w", err)
 	}
-	defer func() { _ = sdk.Close() }()
-	for idx, service := range services {
-		if err := retryObserveAdmin(func() error { return admin.CreateServiceV3AdminCompat(service) }); err != nil {
-			return fmt.Errorf("create persistent service shell %s through Nacos 3 admin compatibility: %w", service, err)
-		}
-		sentinel := spotternacos.InstanceParams{
-			ServiceName: service, IP: "127.0.0.1", Port: 1 + idx,
-			ClusterName: "k8s", GroupName: nacosGroup, NamespaceID: nacosNamespace,
-			Enabled: true, Ephemeral: false,
-			Metadata: map[string]string{"spotterOwner": "observe-health-bootstrap"},
-		}
-		if err := sdk.RegisterInstance(sentinel); err != nil {
-			return fmt.Errorf("bootstrap service %s/k8s through Nacos SDK: %w", service, err)
-		}
-		if err := retryObserveAdmin(func() error { return admin.UpdateClusterV3AdminCompat(service, "k8s") }); err != nil {
-			_ = sdk.DeregisterInstance(sentinel)
-			return fmt.Errorf("set healthChecker=NONE for %s/k8s: %w", service, err)
-		}
-		if err := sdk.DeregisterInstance(sentinel); err != nil {
-			return fmt.Errorf("remove health bootstrap sentinel for %s/k8s: %w", service, err)
-		}
+	var enabled bool
+	err = retryObserveAdmin(func() error {
+		var readErr error
+		enabled, readErr = admin.GetNamingHealthCheckEnabledV3AdminCompat()
+		return readErr
+	})
+	if err != nil {
+		return fmt.Errorf("read back Nacos naming healthCheckEnabled: %w", err)
+	}
+	if enabled {
+		return fmt.Errorf("Nacos naming healthCheckEnabled readback remained true")
 	}
 	return nil
 }
@@ -90,7 +75,7 @@ func provisionObserveHealthChecker(addr string, services []string) error {
 // EOF/reset failures; a structured 4xx remains fail-closed.
 func retryObserveAdmin(operation func() error) error {
 	var lastErr error
-	for attempt := 0; attempt < 5; attempt++ {
+	for attempt := 0; attempt < 30; attempt++ {
 		if err := operation(); err == nil {
 			return nil
 		} else {
@@ -100,7 +85,7 @@ func retryObserveAdmin(operation func() error) error {
 				return err
 			}
 		}
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 	}
 	return lastErr
 }
