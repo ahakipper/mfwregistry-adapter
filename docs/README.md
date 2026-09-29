@@ -5,11 +5,13 @@ Documentation set for **spotter**, the discovery-center adapter
 Kubernetes clusters and Consul/ECS and publishes standardized instance data to
 the current Nacos Sink.
 
-> **Current release scope (2026-09-20):** Nacos 3 is the active Sink and data
+> **Current release scope (2026-09-30):** Nacos 3 is the active Sink and data
 > plane. Atlas and AppCenter are explicitly excluded from this release. Atlas
 > references below are historical/compatibility provenance only; AppCenter
 > transport and configuration are deleted, while generic notices remain
-> fail-closed. The current implementation baseline is `bb59885`.
+> fail-closed. The current audit baseline is `a638bb5`; the latest full-scale
+> runtime evidence is retained separately and is not silently re-labelled as a
+> post-audit run.
 
 > **Batch acceptance boundary:** a successful official SDK persistent RPC is a
 > successful write attempt. Spotter does not synchronously read the same
@@ -25,6 +27,7 @@ the current Nacos Sink.
 | [data-model.md](data-model.md) | The `Instance` model pushed to the discovery center: field-by-field mapping per provider, status/state enums, `PortInfo`, the compatibility label scheme and `Reversion` semantics. |
 | [operations.md](operations.md) | Operational runbook: build and run instructions, flags reference, environment presets, metrics/alerting reference, failure scenarios and deployment notes. |
 | [system-readiness-consistency-audit-2026-09-12.md](system-readiness-consistency-audit-2026-09-12.md) | Current-state readiness audit: unfinished-item verification, Nacos HTTP/SDK/gRPC assessment, mandatory SDK migration defect, K8s event-path risks, Reconcile/Sink closure and prioritized optimization plan. |
+| [service-discovery-chain-audit-2026-09-30.md](service-discovery-chain-audit-2026-09-30.md) | Current end-to-end K8s Watch → cache → worker → Nacos SDK batch/reconcile audit, closed boundaries, remaining P1/P2 risks, and the ordered optimization backlog. |
 | [system-readiness-consistency-remediation-plan-2026-09-12.md](system-readiness-consistency-remediation-plan-2026-09-12.md) | v6 remediation plan: mandatory official Nacos SDK/facade adoption, ordered P0/P1/P2 work packages, complete SDK test matrix, E2E gates, migration/rollback rules and release blockers. |
 | [atlas-wire-compatibility.md](atlas-wire-compatibility.md) | **Excluded-scope record:** historical Atlas JSON-mirror limitations and the guarded `atlas_real` test; no current Atlas implementation gate. |
 | [evidence/nacos-arm64-scratch-2026-09-13.md](evidence/nacos-arm64-scratch-2026-09-13.md) | Real ARM64 local Nacos SDK lifecycle evidence with immutable image, port mappings, cleanup status, and explicit production evidence limits. |

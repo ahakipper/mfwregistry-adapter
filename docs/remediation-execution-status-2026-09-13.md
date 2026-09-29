@@ -4,6 +4,23 @@ This document is the current execution ledger for the remediation plan. It
 supersedes stale HEAD labels in historical audit sections; historical findings
 remain unchanged and are not promoted to current PASS evidence.
 
+## Current audit addendum — 2026-09-30
+
+The end-to-end chain audit is recorded in
+[service-discovery-chain-audit-2026-09-30.md](service-discovery-chain-audit-2026-09-30.md).
+The current code baseline is `a638bb5`, which adds fail-safe unknown-status
+prune handling, complete multi-container readiness checks, and provider
+constructor/context guards. Static and race gates pass.
+
+This addendum supersedes the broad phrase “no current release blockers” below:
+the tested K8s/Nacos data plane is code-qualified, but the audit keeps four
+P1 follow-ups explicit before a stronger production claim: source-cluster
+identity collision policy, adversarial canonical-metadata size handling,
+deployment-owned Nacos health-switch proof, and item-level semantics for a
+permanent failure inside a full application batch. These are not Atlas,
+AppCenter, Nacos deployment HA/TLS/auth/namespace/leaderless, or Consul-scale
+tasks; those remain excluded by decision.
+
 ## Authoritative current addendum — 2026-09-20
 
 - Current branch: `refactor/all`; implementation/evidence baseline `bb59885`.
