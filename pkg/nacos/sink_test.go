@@ -630,6 +630,29 @@ func TestBlackboxSinkPushAllPrunesStaleRemoteInstances(t *testing.T) {
 	}
 }
 
+// TestBlackboxSinkPushAllIgnoresUnknownStatusForPrune: an unknown source
+// state is not an authoritative desired-state snapshot. It must not create an
+// empty desired set for the application and delete a live Spotter-owned Nacos
+// registration while the provider is still resolving the source state.
+func TestBlackboxSinkPushAllIgnoresUnknownStatusForPrune(t *testing.T) {
+	sink, server := newSinkAt(t)
+	server.SetInstances([]nacosmock.Host{{
+		IP: "10.0.0.1", Port: 8080, ClusterName: "k8s", Enabled: true,
+		Metadata: map[string]string{"spotterOwner": "spotter", "instanceId": "pod-a"},
+	}}, "DEFAULT_GROUP", "pay-user", "k8s")
+
+	unknown := domainInstance("pod-a", "pay-user", "10.0.0.1", 8080, "k8s", instance.InstanceStatusUnknown)
+	if err := sink.PushAll(7, []*instance.Instance{unknown}); err != nil {
+		t.Fatalf("PushAll(unknown status) error = %v, want nil", err)
+	}
+	if got := server.Instances("pay-user", "k8s"); len(got) != 1 || got[0].IP != "10.0.0.1" {
+		t.Fatalf("unknown full snapshot changed Nacos state = %v, want the owned registration preserved", got)
+	}
+	if deregisterRequest(server, "10.0.0.1", 8080) != nil {
+		t.Fatalf("unknown full snapshot issued a destructive DELETE; requests = %v", server.Requests())
+	}
+}
+
 func TestBlackboxSinkPushAllPrunesSameClusterOnly(t *testing.T) {
 	sink, server := newSinkAt(t)
 

@@ -128,7 +128,7 @@ func (c *consul) SetNacosReconcileSource(enabled bool) {
 // NewConsulProviderWithDeps constructs a provider from explicit runtime
 // collaborators.
 func NewConsulProviderWithDeps(ctx context.Context, worker worker.Worker, pushInterval int, addrs []string, logger ports.Logger, notifier ports.Notifier) (provider providers.Provider, err error) {
-	if ctx == nil || len(addrs) == 0 || worker == nil {
+	if ctx == nil || len(addrs) == 0 || worker == nil || pushInterval < 0 {
 		err = errors.New("params invalid")
 		return nil, err
 	}
@@ -164,7 +164,10 @@ func NewConsulProviderWithDeps(ctx context.Context, worker worker.Worker, pushIn
 		notifier: notifier,
 	}
 	// Create pool for sending instance events to the discovery center
-	p, _ := ants.NewPool(providers.PoolBenchSize, withExpiryDuration(time.Second*providers.PoolExpireTime), ants.WithNonblocking(true))
+	p, poolErr := ants.NewPool(providers.PoolBenchSize, withExpiryDuration(time.Second*providers.PoolExpireTime), ants.WithNonblocking(true))
+	if poolErr != nil {
+		return nil, errors.WithMessage(poolErr, "create worker pool")
+	}
 	consulProvider.pool = p
 	// Init instance fiter
 	consulProvider.filters = providers.InitInstanceFilters()
@@ -513,6 +516,10 @@ func (c *consul) ProcessIntervalFullPush() {
 	var interval time.Duration = providers.FullPushInterval
 	if c.interval != 0 {
 		interval = time.Duration(c.interval) * time.Second
+	}
+	if interval <= 0 {
+		c.logger.Errorf("consul: refusing invalid full-push interval %s", interval)
+		return
 	}
 	ticker := time.NewTicker(interval)
 	for {

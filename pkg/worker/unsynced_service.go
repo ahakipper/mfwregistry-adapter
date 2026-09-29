@@ -249,6 +249,9 @@ type UnsyncedService struct {
 var _ ports.RetryOperationQueue = (*UnsyncedService)(nil)
 
 func NewUnsyncedService(ctx context.Context, pusher ports.InstanceSink, logger ports.Logger, metrics ports.MetricsRecorder) *UnsyncedService {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if logger == nil {
 		logger = ports.NopLogger{}
 	}

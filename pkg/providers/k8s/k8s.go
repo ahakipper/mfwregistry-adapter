@@ -71,6 +71,9 @@ func (nopNotifier) Notify(string, string) {}
 
 func (k *k8s) ensureDeps() {
 	k.depsOnce.Do(func() {
+		if k.ctx == nil {
+			k.ctx = context.Background()
+		}
 		if k.done == nil {
 			k.done = make(chan struct{})
 		}
@@ -91,6 +94,15 @@ const queueDepthReportInterval = 5 * time.Second
 // NewK8SProviderWithDeps constructs the provider from explicit runtime
 // collaborators.
 func NewK8SProviderWithDeps(ctx context.Context, worker worker.Worker, pushInterval int, configPath []string, logger ports.Logger, notifier ports.Notifier, pushAppCodes []string) (provider providers.Provider, err error) {
+	if worker == nil {
+		return nil, fmt.Errorf("k8s: worker is required")
+	}
+	if pushInterval < 0 {
+		return nil, fmt.Errorf("k8s: push interval must be non-negative, got %d", pushInterval)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if logger == nil {
 		logger = ports.NopLogger{}
 	}
@@ -130,7 +142,11 @@ func NewK8SProviderWithDeps(ctx context.Context, worker worker.Worker, pushInter
 		pushAppCodes:   append([]string(nil), pushAppCodes...),
 		depsConfigured: true,
 	}
-	p, _ := ants.NewPool(providers.PoolBenchSize, withExpiryDuration(time.Second*providers.PoolExpireTime), ants.WithNonblocking(true))
+	p, poolErr := ants.NewPool(providers.PoolBenchSize, withExpiryDuration(time.Second*providers.PoolExpireTime), ants.WithNonblocking(true))
+	if poolErr != nil {
+		kr.Stop()
+		return nil, fmt.Errorf("k8s: create worker pool: %w", poolErr)
+	}
 	k.pool = p
 	k.filters = providers.InitInstanceFilters()
 
@@ -1013,7 +1029,11 @@ func (k *k8s) GetAll() (result []*sv.Instance) {
 			obj = &source.QueueObject
 			item = source.Object
 		}
-		pod := item.(*v1.Pod)
+		pod, valid := item.(*v1.Pod)
+		if !valid || pod == nil {
+			k.logger.Warnf("k8s: ignoring non-Pod informer item of type %T", item)
+			continue
+		}
 		instance := formatInstanceWithDeps(obj, pod, k.pushAppCodes, k.logger)
 		if instance == nil {
 			continue
@@ -1043,6 +1063,10 @@ func (k *k8s) ProcessIntervalFullPush() {
 	interval := providers.FullPushInterval
 	if k.interval != 0 {
 		interval = time.Duration(k.interval) * time.Second
+	}
+	if interval <= 0 {
+		k.logger.Errorf("k8s: refusing invalid full-push interval %s", interval)
+		return
 	}
 	ticker := time.NewTicker(interval)
 	for {

@@ -318,7 +318,7 @@ func formatEnvType(pod *v1.Pod, envType string) string {
 // containers ready", which would mark the instance online/enabled before any
 // container started.
 func containersReady(pod *v1.Pod) bool {
-	if len(pod.Status.ContainerStatuses) == 0 {
+	if pod == nil || len(pod.Spec.Containers) == 0 || len(pod.Status.ContainerStatuses) != len(pod.Spec.Containers) {
 		return false
 	}
 	for _, c := range pod.Status.ContainerStatuses {
@@ -401,7 +401,7 @@ func formatState(pod *v1.Pod) (state string) {
 			// containers but none are reported yet (the kubelet has not caught
 			// up with the just-started pod): not ready, no crash/error signal,
 			// so probing.
-			already := len(pod.Status.ContainerStatuses) > 0
+			already := containersReady(pod)
 			crashed := false
 			errored := false
 			for _, cs := range pod.Status.ContainerStatuses {

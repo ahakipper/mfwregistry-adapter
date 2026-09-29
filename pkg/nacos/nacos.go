@@ -425,6 +425,14 @@ func (s *Sink) pruneScoped(instances []*instance.Instance, scopes []string) erro
 		if ins == nil {
 			continue
 		}
+		// Unknown is not an authoritative source state. Treating it as an
+		// application entry with an empty desired set would let a malformed or
+		// partially converted full snapshot prune every owned Nacos instance of
+		// that application. The incremental path already skips unknown; the
+		// full/prune path must apply the same fail-safe policy.
+		if _, ok := persistentBatchOperation(ins.Status); !ok {
+			continue
+		}
 		key := clusterKey{service: ins.AppCode, cluster: clusterOf(ins)}
 		if desired[key] == nil {
 			desired[key] = map[string]bool{}

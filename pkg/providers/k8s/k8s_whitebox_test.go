@@ -2311,6 +2311,28 @@ func TestFormatStatusRunningPhases(t *testing.T) {
 	}
 }
 
+// TestFormatStatusRequiresEveryDeclaredContainerStatus: a Running Pod with
+// multiple declared containers is not ready while kubelet has reported only a
+// subset of their statuses. Treating the one ready status as the whole Pod
+// would publish an incomplete workload as Online and enable its Nacos entry.
+func TestFormatStatusRequiresEveryDeclaredContainerStatus(t *testing.T) {
+	pod := newValidPod("msp", "pod-multi")
+	pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{Name: "sidecar"})
+	// The application container is ready, but the sidecar status has not
+	// arrived yet.
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{containerStatus("", "", true)}
+
+	if got := formatStatus(nil, pod); got != providers.InstanceStatusUnhealthy {
+		t.Fatalf("formatStatus(partial multi-container statuses) = %d, want unhealthy", got)
+	}
+	if got := formatContainerEnabled(pod); got {
+		t.Fatal("formatContainerEnabled(partial multi-container statuses) = true, want false")
+	}
+	if got := formatState(pod); got != providers.InstanceStateProbing {
+		t.Fatalf("formatState(partial multi-container statuses) = %q, want probing", got)
+	}
+}
+
 // TestFormatInstanceRunningEmptyStatusesFlowsThrough: the converted instance
 // (through formatInstance, the production entry) for a Running pod with no
 // container statuses carries unhealthy/probing/disabled — the

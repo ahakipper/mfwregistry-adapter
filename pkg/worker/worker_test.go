@@ -253,6 +253,13 @@ func TestNewResourceWorkerRejectsNilPusher(t *testing.T) {
 	}
 }
 
+func TestNewUnsyncedServiceDefaultsNilContext(t *testing.T) {
+	service := NewUnsyncedService(nil, &fakes.FakeInstanceSink{}, nil, nil)
+	if service == nil || service.ctx == nil {
+		t.Fatal("NewUnsyncedService(nil context) left a nil context")
+	}
+}
+
 func TestWorkerFailedEmptySyncEventDoesNotPanic(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

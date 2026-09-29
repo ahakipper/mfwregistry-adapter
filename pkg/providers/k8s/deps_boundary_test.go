@@ -29,6 +29,25 @@ func TestK8SProviderWithDepsDoesNotReadLegacyGlobals(t *testing.T) {
 	}
 }
 
+func TestK8SProviderWithDepsRejectsInvalidExecutionInputs(t *testing.T) {
+	logger := depsTestLogger{}
+	notifier := &depsTestNotifier{}
+	if provider, err := NewK8SProviderWithDeps(context.Background(), nil, 1, []string{"/missing"}, logger, notifier, nil); err == nil || provider != nil {
+		t.Fatalf("nil worker result=(%v,%v), want constructor error before robot setup", provider, err)
+	}
+	if provider, err := NewK8SProviderWithDeps(context.Background(), &fakeWorker{}, -1, []string{"/missing"}, logger, notifier, nil); err == nil || provider != nil {
+		t.Fatalf("negative interval result=(%v,%v), want constructor error before robot setup", provider, err)
+	}
+}
+
+func TestK8SEnsureDepsDefaultsNilContext(t *testing.T) {
+	k := &k8s{}
+	k.ensureDeps()
+	if k.ctx == nil || k.done == nil || k.logger == nil || k.notifier == nil {
+		t.Fatalf("ensureDeps() did not install safe defaults: ctx=%v done=%v logger=%v notifier=%v", k.ctx, k.done, k.logger, k.notifier)
+	}
+}
+
 func TestFormatInstanceWithDepsDoesNotReadLegacyGlobals(t *testing.T) {
 	pod := &v1.Pod{}
 	_ = formatInstanceWithDeps(nil, pod, []string{"explicit"}, depsTestLogger{})
