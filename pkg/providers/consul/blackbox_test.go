@@ -1075,12 +1075,78 @@ func TestConvertInstanceForSourceCarriesLogicalConsulIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("convertInstanceForSource() error = %v", err)
 	}
-	if got.SourceCluster != "consul-blue" || got.SourceKey != "consul-blue/srv-a" {
-		t.Fatalf("source identity = %q/%q, want consul-blue/consul-blue/srv-a", got.SourceCluster, got.SourceKey)
+	if got.SourceCluster != "consul-blue" || got.SourceKey != "consul-blue/node-srv-a/srv-a" {
+		t.Fatalf("source identity = %q/%q, want consul-blue/consul-blue/node-srv-a/srv-a", got.SourceCluster, got.SourceKey)
 	}
 	if got.Provider != providers.ProviderEcs {
 		t.Fatalf("Provider = %q, want legacy Consul provider %q", got.Provider, providers.ProviderEcs)
 	}
+}
+
+func TestConsulSourceKeySeparatesSameServiceIDAcrossNodes(t *testing.T) {
+	first := healthyEntry("shared", "10.0.0.10", 7)
+	second := healthyEntry("shared", "10.0.0.11", 7)
+	first.Node.ID = "node-a-id"
+	second.Node.ID = "node-b-id"
+	a, err := convertInstanceForSource(first, "consul-blue")
+	if err != nil {
+		t.Fatalf("first conversion error = %v", err)
+	}
+	b, err := convertInstanceForSource(second, "consul-blue")
+	if err != nil {
+		t.Fatalf("second conversion error = %v", err)
+	}
+	if a.SourceKey == b.SourceKey {
+		t.Fatalf("same Service.ID produced colliding source key %q", a.SourceKey)
+	}
+	cache := providers.NewCache(8)
+	cache.ReplaceOrInsert(a)
+	cache.ReplaceOrInsert(b)
+	if got := len(cache.List()); got != 2 {
+		t.Fatalf("cache entries = %d, want two node-scoped instances", got)
+	}
+}
+
+func TestConsulSyncPreservesHigherCachedReversionOnStaleRead(t *testing.T) {
+	entry := healthyEntry("srv-stale", "10.0.0.20", 41)
+	provider := newStaticConsulProvider(t, &fakeWorker{}, map[string][]*api.ServiceEntry{"pay-user": {entry}})
+	higher, err := convertInstanceForSource(entry, provider.sourceCluster)
+	if err != nil {
+		t.Fatalf("convert higher fixture: %v", err)
+	}
+	higher.Reversion = 42
+	provider.cache.ReplaceOrInsert(higher)
+	if err := provider.syncInstance(); err != nil {
+		t.Fatalf("syncInstance() error = %v", err)
+	}
+	got := provider.cache.Get(providers.IdentityKey(higher))
+	if got == nil || got.Reversion != 42 {
+		t.Fatalf("cache after stale read = %#v, want retained Reversion 42", got)
+	}
+}
+
+func TestConsulRecoveryEmitsTrustedFullSnapshotForSameRevision(t *testing.T) {
+	w := &fakeWorker{}
+	entry := healthyEntry("srv-recover", "10.0.0.21", 55)
+	provider := newStaticConsulProvider(t, w, map[string][]*api.ServiceEntry{"pay-user": {}})
+	provider.emptyRetryInterval = 0
+	if err := provider.syncInstance(); err == nil {
+		t.Fatal("initial healthy-empty sync error = nil, want confirmation error")
+	}
+	provider.monitor.(*staticMonitor).entries["pay-user"] = []*api.ServiceEntry{entry}
+	if err := provider.syncInstance(); err != nil {
+		t.Fatalf("recovery sync error = %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		for _, event := range w.syncAllEvents() {
+			if len(event.Data) == 1 && event.Data[0].InstanceId == "srv-recover" {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("recovery did not emit trusted full snapshot; events = %#v", w.syncAllEvents())
 }
 
 func TestConsulSourceClusterIDSeparatesConfiguredLogicalSources(t *testing.T) {

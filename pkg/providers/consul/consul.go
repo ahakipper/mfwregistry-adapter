@@ -368,8 +368,9 @@ func (c *consul) scheduleEmptyRetryLocked() {
 // added, updated and deleted.
 func (c *consul) syncInstance() (err error) {
 	c.Lock()
-	defer c.Unlock()
+	recovered := false
 	if c.stopped {
+		c.Unlock()
 		return errors.New("consul provider stopped")
 	}
 	oldCache := c.cache
@@ -385,12 +386,14 @@ func (c *consul) syncInstance() (err error) {
 		}
 		err = errors.New("get consul endpoints snapshot failed")
 		c.logger.Warnf("%s", err.Error())
+		c.Unlock()
 		return err
 	}
 	if len(currentInss) == 0 {
 		if c.snapshotState != consulSnapshotHealthyEmpty {
 			err = errors.New("get empty consul endpoints without healthy empty snapshot")
 			c.logger.Warnf("%s", err.Error())
+			c.Unlock()
 			return err
 		}
 		// A watch callback may be the first independent empty observation.
@@ -402,6 +405,7 @@ func (c *consul) syncInstance() (err error) {
 		c.logger.Warnf("%s", err.Error())
 		if c.emptyConfirmations < 3 {
 			c.scheduleEmptyRetryLocked()
+			c.Unlock()
 			return err
 		}
 		// Three independent healthy-empty reads now authorize the empty
@@ -414,12 +418,14 @@ func (c *consul) syncInstance() (err error) {
 			c.emptyRetryTimer = nil
 		}
 	} else {
+		recovered = c.emptyConfirmations > 0
 		c.emptyConfirmations = 0
 		c.emptyConfirmationPending = false
 		if c.emptyRetryTimer != nil {
 			c.emptyRetryTimer.Stop()
 			c.emptyRetryTimer = nil
 		}
+		currentInss = c.mergeMonotonicInstances(oldCache, currentInss)
 	}
 	for _, ins := range currentInss {
 		newCache.ReplaceOrInsert(ins)
@@ -432,8 +438,36 @@ func (c *consul) syncInstance() (err error) {
 	// Update cache
 	c.cache = newCache
 	c.generation++
-
+	c.Unlock()
+	if recovered {
+		// An incremental recovery with the same revision can be rejected by
+		// the sink's delete tombstone. Emit a trusted complete snapshot after
+		// releasing the provider lock so the sink can validate and heal it.
+		c.emitSyncAll()
+	}
 	return err
+}
+
+// mergeMonotonicInstances prevents a temporarily stale Consul read from
+// downgrading the provider cache. Omitted identities still remain omitted so
+// deletion semantics are preserved; only an identity present in both views
+// keeps its newer cached projection.
+func (c *consul) mergeMonotonicInstances(old providers.CacheIterface, current []*sv.Instance) []*sv.Instance {
+	if old == nil || len(current) == 0 {
+		return current
+	}
+	merged := make([]*sv.Instance, 0, len(current))
+	for _, ins := range current {
+		if ins == nil {
+			continue
+		}
+		if previous := old.Get(providers.IdentityKey(ins)); previous != nil && ins.Reversion < previous.Reversion {
+			merged = append(merged, previous)
+			continue
+		}
+		merged = append(merged, ins)
+	}
+	return merged
 }
 
 func (c *consul) toInstance(endpoints []*api.ServiceEntry) (inss []*sv.Instance) {
@@ -774,7 +808,11 @@ func (c *consul) snapshotForFullPushMode(advanceEmptyConfirmation bool) ([]*v2.I
 	defer c.Unlock()
 	all := c.cache.List()
 	if c.monitor != nil {
+		cached := c.cache
 		all = c.GetAll()
+		if all != nil {
+			all = c.mergeMonotonicInstances(cached, all)
+		}
 	}
 	if c.sourceErr != nil {
 		return nil, c.generation, false, false
@@ -818,6 +856,7 @@ func (c *consul) CompareAndFlush() {
 			return
 		}
 	} else {
+		all = c.mergeMonotonicInstances(c.cache, all)
 		c.emptyConfirmations = 0
 		c.emptyConfirmationPending = false
 	}

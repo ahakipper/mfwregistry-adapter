@@ -45,6 +45,18 @@ refill interval; rollback baseline retries bypass this delivery limiter so the
 reset remains immediate. Focused and race tests cover zero, rollback,
 unchanged timeout/error, burst refill, cancellation, and rapid changes.
 
+Stage 4 closes the provider identity and revision-ordering hazards found by
+the independent chain confirmation. The Consul cache and full-push snapshot
+now preserve a higher cached `Reversion` when a later read is stale. SourceKey
+contains the logical source, stable node identity, and service ID, while a
+conservative source/provider/application/IP fallback keeps old explicit
+SourceKey records matchable during migration. Recovery after a confirmed empty
+state emits a trusted complete snapshot after releasing the provider lock, so
+an equal-revision sink tombstone can be healed immediately. The remaining
+evidence gap is end-to-end DefaultWorker/Fanout/orderedSink recovery coverage
+and a deliberate transient-omission test; legitimate source omission remains
+the deletion signal after a complete, non-partial read.
+
 ## Executive assessment
 
 The refactor branch already contains a real Consul provider and a DDD-style

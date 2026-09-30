@@ -59,3 +59,16 @@ func TestLookupIdentityPrefersExplicitSourceKeyOverWireID(t *testing.T) {
 		t.Fatalf("explicit source lookup = %#v, want source-matched instance", got)
 	}
 }
+
+func TestLookupIdentitySupportsConservativeSourceKeyMigration(t *testing.T) {
+	target := &sv.Instance{Provider: "ecs", SourceCluster: "consul-blue", InstanceId: "srv-a", AppCode: "payments", Ip: "10.0.0.1", SourceKey: "consul-blue/node-a/srv-a"}
+	legacy := &sv.Instance{Provider: "ecs", SourceCluster: "consul-blue", InstanceId: "srv-a", AppCode: "payments", Ip: "10.0.0.1", SourceKey: "consul-blue/srv-a"}
+	if got := LookupIdentity(map[string]*sv.Instance{}, []*sv.Instance{legacy}, target); got != legacy {
+		t.Fatalf("source-key migration lookup = %#v, want legacy endpoint", got)
+	}
+	unrelated := *legacy
+	unrelated.Ip = "10.0.0.2"
+	if got := LookupIdentity(map[string]*sv.Instance{}, []*sv.Instance{&unrelated}, target); got != nil {
+		t.Fatalf("unrelated explicit source identity matched = %#v, want nil", got)
+	}
+}

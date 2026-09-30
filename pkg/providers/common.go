@@ -133,6 +133,15 @@ func LookupIdentity(index map[string]*sv.Instance, items []*sv.Instance, target 
 		match = item
 	}
 	if match != nil && !legacyIdentity(target) && !legacyIdentity(match) {
+		// A source-key format migration may leave a remote record with the
+		// previous explicit key. Permit a conservative endpoint match when the
+		// logical source, provider, application, and IP all agree; never fall
+		// back on InstanceId alone for two explicit but unrelated identities.
+		if target.SourceCluster != "" && target.SourceCluster == match.SourceCluster &&
+			target.Provider == match.Provider && target.AppCode == match.AppCode &&
+			target.Ip == match.Ip {
+			return match
+		}
 		return nil
 	}
 	return match

@@ -7,6 +7,7 @@ import (
 	"github.com/pkg/errors"
 	sv "spotter/pkg/beehive/service/v2"
 	"spotter/pkg/providers"
+	"strings"
 )
 
 const (
@@ -124,13 +125,37 @@ func convertInstanceForSource(endpoint *api.ServiceEntry, sourceCluster string) 
 		Status:      status,
 	}
 	if sourceCluster != "" {
-		instanceKey := endpoint.Service.ID
-		if instanceKey == "" {
-			instanceKey = instanceId
-		}
-		ins.SourceKey = sourceCluster + "/" + instanceKey
+		ins.SourceKey = consulSourceKey(sourceCluster, endpoint, instanceId)
 	}
 	return ins, nil
+}
+
+// consulSourceKey combines the logical source, stable node identity, and
+// Consul service identity. Consul service IDs are only unique per node, so
+// Service.ID alone can collide when two nodes register the same ID.
+func consulSourceKey(sourceCluster string, endpoint *api.ServiceEntry, instanceID string) string {
+	if endpoint == nil || endpoint.Service == nil {
+		return ""
+	}
+	serviceID := endpoint.Service.ID
+	if serviceID == "" {
+		serviceID = instanceID
+	}
+	nodeID := ""
+	if endpoint.Node != nil {
+		nodeID = endpoint.Node.ID
+		if nodeID == "" {
+			nodeID = endpoint.Node.Node
+		}
+		if nodeID == "" {
+			nodeID = endpoint.Node.Address
+		}
+	}
+	parts := []string{serviceID}
+	if nodeID != "" {
+		parts = append([]string{nodeID}, parts...)
+	}
+	return sourceCluster + "/" + strings.Join(parts, "/")
 }
 
 func convertLabels(endpoint *api.ServiceEntry) map[string]string {
