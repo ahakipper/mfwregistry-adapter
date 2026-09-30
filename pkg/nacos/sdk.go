@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/nacos-group/nacos-sdk-go/v3/common/constant"
+	nacoslogger "github.com/nacos-group/nacos-sdk-go/v3/common/logger"
 	"github.com/nacos-group/nacos-sdk-go/v3/model"
 	"github.com/nacos-group/nacos-sdk-go/v3/vo"
 )
@@ -309,6 +310,7 @@ func newSDKNamingFacade(cfg ClientConfig) (*sdkNamingFacade, error) {
 	}
 	clientCfg := &constant.ClientConfig{
 		TimeoutMs:            timeoutMs,
+		LogLevel:             "warn",
 		NamespaceId:          ns,
 		Username:             cfg.Username,
 		Password:             cfg.Password,
@@ -317,6 +319,16 @@ func newSDKNamingFacade(cfg ClientConfig) (*sdkNamingFacade, error) {
 		DisableUseSnapShot:   true,
 		CacheDir:             cacheDir,
 		TLSCfg:               constant.TLSConfig{Appointed: true, Enable: servers[0].Scheme == "https", TrustAll: cfg.InsecureSkipVerify, CaFile: cfg.CAFile, ServerNameOverride: cfg.ServerName},
+	}
+	// The v3 facade owns the low-level persistent RPC client directly, so the
+	// high-level naming constructor does not always initialize the SDK logger.
+	// Initialize it from the same explicit level before creating any RPC client;
+	// otherwise the SDK's default debug logger can flood Observe child logs.
+	if err := nacoslogger.InitLogger(nacoslogger.BuildLoggerConfig(*clientCfg)); err != nil {
+		if owned {
+			_ = os.RemoveAll(cacheDir)
+		}
+		return nil, fmt.Errorf("nacos sdk: initialize logger: %w", err)
 	}
 	grpcVendor, err := newNacos3GRPCVendor(*clientCfg, servers)
 	if err != nil {
