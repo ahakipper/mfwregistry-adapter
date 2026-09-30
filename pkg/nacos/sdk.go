@@ -444,6 +444,9 @@ func (f *sdkNamingFacade) catalog(service, cluster string) ([]Host, error) {
 }
 
 func (f *sdkNamingFacade) services(page, size int, namespace string) ([]string, int, error) {
+	if f.vendor != nil {
+		return f.vendor.ListServices(page, size, namespace, f.group)
+	}
 	result, err := f.client.GetAllServicesInfo(vo.GetAllServiceInfoParam{NameSpace: namespace, GroupName: f.group, PageNo: uint32(page), PageSize: uint32(size)})
 	if err != nil {
 		return nil, 0, classifySDKError(err)

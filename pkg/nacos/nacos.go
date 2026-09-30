@@ -496,6 +496,16 @@ func (s *Sink) PushAll(triggerTime int64, instances []*instance.Instance) error 
 	// events intentionally remain on Push/pushInstances so a burst cannot
 	// reorder individual event semantics.
 	if err := s.pushPersistentBatches(instances); err != nil {
+		var batchErr *batchApplyError
+		if errors.As(err, &batchErr) {
+			// A failed application scope is not a complete desired snapshot and
+			// must not be pruned. Other scopes that fully acknowledged their
+			// writes remain eligible for cleanup.
+			pruneErr := s.pruneWithSkippedScopes(instances, batchErr.failedScopes())
+			if pruneErr != nil {
+				return errors.Join(err, pruneErr)
+			}
+		}
 		return err
 	}
 	return s.prune(instances)
@@ -520,10 +530,18 @@ func (s *Sink) PushAll(triggerTime int64, instances []*instance.Instance) error 
 // the exact state spotter's own unhealthy pushes write — so the prune sees
 // and reconciles disabled drift.
 func (s *Sink) prune(instances []*instance.Instance) error {
-	return s.pruneScoped(instances, nil)
+	return s.pruneWithSkippedScopes(instances, nil)
 }
 
 func (s *Sink) pruneScoped(instances []*instance.Instance, scopes []string) error {
+	return s.pruneScopedWithSkippedScopes(instances, scopes, nil)
+}
+
+func (s *Sink) pruneWithSkippedScopes(instances []*instance.Instance, skipped map[persistentBatchScope]bool) error {
+	return s.pruneScopedWithSkippedScopes(instances, nil, skipped)
+}
+
+func (s *Sink) pruneScopedWithSkippedScopes(instances []*instance.Instance, scopes []string, skipped map[persistentBatchScope]bool) error {
 	type clusterKey struct {
 		service string
 		cluster string
@@ -549,6 +567,9 @@ func (s *Sink) pruneScoped(instances []*instance.Instance, scopes []string) erro
 			continue
 		}
 		key := clusterKey{service: ins.AppCode, cluster: clusterOf(ins)}
+		if skipped[persistentBatchScope{namespace: effectiveNamespace(s.client.config.NamespaceID), group: s.groupName, service: key.service, cluster: key.cluster}] {
+			continue
+		}
 		if desired[key] == nil {
 			desired[key] = map[string]bool{}
 		}
@@ -611,6 +632,9 @@ func (s *Sink) pruneScoped(instances []*instance.Instance, scopes []string) erro
 				continue
 			}
 			key := clusterKey{service: item.AppCode, cluster: clusterOf(item)}
+			if skipped[persistentBatchScope{namespace: effectiveNamespace(s.client.config.NamespaceID), group: s.groupName, service: key.service, cluster: key.cluster}] {
+				continue
+			}
 			if _, exists := union[key]; !exists {
 				union[key] = map[string]bool{}
 			}
@@ -641,6 +665,9 @@ func (s *Sink) pruneScoped(instances []*instance.Instance, scopes []string) erro
 	}
 	var tasks []pruneTask
 	for key, wanted := range union {
+		if skipped[persistentBatchScope{namespace: effectiveNamespace(s.client.config.NamespaceID), group: s.groupName, service: key.service, cluster: key.cluster}] {
+			continue
+		}
 		hosts, err := readClient.ListCatalogInstances(key.service, key.cluster)
 		if err != nil {
 			// A real Nacos answers HTTP 500 with a "cluster ... is not

@@ -291,8 +291,18 @@ func (v *persistentVisibilityVendor) SelectAll(service, cluster, group string) (
 	}
 	return hosts, nil
 }
-func (*persistentVisibilityVendor) ListServices(int, int, string, string) ([]string, int, error) {
-	return nil, 0, nil
+func (v *persistentVisibilityVendor) ListServices(int, int, string, string) ([]string, int, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	seen := map[string]bool{}
+	for _, item := range v.items {
+		seen[item.ServiceName] = true
+	}
+	services := make([]string, 0, len(seen))
+	for service := range seen {
+		services = append(services, service)
+	}
+	return services, len(services), nil
 }
 func (*persistentVisibilityVendor) Subscribe(string, string, []string, func([]Host, error)) error {
 	return nil
@@ -732,6 +742,49 @@ func TestPushAllSkipsPruneWhenPersistentBatchFails(t *testing.T) {
 	if listCalls != 0 {
 		t.Fatalf("prune list calls = %d, want zero after batch failure", listCalls)
 	}
+}
+
+func TestPushAllPrunesSuccessfulScopesButPreservesFailedScope(t *testing.T) {
+	goodGhost := InstanceParams{ServiceName: "good-app", IP: "10.30.0.9", Port: 8080, ClusterName: "k8s", GroupName: DefaultGroup, Enabled: true, Metadata: map[string]string{"spotterOwner": metadataOwner}}
+	badGhost := InstanceParams{ServiceName: "bad-app", IP: "10.30.0.8", Port: 8080, ClusterName: "k8s", GroupName: DefaultGroup, Enabled: true, Metadata: map[string]string{"spotterOwner": metadataOwner}}
+	vendor := &persistentVisibilityVendor{
+		items:           map[string]InstanceParams{instanceID(goodGhost): goodGhost, instanceID(badGhost): badGhost},
+		registerErrByIP: map[string]error{"10.30.0.2": errors.New("bad application is permanently rejected")},
+	}
+	sink := &Sink{
+		client: &Client{sdk: &sdkNamingFacade{vendor: vendor, group: DefaultGroup}, config: ClientConfig{}},
+		logger: nopBatchLogger{}, groupName: DefaultGroup,
+		remembered: map[clusterKeyOf]bool{},
+	}
+	good := &instance.Instance{InstanceId: "good-new", AppCode: "good-app", Provider: "k8s", Ip: "10.30.0.1", Ports: []*instance.PortInfo{{Port: 8080}}, Status: instance.InstanceStatusOnline, Enabled: true}
+	bad := &instance.Instance{InstanceId: "bad-new", AppCode: "bad-app", Provider: "k8s", Ip: "10.30.0.2", Ports: []*instance.PortInfo{{Port: 8080}}, Status: instance.InstanceStatusOnline, Enabled: true}
+	if err := sink.PushAll(1, []*instance.Instance{good, bad}); err == nil {
+		t.Fatal("PushAll() error = nil, want partial batch failure")
+	}
+	vendor.mu.Lock()
+	deregistered := append([]InstanceParams(nil), vendor.deregistered...)
+	remaining := append([]InstanceParams(nil), valuesOf(vendor.items)...)
+	vendor.mu.Unlock()
+	if len(deregistered) != 1 || deregistered[0].ServiceName != "good-app" {
+		t.Fatalf("deregistered=%+v, want only successful good-app scope pruned", deregistered)
+	}
+	badPresent := false
+	for _, item := range remaining {
+		if item.ServiceName == "bad-app" && item.IP == badGhost.IP {
+			badPresent = true
+		}
+	}
+	if !badPresent {
+		t.Fatalf("failed bad-app scope disappeared from Nacos: remaining=%+v", remaining)
+	}
+}
+
+func valuesOf(items map[string]InstanceParams) []InstanceParams {
+	result := make([]InstanceParams, 0, len(items))
+	for _, item := range items {
+		result = append(result, item)
+	}
+	return result
 }
 
 func TestPushPersistentBatchesMapsDeregisterParameters(t *testing.T) {

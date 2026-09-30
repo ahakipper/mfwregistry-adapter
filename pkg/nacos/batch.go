@@ -1,6 +1,9 @@
 package nacos
 
 import (
+	"errors"
+	"fmt"
+	"strings"
 	"sync"
 
 	"spotter/internal/domain/instance"
@@ -127,6 +130,56 @@ type persistentBatchScope struct {
 	cluster   string
 }
 
+type batchApplyFailure struct {
+	scope persistentBatchScope
+	err   error
+}
+
+// batchApplyError preserves failure scope while retaining errors.Is/errors.As
+// compatibility with the first underlying SDK error. PushAll can therefore
+// prune successful application scopes without treating a failed scope as a
+// complete desired snapshot.
+type batchApplyError struct {
+	failures []batchApplyFailure
+}
+
+func (e *batchApplyError) Error() string {
+	parts := make([]string, 0, len(e.failures))
+	for _, failure := range e.failures {
+		parts = append(parts, fmt.Sprintf("%s/%s/%s/%s: %v", failure.scope.namespace, failure.scope.group, failure.scope.service, failure.scope.cluster, failure.err))
+	}
+	return "nacos: persistent batch application failed: " + strings.Join(parts, "; ")
+}
+
+func (e *batchApplyError) Unwrap() []error {
+	errs := make([]error, 0, len(e.failures))
+	for _, failure := range e.failures {
+		errs = append(errs, failure.err)
+	}
+	return errs
+}
+
+func (e *batchApplyError) Permanent() bool {
+	if len(e.failures) == 0 {
+		return false
+	}
+	for _, failure := range e.failures {
+		var permanent interface{ Permanent() bool }
+		if !errors.As(failure.err, &permanent) || !permanent.Permanent() {
+			return false
+		}
+	}
+	return true
+}
+
+func (e *batchApplyError) failedScopes() map[persistentBatchScope]bool {
+	result := make(map[persistentBatchScope]bool, len(e.failures))
+	for _, failure := range e.failures {
+		result[failure.scope] = true
+	}
+	return result
+}
+
 // pushPersistentBatches executes a full snapshot as application-scoped,
 // bounded batches. Batches sharing namespace/group/service/cluster are
 // serialized in first-seen order; independent scopes overlap. A single global
@@ -165,6 +218,13 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 	}
 
 	errs := make([]error, len(instances))
+	scopesByIndex := make([]persistentBatchScope, len(instances))
+	for _, batch := range batches {
+		scope := persistentBatchScope{namespace: batch.Key.Namespace, group: batch.Key.Group, service: batch.Key.Service, cluster: batch.Key.Cluster}
+		for _, index := range batch.Indexes {
+			scopesByIndex[index] = scope
+		}
+	}
 	var scopes sync.WaitGroup
 	for _, scope := range scopeOrder {
 		batchesForScope := scopeBatches[scope]
@@ -263,11 +323,15 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 		}()
 	}
 	scopes.Wait()
-	for _, err := range errs {
+	var failures []batchApplyFailure
+	for index, err := range errs {
 		if err != nil {
-			s.batchFailedCount.Add(1)
-			return err
+			failures = append(failures, batchApplyFailure{scope: scopesByIndex[index], err: err})
 		}
+	}
+	if len(failures) > 0 {
+		s.batchFailedCount.Add(1)
+		return &batchApplyError{failures: failures}
 	}
 	return nil
 }
