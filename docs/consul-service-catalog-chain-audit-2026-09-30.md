@@ -4,9 +4,12 @@ Date: 2026-09-30
 Branch: `refactor/all`  
 Audited HEAD: `e1ae3b5`
 
-## Current execution status — 2026-09-30
+## Current execution status — 2026-10-01
 
-Stage 1 correctness work is implemented in the working tree and has passed
+The following implementation checkpoints are pushed on `refactor/all`:
+`a324be5`, `38e1108`, `0d60bd4`, `11289dc`, and `7977780`.
+
+Stage 1 correctness work is implemented and pushed, and has passed
 the independent code review and the Consul package race suite. The provider
 now distinguishes source errors, partial catalog reads, healthy empty
 catalogs, and healthy non-empty catalogs. Source errors and partial reads
@@ -19,7 +22,7 @@ or shutdown, and guarded by the provider lock plus lifecycle state.
 The remaining P1/P2 work is still open: Consul-to-Nacos watch latency
 percentiles, real Consul plus Nacos 3 qualification, multiple logical Consul
 sources, source metrics, and Consul connection security settings. Blocking
-query edge handling is closed in the working tree; this status is still an
+query edge handling is closed and pushed; this status is still an
 implementation checkpoint, not a production-readiness claim.
 
 Stage 2 has now closed the first two items in that list. Equal `Reversion`
@@ -32,7 +35,7 @@ still protected by the Stage 1 healthy-empty confirmation gate. A legacy Atlas
 snapshot that omits canonical source fields may receive one corrective push
 to republish the complete projection.
 
-The blocking-query edge cases are now hardened in the working tree. The watch
+The blocking-query edge cases are now hardened and pushed. The watch
 tracks the last valid positive `X-Consul-Index` separately from the next
 `WaitIndex`: a missing or zero query meta never emits a change and floors the
 next request at index `1`; a rollback emits exactly one change token, resets
@@ -124,35 +127,26 @@ must remain stop-ship conditions during implementation:
 
 #### P1-1 — Complete source disappearance is delayed and semantically split
 
-`GetAll` returns an empty slice after a successful Consul catalog read. The
-incremental `syncInstance` path treats an empty result as an error and keeps the
-old cache. `CompareAndFlush` also skips the comparison when `len(all) == 0`.
-Only the periodic full path advances an empty confirmation counter, and Nacos
-cleanup requires repeated confirmed empty snapshots. With the default
-`--push-interval=21600` (six hours), a complete Consul source disappearance can
-remain in Nacos for a long time.
-
-Required decision: distinguish `source read failed`, `source healthy and empty`,
-and `source partially readable`; define the confirmation interval and the exact
-delete SLA for a healthy empty catalog.
+Stage 1 resolved this finding. The provider now distinguishes source errors,
+partial reads, healthy empty, and healthy non-empty snapshots. A complete
+healthy empty state requires three confirmations and starts a bounded 5-second
+retry path, while source errors and partial reads retain the previous cache and
+cannot authorize Nacos prune.
 
 #### P1-2 — Health transitions are filtered before conversion
 
-The monitor requests `Health.Service` with `passingOnly=true`. A critical or
-warning endpoint therefore disappears from the returned set instead of being
-converted to an unhealthy `Instance`. When a service still has healthy
-siblings, this becomes a delete event; when the whole service becomes
-unhealthy, the empty-source guard retains old state. The intended behavior must
-be explicit: remove unhealthy instances, publish `Status=Unhealthy`, or use a
-two-view policy.
+Stage 2 resolved this finding by making the existing healthy-only contract
+explicit. `Health.Service(..., passingOnly=true)` removes unhealthy entries
+from the desired catalog and routes them through deletion; a fully unhealthy
+catalog remains protected by the healthy-empty confirmation gate. This is an
+intentional contract, not an unreviewed filter.
 
 #### P1-3 — Equal-Reversion field changes are not fully proved
 
-`extractDiff` primarily treats `new.Reversion > old.Reversion` as an update.
-The conversion uses `Service.ModifyIndex` as `Reversion`, but the test matrix
-does not prove that every Consul health, address, port, tag, or metadata change
-advances that index for the returned endpoint. A same-index state change can be
-silently missed before it reaches Nacos.
+Stage 2 resolved this finding. `Reversion` remains the monotonic ordering
+field, while equal revisions compare the complete canonical Spotter payload,
+covering labels, ports, images, hostname, source identity, and status before a
+Nacos update is emitted.
 
 #### P1-4 — No Consul Watch → Nacos Watch latency measurement
 
