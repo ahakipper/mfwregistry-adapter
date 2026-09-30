@@ -7,7 +7,7 @@ Audited HEAD: `e1ae3b5`
 ## Current execution status — 2026-10-01
 
 The following implementation checkpoints are pushed on `refactor/all`:
-`a324be5`, `38e1108`, `0d60bd4`, `11289dc`, and `7977780`.
+`a324be5`, `38e1108`, `0d60bd4`, `11289dc`, `7977780`, and `66f825f`.
 
 Stage 1 correctness work is implemented and pushed, and has passed
 the independent code review and the Consul package race suite. The provider
@@ -180,11 +180,10 @@ for the final release claim.
 
 #### P1-6 — Multiple logical Consul sources are not a single-process model yet
 
-`ConsulAddress` is an HA address list for one client/source. The new
-`--consul-cluster-id` identifies that source, but the provider composition still
-constructs one Consul provider for one address list. Multiple independent
-Consul catalogs in one Spotter process require a source descriptor list and one
-provider/cache/watch scope per descriptor.
+Resolved by Stage 6. `ConsulSource` descriptors now create one provider,
+client factory, monitor, cache, watch, event scope, and retry scope per logical
+catalog. Legacy fields adapt to one descriptor; the command-line remains
+single-source while embedded configuration supports multiple descriptors.
 
 ### P2 findings
 
