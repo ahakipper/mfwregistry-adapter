@@ -472,6 +472,9 @@ func formatIDC(pod *v1.Pod) string {
 func formatCluster(pod *v1.Pod) string {
 	// get cluster from labels first
 	if len(pod.Labels) > 0 {
+		if cluster, ok := pod.Labels["cluster-name"]; ok && cluster != "" {
+			return cluster
+		}
 		if idc, ok := pod.Labels["cluster"]; ok {
 			return idc
 		}

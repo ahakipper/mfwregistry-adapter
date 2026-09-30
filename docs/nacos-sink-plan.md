@@ -9,6 +9,13 @@
 > deployment operations and Atlas real wire compatibility are out of scope;
 > the old v2/cluster-admin text below is historical provenance.
 
+> **Source-identity correction (2026-09-30):** The historical Provider-to-
+> `clusterName` mapping is retained only for instances without source metadata.
+> Source-aware K8s and Consul instances now use a stable source-qualified wire
+> cluster name. `Provider` remains the type field; `Cluster` remains workload
+> metadata. Consul addresses are HA endpoints for one logical source, and
+> `--consul-cluster-id` identifies a separate logical Consul source.
+
 > **Current scope correction (2026-09-19):** Atlas is explicitly excluded from
 > the current Spotter deliverable. Existing Atlas Sink/mock wiring is retained
 > only as compatibility scaffolding; Atlas protocol, deployment, and removal

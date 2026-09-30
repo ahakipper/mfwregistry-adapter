@@ -33,6 +33,10 @@ type Endpoints struct {
 	KubeConfigPath []string
 	// ConsulAddress lists the consul server addresses.
 	ConsulAddress []string
+	// ConsulClusterID identifies the logical Consul source. ConsulAddress is
+	// an HA endpoint list for this one source, not a list of independent
+	// clusters.
+	ConsulClusterID string
 	// LockCampaignKey is the etcd prefix key used for the leader campaign.
 	LockCampaignKey string
 	// Providers lists the providers enabled by the preset (may be empty).
@@ -218,6 +222,9 @@ type Flags struct {
 	// unreachable from a developer machine, so the local stack MUST be
 	// able to point the ecs provider at 127.0.0.1:18500.
 	ConsulAddrFlag []string
+	// ConsulClusterID identifies the logical Consul source for source-qualified
+	// Nacos cluster names.
+	ConsulClusterID string
 	// EtcdEndpointsFlag is the --etcd-endpoints flag: a comma list that
 	// overrides the preset's EtcdEndpoints (plan §8.4). Empty keeps the
 	// preset endpoints, TLS and all; non-empty resolves CertFile/KeyFile/
@@ -454,6 +461,9 @@ func Load(env string, flags Flags) (Config, error) {
 	}
 	if consulAddrs := cleanList(flags.ConsulAddrFlag); len(consulAddrs) > 0 {
 		cfg.ConsulAddress = consulAddrs
+	}
+	if strings.TrimSpace(flags.ConsulClusterID) != "" {
+		cfg.ConsulClusterID = strings.TrimSpace(flags.ConsulClusterID)
 	}
 	if etcdEndpoints := cleanList(flags.EtcdEndpointsFlag); len(etcdEndpoints) > 0 {
 		cfg.EtcdEndpoints = etcdEndpoints

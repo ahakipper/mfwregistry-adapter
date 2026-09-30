@@ -810,7 +810,7 @@ func initializeProvidersWithDeps(ctx context.Context, w worker.Worker, cfg infra
 				err = errors.New("the consul server address is not configured")
 				return nil, err
 			}
-			consulProvider, err = consul2.NewConsulProviderWithDeps(ctx, w, cfg.PushAllInterval, cfg.ConsulAddress, logger, notifier)
+			consulProvider, err = consul2.NewConsulProviderWithSourceID(ctx, w, cfg.PushAllInterval, cfg.ConsulAddress, cfg.ConsulClusterID, logger, notifier)
 			if err != nil {
 				err = errors.WithMessagef(err, "new consul provider")
 				return nil, err

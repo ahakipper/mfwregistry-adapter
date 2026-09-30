@@ -599,7 +599,7 @@ func TestBlackboxSinkPushAllUpsertsAllPushed(t *testing.T) {
 	}
 }
 
-func TestBlackboxSinkRejectsSameWireIdentityFromDistinctSourceClusters(t *testing.T) {
+func TestBlackboxSinkAllowsSameAddressAcrossSourceQualifiedClusters(t *testing.T) {
 	sink, server := newSinkAt(t)
 	first := domainInstance("pod-a-hash", "pay-user", "10.0.0.1", 8080, "k8s", 1)
 	first.SourceCluster = "cluster-a"
@@ -608,17 +608,35 @@ func TestBlackboxSinkRejectsSameWireIdentityFromDistinctSourceClusters(t *testin
 	second.SourceCluster = "cluster-b"
 	second.SourceKey = "cluster-b/uid-b"
 
-	err := sink.PushAll(7, []*instance.Instance{first, second})
-	var collision *nacos.WireIdentityCollisionError
-	if !errors.As(err, &collision) {
-		t.Fatalf("PushAll() error = %v, want WireIdentityCollisionError", err)
+	if err := sink.PushAll(7, []*instance.Instance{first, second}); err != nil {
+		t.Fatalf("PushAll() error = %v, want source-qualified same-address registrations to coexist", err)
 	}
-	if len(server.Requests()) != 0 {
-		t.Fatalf("collision snapshot issued Nacos requests = %v, want fail-closed before mutation", server.Requests())
+	clusters := map[string]bool{}
+	for _, request := range server.Requests() {
+		if request.Method == http.MethodPost && request.Path == "/nacos/v1/ns/instance" {
+			clusters[request.Query.Get("clusterName")] = true
+		}
+	}
+	if len(clusters) != 2 {
+		t.Fatalf("source-qualified register clusters = %v, want two distinct clusters", clusters)
 	}
 }
 
-func TestBlackboxSinkRejectsIncrementalWireIdentityReuse(t *testing.T) {
+func TestBlackboxSinkLegacyProviderMappingStillFailsClosedOnCollision(t *testing.T) {
+	sink, server := newSinkAt(t)
+	first := domainInstance("pod-a-hash", "pay-user", "10.0.0.1", 8080, "k8s", 1)
+	first.SourceKey = "legacy-source-a/uid-a"
+	second := domainInstance("pod-b-hash", "pay-user", "10.0.0.1", 8080, "k8s", 1)
+	second.SourceKey = "legacy-source-b/uid-b"
+	if err := sink.PushAll(7, []*instance.Instance{first, second}); err == nil {
+		t.Fatal("legacy provider mapping collision error = nil, want fail-closed")
+	}
+	if len(server.Requests()) != 0 {
+		t.Fatalf("legacy collision issued Nacos requests = %v, want none", server.Requests())
+	}
+}
+
+func TestBlackboxSinkAllowsIncrementalSameAddressAcrossSourceQualifiedClusters(t *testing.T) {
 	sink, server := newSinkAt(t)
 	first := domainInstance("pod-a-hash", "pay-user", "10.0.0.1", 8080, "k8s", 1)
 	first.SourceCluster = "cluster-a"
@@ -629,17 +647,21 @@ func TestBlackboxSinkRejectsIncrementalWireIdentityReuse(t *testing.T) {
 	if err := sink.Push(1, []*instance.Instance{first}); err != nil {
 		t.Fatalf("first Push() error = %v", err)
 	}
-	err := sink.Push(2, []*instance.Instance{second})
-	var collision *nacos.WireIdentityCollisionError
-	if !errors.As(err, &collision) {
-		t.Fatalf("second Push() error = %v, want WireIdentityCollisionError", err)
+	if err := sink.Push(2, []*instance.Instance{second}); err != nil {
+		t.Fatalf("second Push() error = %v, want source-qualified registration", err)
 	}
-	if got := len(server.Instances("pay-user", "k8s")); got != 1 {
-		t.Fatalf("Nacos instances after rejected collision = %d, want 1", got)
+	clusters := map[string]bool{}
+	for _, request := range server.Requests() {
+		if request.Method == http.MethodPost && request.Path == "/nacos/v1/ns/instance" {
+			clusters[request.Query.Get("clusterName")] = true
+		}
+	}
+	if len(clusters) != 2 {
+		t.Fatalf("incremental source-qualified register clusters = %v, want two distinct clusters", clusters)
 	}
 }
 
-func TestBlackboxSinkRejectsWireIdentityReuseAfterProcessRestart(t *testing.T) {
+func TestBlackboxSinkAllowsWireIdentityReuseAfterProcessRestartWithSourceQualifiedClusters(t *testing.T) {
 	first, server := newSinkAt(t)
 	firstInstance := domainInstance("pod-a-hash", "pay-user", "10.0.0.1", 8080, "k8s", 1)
 	firstInstance.SourceCluster = "cluster-a"
@@ -669,10 +691,8 @@ func TestBlackboxSinkRejectsWireIdentityReuseAfterProcessRestart(t *testing.T) {
 		}
 	}
 
-	err = second.Push(2, []*instance.Instance{secondInstance})
-	var collision *nacos.WireIdentityCollisionError
-	if !errors.As(err, &collision) {
-		t.Fatalf("restarted Push() error = %v, want WireIdentityCollisionError", err)
+	if err = second.Push(2, []*instance.Instance{secondInstance}); err != nil {
+		t.Fatalf("restarted Push() error = %v, want source-qualified registration", err)
 	}
 	registersAfter := 0
 	for _, request := range server.Requests() {
@@ -680,8 +700,8 @@ func TestBlackboxSinkRejectsWireIdentityReuseAfterProcessRestart(t *testing.T) {
 			registersAfter++
 		}
 	}
-	if registersAfter != registersBefore {
-		t.Fatalf("restarted collision issued register request: before=%d after=%d requests=%v", registersBefore, registersAfter, server.Requests())
+	if registersAfter != registersBefore+1 {
+		t.Fatalf("restarted source-qualified register count: before=%d after=%d requests=%v", registersBefore, registersAfter, server.Requests())
 	}
 }
 

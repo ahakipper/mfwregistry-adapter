@@ -116,6 +116,7 @@ process is normally started from the directory that contains `config/`.
 | `--nacos-addr` | empty | Nacos server address; required unless explicit Atlas compatibility is selected. |
 | `--nacos-health-policy` | `deployment-owned` | `deployment-owned`, `admin-managed`, or `verified`; verified requires an injected health-policy verifier. |
 | `--reconcile-source` | empty | Resolves to `nacos` in the default Nacos-only graph. |
+| `--consul-cluster-id` | derived from address set | Logical Consul source ID used for source-qualified Nacos cluster names; Consul addresses remain HA endpoints for that one source. |
 
 ### Nacos sink transport
 

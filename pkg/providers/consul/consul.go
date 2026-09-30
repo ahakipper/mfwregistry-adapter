@@ -2,10 +2,13 @@ package consul
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"github.com/hashicorp/consul/api"
 	"github.com/panjf2000/ants/v2"
 	"github.com/pkg/errors"
+	"sort"
 	domaininstance "spotter/internal/domain/instance"
 	"spotter/internal/ports"
 	"spotter/pkg/beehive/service/v2"
@@ -14,6 +17,7 @@ import (
 	"spotter/pkg/providers"
 	"spotter/pkg/worker"
 	"spotter/tools/unit"
+	"strings"
 	"sync"
 	"time"
 )
@@ -21,6 +25,7 @@ import (
 // K8S provider implement
 type consul struct {
 	providerName       string
+	sourceCluster      string
 	clientFactory      ConsulClientFactory        // consul api factory
 	monitor            Monitor                    // monitor
 	ctx                context.Context            // context
@@ -128,6 +133,13 @@ func (c *consul) SetNacosReconcileSource(enabled bool) {
 // NewConsulProviderWithDeps constructs a provider from explicit runtime
 // collaborators.
 func NewConsulProviderWithDeps(ctx context.Context, worker worker.Worker, pushInterval int, addrs []string, logger ports.Logger, notifier ports.Notifier) (provider providers.Provider, err error) {
+	return NewConsulProviderWithSourceID(ctx, worker, pushInterval, addrs, "", logger, notifier)
+}
+
+// NewConsulProviderWithSourceID constructs one logical Consul source. The
+// address list remains an HA endpoint list; sourceID distinguishes a separate
+// Consul catalog from another logical source using the same Spotter process.
+func NewConsulProviderWithSourceID(ctx context.Context, worker worker.Worker, pushInterval int, addrs []string, sourceID string, logger ports.Logger, notifier ports.Notifier) (provider providers.Provider, err error) {
 	if ctx == nil || len(addrs) == 0 || worker == nil || pushInterval < 0 {
 		err = errors.New("params invalid")
 		return nil, err
@@ -148,6 +160,7 @@ func NewConsulProviderWithDeps(ctx context.Context, worker worker.Worker, pushIn
 	}
 	consulProvider := &consul{
 		providerName:  "consul",
+		sourceCluster: consulSourceClusterID(addrs, sourceID),
 		ctx:           ctx,
 		monitor:       monitor,
 		worker:        worker,
@@ -182,6 +195,21 @@ func NewConsulProviderWithDeps(ctx context.Context, worker worker.Worker, pushIn
 
 	//return &controller, err
 	return consulProvider, nil
+}
+
+func consulSourceClusterID(addrs []string, configured string) string {
+	if strings.TrimSpace(configured) != "" {
+		return strings.TrimSpace(configured)
+	}
+	canonical := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		if trimmed := strings.TrimSpace(addr); trimmed != "" {
+			canonical = append(canonical, trimmed)
+		}
+	}
+	sort.Strings(canonical)
+	digest := sha256.Sum256([]byte(strings.Join(canonical, ",")))
+	return "consul-" + hex.EncodeToString(digest[:6])
 }
 
 // overflowQueue lazily creates the bounded identity-keyed requeue used when
@@ -312,7 +340,7 @@ func (c *consul) toInstance(endpoints []*api.ServiceEntry) (inss []*sv.Instance)
 	inss = []*sv.Instance{}
 	if len(endpoints) > 0 {
 		for _, ep := range endpoints {
-			if ins, err := convertInstance(ep); err != nil {
+			if ins, err := convertInstanceForSource(ep, c.sourceCluster); err != nil {
 				c.logger.Errorf("%s", err.Error())
 				continue
 			} else {

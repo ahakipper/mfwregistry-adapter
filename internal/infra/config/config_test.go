@@ -643,6 +643,16 @@ func TestLoadNacosOptionsAreCarriedAndServerListIsTrimmed(t *testing.T) {
 	}
 }
 
+func TestLoadCarriesConsulLogicalClusterID(t *testing.T) {
+	got, err := Load("test", Flags{Providers: []string{"consul"}, ConsulClusterID: " logical-prod "})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.ConsulClusterID != "logical-prod" {
+		t.Fatalf("ConsulClusterID = %q, want logical-prod", got.ConsulClusterID)
+	}
+}
+
 // TestLoadLocalSourceFlagsKeepPresetWhenEmpty: the additive local-source
 // flags of plan §8.4 — --kubeconfig, --consul-addr, --etcd-endpoints — must
 // be pure overrides: empty (the default) keeps every preset endpoint

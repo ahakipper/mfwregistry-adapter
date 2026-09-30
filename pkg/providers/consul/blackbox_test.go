@@ -946,6 +946,31 @@ func healthyEntry(id, ip string, modifyIndex uint64) *api.ServiceEntry {
 	}
 }
 
+func TestConvertInstanceForSourceCarriesLogicalConsulIdentity(t *testing.T) {
+	entry := healthyEntry("srv-a", "10.0.0.10", 7)
+	got, err := convertInstanceForSource(entry, "consul-blue")
+	if err != nil {
+		t.Fatalf("convertInstanceForSource() error = %v", err)
+	}
+	if got.SourceCluster != "consul-blue" || got.SourceKey != "consul-blue/srv-a" {
+		t.Fatalf("source identity = %q/%q, want consul-blue/consul-blue/srv-a", got.SourceCluster, got.SourceKey)
+	}
+	if got.Provider != providers.ProviderEcs {
+		t.Fatalf("Provider = %q, want legacy Consul provider %q", got.Provider, providers.ProviderEcs)
+	}
+}
+
+func TestConsulSourceClusterIDSeparatesConfiguredLogicalSources(t *testing.T) {
+	a := consulSourceClusterID([]string{"consul-a:8500", "consul-a-standby:8500"}, "")
+	b := consulSourceClusterID([]string{"consul-b:8500"}, "")
+	if a == b || a == "" || b == "" {
+		t.Fatalf("derived source IDs = %q/%q, want distinct non-empty IDs", a, b)
+	}
+	if got := consulSourceClusterID([]string{"ignored:8500"}, "logical-prod"); got != "logical-prod" {
+		t.Fatalf("configured source ID = %q, want logical-prod", got)
+	}
+}
+
 // unhealthyEntry builds a FAILING-check entry: the converter yields
 // Status=2, State=probing, Enabled=TRUE (the convertion.go hardcode — the
 // exact asymmetry the wire projection neutralizes).

@@ -18,6 +18,8 @@ center.
 
 ```go
 type Instance struct {
+	SourceKey    string
+	SourceCluster string
 	InstanceId  string
 	Level       string
 	Ports       []*PortInfo
@@ -45,6 +47,12 @@ type Instance struct {
 }
 ```
 
+`Provider` is the source type (`k8s` or the legacy Consul value `ecs`).
+`Cluster` is the workload/business cluster from the Pod/service metadata.
+`SourceCluster` is the stable logical source-cluster identity and is the input
+to the source-qualified Nacos `clusterName` mapping; it is not interchangeable
+with the business `Cluster` label.
+
 ### Field-by-field mapping
 
 | Field | Type | K8s provider source (`formatInstance`) | Consul provider source (`convertInstance`) |
@@ -56,13 +64,13 @@ type Instance struct {
 | `EnvCode` | `string` | `envType + "#" + envGroup` | `envType + "#" + envGroup` |
 | `EnvType` | `string` | env `K8S_CLUSTER_TYPE` of any container, overridden by label `env-type`; lower-cased; `"online"` → `"product"` | `Service.Meta["envType"]` |
 | `EnvGroup` | `string` | label `env-group` (empty when absent) | `Service.Meta["envGroup"]` |
-| `Cluster` | `string` | label `cluster`, else env `K8S_CLUSTER_NAME` of the `application` container | set to `""` explicitly |
+| `Cluster` | `string` | label `cluster-name`, then label `cluster`, else env `K8S_CLUSTER_NAME` of the `application` container | set to `""` explicitly |
 | `Version` | `string` | label `version` | `Service.Meta["version"]`; empty meta aborts conversion |
 | `Enabled` | `bool` | phase `Running` AND every container ready+running AND no deletion timestamp | always `true` (only passing endpoints are converted); set to `false` when the provider marks an instance deleted |
 | `State` | `string` | pod phase + container status state machine (table below) | consul check state machine (table below) |
 | `HealthState` | `string` | not set (zero value) | set to `""` explicitly |
 | `AppCode` | `string` | label `app-code`, else label `cadvisor-app`, else `namespace + "-" + labels["name"]`; empty appcode drops the pod | `Service.Meta["appCode"]`; empty meta aborts conversion |
-| `Provider` | `string` | `"k8s"` | `"ecs"` |
+| `Provider` | `string` | `"k8s"` | `"ecs"` (legacy Consul provider value) |
 | `Label` | `map[string]string` | compatibility label scheme (below) | `Service.Meta` plus the compatibility label scheme (below) |
 | `Hostname` | `string` | `pod.Name` | `endpoint.Node.Node` |
 | `Cpu` | `float32` | sum of container CPU limits (`1000m` → `1`) | `0` |

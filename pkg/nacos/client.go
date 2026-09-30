@@ -993,6 +993,18 @@ func (c *Client) ListCatalogInstances(serviceName, clusterName string) ([]Host, 
 		maxServiceListPages, serviceName, clusterName)
 }
 
+// ListAllCatalogInstances returns the complete SDK naming view for one
+// service across every Nacos cluster. It is used by source-qualified
+// reconciliation because the caller selects by canonical Provider metadata,
+// not by the historical provider-shaped clusterName. The SDK SelectAll
+// contract retains disabled/unhealthy persistent hosts.
+func (c *Client) ListAllCatalogInstances(serviceName string) ([]Host, error) {
+	if c == nil || c.sdk == nil {
+		return nil, ErrUnsupportedOperation
+	}
+	return c.sdk.catalog(serviceName, "")
+}
+
 // ListServices returns every service name of the configured group/namespace,
 // paginating the service list until a short (or empty) page ends the iteration. pageSize
 // is the requested page size (the plan's default loop uses 100).

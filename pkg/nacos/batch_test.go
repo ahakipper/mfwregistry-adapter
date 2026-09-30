@@ -53,6 +53,21 @@ func TestSplitPersistentBatchesGroupsByApplicationScopeAndOperation(t *testing.T
 	}
 }
 
+func TestClusterOfUsesSourceQualifiedWireNameWhenSourceIdentityExists(t *testing.T) {
+	k8sA := clusterOf(&instance.Instance{Provider: "k8s", SourceCluster: "cluster-a"})
+	k8sB := clusterOf(&instance.Instance{Provider: "k8s", SourceCluster: "cluster-b"})
+	consulA := clusterOf(&instance.Instance{Provider: "ecs", SourceCluster: "consul-a"})
+	if k8sA == k8sB || k8sA == "k8s" || consulA == "ecs" {
+		t.Fatalf("source-qualified clusters = k8sA=%q k8sB=%q consulA=%q, want distinct qualified names", k8sA, k8sB, consulA)
+	}
+	if got := clusterOf(&instance.Instance{Provider: "k8s"}); got != "k8s" {
+		t.Fatalf("legacy cluster name = %q, want k8s fallback", got)
+	}
+	if got := clusterOf(&instance.Instance{Provider: "ecs"}); got != "ecs" {
+		t.Fatalf("legacy Consul cluster name = %q, want ecs fallback", got)
+	}
+}
+
 func TestSplitPersistentBatchesHardCapsEachApplicationAt100(t *testing.T) {
 	items := make([]*instance.Instance, 201)
 	for i := range items {
@@ -285,7 +300,7 @@ func (v *persistentVisibilityVendor) SelectAll(service, cluster, group string) (
 	}
 	hosts := make([]Host, 0, len(v.items))
 	for id, p := range v.items {
-		if p.ServiceName != service || p.ClusterName != cluster || v.hiddenIPs[p.IP] {
+		if p.ServiceName != service || (cluster != "" && p.ClusterName != cluster) || v.hiddenIPs[p.IP] {
 			continue
 		}
 		healthy := p.Enabled
@@ -295,6 +310,29 @@ func (v *persistentVisibilityVendor) SelectAll(service, cluster, group string) (
 		hosts = append(hosts, Host{InstanceID: id, IP: p.IP, Port: p.Port, ClusterName: p.ClusterName, ServiceName: p.ServiceName, Enabled: p.Enabled, Healthy: healthy, Ephemeral: p.Ephemeral, Metadata: p.Metadata})
 	}
 	return hosts, nil
+}
+
+func TestGetAllSDKEnumeratesSourceQualifiedClustersByCanonicalProvider(t *testing.T) {
+	healthy := true
+	a := &instance.Instance{SourceCluster: "cluster-a", SourceKey: "cluster-a/uid-a", Provider: "k8s", InstanceId: "pod-a", AppCode: "pay", Ip: "10.0.0.1", Ports: []*instance.PortInfo{{Port: 8080}}, EnvType: "test", State: instance.InstanceStateRunning, Reversion: 1, Status: instance.InstanceStatusOnline, Enabled: true}
+	b := &instance.Instance{SourceCluster: "cluster-b", SourceKey: "cluster-b/uid-b", Provider: "k8s", InstanceId: "pod-b", AppCode: "pay", Ip: "10.0.0.2", Ports: []*instance.PortInfo{{Port: 8080}}, EnvType: "test", State: instance.InstanceStateRunning, Reversion: 1, Status: instance.InstanceStatusOnline, Enabled: true}
+	vendor := &persistentVisibilityVendor{items: map[string]InstanceParams{
+		instanceID(InstanceParams{ServiceName: "pay", IP: a.Ip, Port: 8080, ClusterName: clusterOf(a), GroupName: DefaultGroup, Enabled: true, Healthy: &healthy, Metadata: metadataOf(a)}): {ServiceName: "pay", IP: a.Ip, Port: 8080, ClusterName: clusterOf(a), GroupName: DefaultGroup, Enabled: true, Healthy: &healthy, Metadata: metadataOf(a)},
+		instanceID(InstanceParams{ServiceName: "pay", IP: b.Ip, Port: 8080, ClusterName: clusterOf(b), GroupName: DefaultGroup, Enabled: true, Healthy: &healthy, Metadata: metadataOf(b)}): {ServiceName: "pay", IP: b.Ip, Port: 8080, ClusterName: clusterOf(b), GroupName: DefaultGroup, Enabled: true, Healthy: &healthy, Metadata: metadataOf(b)},
+	}}
+	sink := &Sink{client: &Client{sdk: &sdkNamingFacade{vendor: vendor, group: DefaultGroup}, config: ClientConfig{}}, logger: nopBatchLogger{}, groupName: DefaultGroup}
+	list, err := sink.GetAll(nil, "k8s")
+	if err != nil {
+		t.Fatalf("GetAll(k8s) error = %v", err)
+	}
+	if len(list.Instance) != 2 {
+		t.Fatalf("GetAll(k8s) instances = %d, want 2 source-qualified clusters", len(list.Instance))
+	}
+	for _, got := range list.Instance {
+		if got.Provider != "k8s" || got.SourceCluster == "" {
+			t.Fatalf("reconstructed source-qualified instance = %#v, want Provider=k8s and SourceCluster", got)
+		}
+	}
 }
 func (v *persistentVisibilityVendor) ListServices(int, int, string, string) ([]string, int, error) {
 	v.mu.Lock()

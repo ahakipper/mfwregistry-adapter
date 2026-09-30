@@ -1,6 +1,8 @@
 package nacos
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -841,14 +843,12 @@ func isCatalogNotFound(err error) bool {
 }
 
 // GetAll reconstructs domain instances from Nacos's CATALOG view (dsca-3
-// §3.2): list all services of the group (paginated), read each service's
-// hosts of the requested provider's CLUSTER (clusterName == provider — the
-// per-provider/cluster scoping; a real Nacos requires clusterName on the
-// catalog endpoint and answers HTTP 500 "… is not found" for an absent
-// (service, cluster) pair, tolerated as an empty list exactly like the
-// prune's walk), and rebuild the instances from the composite fields plus
-// the metadata map. Status filtering uses the status metadata with an
-// enabled→1/else→2 fallback (plan §7.3).
+// §3.2): list all services of the group (paginated), enumerate all
+// source-qualified clusters through the SDK and filter by canonical Provider
+// (or accept an explicit wire cluster when called by prune), then rebuild the
+// instances from the composite fields plus metadata. HTTP compatibility keeps
+// its explicit cluster-scoped legacy walk. Status filtering uses the status
+// metadata with an enabled→1/else→2 fallback (plan §7.3).
 //
 // Why the catalog and not instance/list: the instance list HIDES
 // enabled=false hosts (client.go's ListInstances, the F8 blind spot) — the
@@ -880,12 +880,16 @@ func (s *Sink) GetAll(statuses []int32, provider string) (*instance.InstanceList
 	}
 	instances := []*instance.Instance{}
 	for _, service := range services {
-		// clusterName == provider: the per-provider/cluster scoping. A pair
-		// with no catalog entry is the real server's steady state and is
-		// skipped (empty), exactly like the prune (nacos.go's prune walk);
-		// any other error aborts the view — a partial diff input must never
-		// be mistaken for a complete one.
-		hosts, err := readClient.ListCatalogInstances(service, provider)
+		// SDK mode enumerates every wire cluster, then filters by the
+		// canonical Provider carried in metadata. This is required once
+		// source-qualified cluster names replace the historical k8s/ecs pair.
+		// HTTP compatibility retains its legacy provider-scoped catalog walk.
+		var hosts []Host
+		if readClient.sdk != nil {
+			hosts, err = readClient.ListAllCatalogInstances(service)
+		} else {
+			hosts, err = readClient.ListCatalogInstances(service, provider)
+		}
 		if err != nil {
 			if isCatalogNotFound(err) {
 				continue
@@ -893,7 +897,7 @@ func (s *Sink) GetAll(statuses []int32, provider string) (*instance.InstanceList
 			return nil, err
 		}
 		for _, host := range hosts {
-			if host.ClusterName != provider {
+			if readClient.sdk == nil && host.ClusterName != provider {
 				s.logger.Warnf("nacos: ignoring cross-cluster catalog instance %s returned for provider %s", host.InstanceID, provider)
 				continue
 			}
@@ -902,6 +906,9 @@ func (s *Sink) GetAll(statuses []int32, provider string) (*instance.InstanceList
 				continue
 			}
 			ins := reconstructForTransport(service, host, readClient.sdk != nil)
+			if provider != "" && ins.Provider != provider && clusterOf(ins) != provider {
+				continue
+			}
 			if !statusAllowed(statuses, ins.Status) {
 				continue
 			}
@@ -1177,14 +1184,53 @@ func (s *Sink) deregisterInstance(ins *instance.Instance) error {
 	return s.deregister(ins.AppCode, ins.Ip, firstPort(ins), clusterOf(ins))
 }
 
-// clusterOf maps the provider to the Nacos clusterName: the collision
-// policy of plan §7.3 — the same app-code from k8s and ecs coexists in one
-// service under distinct clusters, yielding distinct composite ids.
+// clusterOf maps a source-aware instance to its source-qualified Nacos
+// clusterName. Provider remains the instance type; legacy records without a
+// SourceCluster retain the historical provider-shaped wire name until they
+// are migrated.
 func clusterOf(ins *instance.Instance) string {
+	if ins.SourceCluster != "" {
+		return sourceQualifiedClusterName(ins.Provider, ins.SourceCluster)
+	}
 	if ins.Provider != "" {
 		return ins.Provider
 	}
 	return DefaultCluster
+}
+
+// sourceQualifiedClusterName is the stable Nacos wire projection of a logical
+// source cluster. Provider remains the instance type; SourceCluster carries
+// the actual K8s/Consul source identity. A short digest prevents two distinct
+// source IDs that normalize to the same human-readable component from
+// collapsing, while the bounded ASCII form is safe for Nacos composite IDs.
+func sourceQualifiedClusterName(provider, source string) string {
+	provider = sanitizeWireComponent(provider)
+	if provider == "" {
+		provider = "source"
+	}
+	readable := sanitizeWireComponent(source)
+	if readable == "" {
+		readable = "source"
+	}
+	if len(readable) > 32 {
+		readable = readable[:32]
+	}
+	digest := sha256.Sum256([]byte(source))
+	return fmt.Sprintf("%s-%s-%s", provider, readable, hex.EncodeToString(digest[:4]))
+}
+
+func sanitizeWireComponent(value string) string {
+	value = strings.ToLower(value)
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 // firstPort derives the wire port: Ports[0].Port, else 0 — the same rule
@@ -1275,10 +1321,11 @@ func validateMetadataSize(metadata map[string]string) error {
 // comes from the metadata with the enabled→online/else→unhealthy fallback
 // (plan §7.3), so unmetadataed state still classifies.
 //
-// New writes restore Cluster from the canonical payload; the Nacos
-// clusterName remains the Provider/scoping key from the wire. Legacy entries
-// without the payload continue through the scalar fallback below, where
-// Cluster remains empty because it was never persisted by those writers.
+// New writes restore Provider, Cluster, and SourceCluster from the canonical
+// payload. The Nacos clusterName is only a wire scope and must not overwrite
+// the Provider when it is source-qualified. Legacy entries without the payload
+// continue through the scalar fallback below, where the historical wire
+// cluster is used as the provider fallback.
 //
 // A mismatched or missing schemaVersion (dsca-5 §4.2-1) is a degraded
 // writer, not an error: the reconstruction still participates in the diff,
@@ -1301,7 +1348,13 @@ func reconstruct(service string, host Host) *instance.Instance {
 			} else {
 				decoded.Ports[0].Port = int32(host.Port)
 			}
-			decoded.Provider = host.ClusterName
+			// The canonical payload owns the provider type. The wire cluster
+			// may now be source-qualified (for example k8s-cluster-a-<hash>),
+			// so assigning host.ClusterName here would turn a source identity
+			// back into a fake provider and break multi-source reconciliation.
+			if decoded.Provider == "" {
+				decoded.Provider = host.ClusterName
+			}
 			if decoded.Status != instance.InstanceStatusUnhealthy {
 				decoded.Enabled = host.Enabled
 			}

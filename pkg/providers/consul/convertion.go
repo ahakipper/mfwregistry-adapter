@@ -36,6 +36,10 @@ var instanceBaseAttrMetas = map[string]struct{}{metaPorts: {}, metaEnvType: {}, 
 // As the Endpoints obtained from Consul are valid and passed the health check. Therefore, when converting to Instance,
 // we need to set the value of Instance  Status filed to 1.
 func convertInstance(endpoint *api.ServiceEntry) (ins *sv.Instance, err error) {
+	return convertInstanceForSource(endpoint, "")
+}
+
+func convertInstanceForSource(endpoint *api.ServiceEntry, sourceCluster string) (ins *sv.Instance, err error) {
 	if endpoint == nil {
 		return nil, errors.New("nil consul service endpoint")
 	}
@@ -91,30 +95,38 @@ func convertInstance(endpoint *api.ServiceEntry) (ins *sv.Instance, err error) {
 	}
 	// instance
 	ins = &sv.Instance{
-		InstanceId:  instanceId,
-		Level:       "",
-		Ports:       ports,
-		Ip:          endpoint.Node.Address,
-		EnvCode:     envCode,
-		EnvType:     envType,
-		EnvGroup:    envGroup,
-		Cluster:     "",
-		Version:     version,
-		Enabled:     true,
-		State:       state,
-		HealthState: "",
-		AppCode:     appcode,
-		Provider:    "ecs",
-		Label:       convertLabels(endpoint),
-		Hostname:    endpoint.Node.Node,
-		Cpu:         0,
-		Memory:      0,
-		Disk:        0,
-		Os:          "",
-		Image:       map[string]string{},
-		Idc:         idc,
-		Reversion:   int64(endpoint.Service.ModifyIndex),
-		Status:      status,
+		SourceCluster: sourceCluster,
+		InstanceId:    instanceId,
+		Level:         "",
+		Ports:         ports,
+		Ip:            endpoint.Node.Address,
+		EnvCode:       envCode,
+		EnvType:       envType,
+		EnvGroup:      envGroup,
+		Cluster:       "",
+		Version:       version,
+		Enabled:       true,
+		State:         state,
+		HealthState:   "",
+		AppCode:       appcode,
+		Provider:      "ecs",
+		Label:         convertLabels(endpoint),
+		Hostname:      endpoint.Node.Node,
+		Cpu:           0,
+		Memory:        0,
+		Disk:          0,
+		Os:            "",
+		Image:         map[string]string{},
+		Idc:           idc,
+		Reversion:     int64(endpoint.Service.ModifyIndex),
+		Status:        status,
+	}
+	if sourceCluster != "" {
+		instanceKey := endpoint.Service.ID
+		if instanceKey == "" {
+			instanceKey = instanceId
+		}
+		ins.SourceKey = sourceCluster + "/" + instanceKey
 	}
 	return ins, nil
 }

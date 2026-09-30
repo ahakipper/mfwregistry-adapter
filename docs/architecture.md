@@ -33,6 +33,13 @@ master dies. Downstream, the gateway and the Java SDK consume the instance data
 from the discovery center, so spotter is effectively the authority for "which
 container/machine instances exist and what state they are in".
 
+Source identity is separate from provider type: `Provider` identifies K8s or
+Consul/ECS, `Cluster` carries workload/business cluster metadata, and
+`SourceCluster` identifies the logical Kubernetes/Consul source. Nacos uses a
+source-qualified projection of `Provider + SourceCluster` for `clusterName`;
+it does not merge every K8s source into one wire cluster merely because the
+provider type is `k8s`.
+
 ## System Context
 
 ```

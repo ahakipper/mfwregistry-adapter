@@ -171,6 +171,7 @@ func init() {
 	// (etcd TLS included). Every flag above is untouched.
 	adapterCmd.Flags().StringSliceP("kubeconfig", "", []string{}, "comma-separated kubeconfig paths overriding the preset's KubeConfigPath, e.g. /tmp/soak/kubeconfig; empty keeps the preset")
 	adapterCmd.Flags().StringSliceP("consul-addr", "", []string{}, "comma-separated consul addresses overriding the preset, e.g. 127.0.0.1:18500; empty keeps the preset")
+	adapterCmd.Flags().String("consul-cluster-id", "", "logical Consul source ID for source-qualified Nacos cluster names")
 	adapterCmd.Flags().StringSliceP("etcd-endpoints", "", []string{}, "comma-separated etcd endpoints overriding the preset, e.g. 127.0.0.1:12379; non-empty resolves the etcd TLS file paths to empty (insecure local mode); empty keeps the preset with TLS")
 }
 
@@ -206,6 +207,7 @@ func adapterFlags(cmd *cobra.Command) infraconfig.Flags {
 		ReconcileSource:    flagString(cmd, "reconcile-source"),
 		KubeConfigPathFlag: flagStringSlice(cmd, "kubeconfig"),
 		ConsulAddrFlag:     flagStringSlice(cmd, "consul-addr"),
+		ConsulClusterID:    flagString(cmd, "consul-cluster-id"),
 		EtcdEndpointsFlag:  flagStringSlice(cmd, "etcd-endpoints"),
 	}
 	if cmd.Flags().Changed("log-maxsize") {

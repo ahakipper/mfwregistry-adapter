@@ -163,6 +163,22 @@ func TestNacosMetadataSourceIdentityRoundTrip(t *testing.T) {
 	}
 }
 
+func TestNacosReconstructPreservesProviderWhenWireClusterIsSourceQualified(t *testing.T) {
+	original := &instance.Instance{
+		SourceKey: "cluster-a/uid-42", SourceCluster: "cluster-a", Provider: "k8s",
+		InstanceId: "pod-a", AppCode: "pay-user", Ip: "10.0.0.1",
+		Ports: []*instance.PortInfo{{Port: 8080}}, EnvType: "test", State: instance.InstanceStateRunning,
+		Status: instance.InstanceStatusOnline, Reversion: 42,
+	}
+	got := reconstruct(original.AppCode, Host{
+		IP: original.Ip, Port: 8080, ClusterName: clusterOf(original), Enabled: true,
+		Metadata: metadataOf(original),
+	})
+	if got.Provider != "k8s" || got.SourceCluster != "cluster-a" || got.Cluster != original.Cluster {
+		t.Fatalf("reconstructed source-qualified instance = %#v, want provider k8s and source cluster cluster-a", got)
+	}
+}
+
 func TestNacosReconstructLegacyMetadataFallsBackWithoutSourceKey(t *testing.T) {
 	got := reconstruct("pay-user", Host{
 		IP: "10.0.0.2", Port: 8080, ClusterName: "k8s", Enabled: true,

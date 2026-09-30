@@ -65,6 +65,25 @@ func TestConvertPodUsesCompleteProductionInstanceProjection(t *testing.T) {
 	}
 }
 
+func TestConvertPodAcceptsClusterNameLabelForBusinessCluster(t *testing.T) {
+	pod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-cluster-name", Namespace: "default", UID: "uid-cluster-name", ResourceVersion: "43", Labels: map[string]string{"app-code": "pay-user", "env-type": "test", "cluster-name": "business-blue"}},
+		Spec:       v1.PodSpec{Containers: []v1.Container{{Name: "application", Image: "repo/app:v1", Env: []v1.EnvVar{{Name: "K8S_CLUSTER_TYPE", Value: "test"}}}}},
+		Status:     v1.PodStatus{Phase: v1.PodRunning, PodIP: "10.0.0.8", ContainerStatuses: []v1.ContainerStatus{{Ready: true, State: v1.ContainerState{Running: &v1.ContainerStateRunning{}}}}},
+	}
+	got := ConvertPod(&k8srobot.QueueObject{ClusterID: "source-cluster-a"}, pod, nil, ports.NopLogger{})
+	if got == nil || got.Cluster != "business-blue" {
+		t.Fatalf("ConvertPod().Cluster = %q, want business-blue from cluster-name label", gotCluster(got))
+	}
+}
+
+func gotCluster(ins *sv.Instance) string {
+	if ins == nil {
+		return "<nil>"
+	}
+	return ins.Cluster
+}
+
 func TestInstanceEventObserverReceivesConvertedEventBoundary(t *testing.T) {
 	worker := &fakeWorker{}
 	provider := &k8s{
