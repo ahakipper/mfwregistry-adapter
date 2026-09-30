@@ -39,6 +39,7 @@ type Recorder struct{}
 
 // Compile-time assertion that Recorder satisfies the port.
 var _ ports.MetricsRecorder = (*Recorder)(nil)
+var _ ports.ConsulMetricsRecorder = (*Recorder)(nil)
 
 // New returns a Recorder. It never fails; the collectors it observes are
 // already registered by the pkg/metrics init function.
@@ -113,6 +114,43 @@ func (r *Recorder) IncEventsDropped(cluster string) {
 // it).
 func (r *Recorder) SetK8sQueueDepth(depth int) {
 	metrics.K8sQueueDepthGauge.Set(float64(depth))
+}
+
+// ObserveConsulCatalogReadDuration records a complete Consul catalog read in
+// seconds. The source and outcome labels are bounded by the provider; no
+// endpoint, token, or raw error text is ever included.
+func (r *Recorder) ObserveConsulCatalogReadDuration(source, outcome string, d time.Duration) {
+	metrics.ConsulCatalogReadDuration.WithLabelValues(source, outcome).Observe(d.Seconds())
+}
+
+// IncConsulConversionSkips records malformed endpoints rejected during
+// conversion. A non-positive count is ignored so callers cannot decrement a
+// counter accidentally.
+func (r *Recorder) IncConsulConversionSkips(source string, count int) {
+	if count <= 0 {
+		return
+	}
+	metrics.ConsulConversionSkipsTotal.WithLabelValues(source, "skipped").Add(float64(count))
+}
+
+// IncConsulSourceError records a bounded source read outcome. The caller is
+// responsible for classifying the error as source_error or partial; the raw
+// error message is deliberately not a label.
+func (r *Recorder) IncConsulSourceError(source, outcome string) {
+	metrics.ConsulSourceErrorsTotal.WithLabelValues(source, outcome).Inc()
+}
+
+// IncConsulHealthyEmptyConfirmation records a confirmation advancement, with
+// outcome "pending" or "confirmed".
+func (r *Recorder) IncConsulHealthyEmptyConfirmation(source, outcome string) {
+	metrics.ConsulHealthyEmptyConfirmationsTotal.WithLabelValues(source, outcome).Inc()
+}
+
+// ObserveConsulWatchToSyncDuration records an accurately measured watch to
+// sync duration when a provider can supply one. The current Consul monitor
+// does not expose watch timestamps, so the provider does not call this method.
+func (r *Recorder) ObserveConsulWatchToSyncDuration(source, outcome string, d time.Duration) {
+	metrics.ConsulWatchToSyncDuration.WithLabelValues(source, outcome).Observe(d.Seconds())
 }
 
 // httpServer serves promhttp and pprof endpoints and stops idempotently.

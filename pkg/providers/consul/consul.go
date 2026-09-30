@@ -112,6 +112,15 @@ const (
 	consulSnapshotPartial
 )
 
+const (
+	consulMetricOutcomeHealthyEmpty    = "healthy_empty"
+	consulMetricOutcomeHealthyNonEmpty = "healthy_nonempty"
+	consulMetricOutcomeSourceError     = "source_error"
+	consulMetricOutcomePartial         = "partial"
+	consulMetricOutcomePending         = "pending"
+	consulMetricOutcomeConfirmed       = "confirmed"
+)
+
 type consulSnapshot struct {
 	instances []*sv.Instance
 	state     consulSnapshotState
@@ -130,6 +139,59 @@ func (c *consul) ensureDeps() {
 			c.notifier = nopNotifier{}
 		}
 	})
+}
+
+// consulMetricsLocked returns the optional source-scoped recorder. Callers
+// in the read/snapshot and empty-confirmation paths hold c.Lock; the
+// recorder is deliberately optional so existing MetricsRecorder
+// implementations remain source-compatible.
+func (c *consul) consulMetricsLocked() ports.ConsulMetricsRecorder {
+	if c == nil || c.metricsRecorder == nil {
+		return nil
+	}
+	recorder, _ := c.metricsRecorder.(ports.ConsulMetricsRecorder)
+	return recorder
+}
+
+// metricSourceScope returns only the logical source ID. A source ID is
+// normalized by the constructor and never contains an address or credential;
+// the fallback keeps hand-built test providers from producing an empty label.
+func (c *consul) metricSourceScope() string {
+	if c == nil {
+		return "consul"
+	}
+	scope := domaininstance.SanitizeWireScope(c.sourceCluster)
+	if scope == "" {
+		return "consul"
+	}
+	return scope
+}
+
+func consulSnapshotMetricOutcome(state consulSnapshotState) string {
+	switch state {
+	case consulSnapshotHealthyEmpty:
+		return consulMetricOutcomeHealthyEmpty
+	case consulSnapshotHealthyNonEmpty:
+		return consulMetricOutcomeHealthyNonEmpty
+	case consulSnapshotSourceError:
+		return consulMetricOutcomeSourceError
+	case consulSnapshotPartial:
+		return consulMetricOutcomePartial
+	default:
+		return "unknown"
+	}
+}
+
+func (c *consul) recordHealthyEmptyConfirmationLocked() {
+	recorder := c.consulMetricsLocked()
+	if recorder == nil {
+		return
+	}
+	outcome := consulMetricOutcomePending
+	if c.emptyConfirmations >= 3 {
+		outcome = consulMetricOutcomeConfirmed
+	}
+	recorder.IncConsulHealthyEmptyConfirmation(c.metricSourceScope(), outcome)
 }
 
 // NacosReconcileSwitch is the consul leg's wiring seam for the nacos
@@ -409,6 +471,7 @@ func (c *consul) syncInstance() (err error) {
 		// Mark it pending so the following full-push compare consumes the
 		// observation instead of counting the same source state twice.
 		c.emptyConfirmations++
+		c.recordHealthyEmptyConfirmationLocked()
 		c.emptyConfirmationPending = true
 		err = fmt.Errorf("get empty consul endpoints; waiting for confirmation %d/3", c.emptyConfirmations)
 		c.logger.Warnf("%s", err.Error())
@@ -503,6 +566,11 @@ func (c *consul) toInstanceWithSkipped(endpoints []*api.ServiceEntry) (inss []*s
 			}
 		}
 	}
+	if skipped > 0 {
+		if recorder := c.consulMetricsLocked(); recorder != nil {
+			recorder.IncConsulConversionSkips(c.metricSourceScope(), skipped)
+		}
+	}
 
 	return inss, skipped
 }
@@ -530,6 +598,9 @@ func (c *consul) getAllLocked() (result []*v2.Instance) {
 			c.emptyRetryTimer.Stop()
 			c.emptyRetryTimer = nil
 		}
+		if recorder := c.consulMetricsLocked(); recorder != nil {
+			recorder.IncConsulSourceError(c.metricSourceScope(), consulSnapshotMetricOutcome(snapshot.state))
+		}
 		c.logger.Errorf("consul catalog snapshot rejected: %s", snapshot.err.Error())
 		return nil
 	}
@@ -540,7 +611,13 @@ func (c *consul) getAllLocked() (result []*v2.Instance) {
 // readSnapshot reads a complete catalog while retaining enough provenance to
 // distinguish a valid empty catalog from an unsafe partial result. It assumes
 // the caller holds the provider lock, just like GetAll did historically.
-func (c *consul) readSnapshot() consulSnapshot {
+func (c *consul) readSnapshot() (snapshot consulSnapshot) {
+	started := time.Now()
+	defer func() {
+		if recorder := c.consulMetricsLocked(); recorder != nil {
+			recorder.ObserveConsulCatalogReadDuration(c.metricSourceScope(), consulSnapshotMetricOutcome(snapshot.state), time.Since(started))
+		}
+	}()
 	services, err := c.monitor.GetServices()
 	if err != nil {
 		return consulSnapshot{state: consulSnapshotSourceError, err: errors.WithMessage(err, "get services from consul")}
@@ -841,6 +918,7 @@ func (c *consul) snapshotForFullPushMode(advanceEmptyConfirmation bool) ([]*v2.I
 			c.emptyConfirmationPending = false
 		} else {
 			c.emptyConfirmations++
+			c.recordHealthyEmptyConfirmationLocked()
 		}
 	} else if len(all) > 0 {
 		c.emptyConfirmations = 0
@@ -865,6 +943,7 @@ func (c *consul) CompareAndFlush() {
 		}
 		if !c.emptyConfirmationPending {
 			c.emptyConfirmations++
+			c.recordHealthyEmptyConfirmationLocked()
 			c.emptyConfirmationPending = true
 		}
 		if c.emptyConfirmations < 3 {

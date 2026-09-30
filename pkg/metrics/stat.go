@@ -95,8 +95,55 @@ var (
 			Help: "current depth of the k8s robot's coalescing event queue (distinct pod keys in flight)",
 		},
 	)
+	// Consul source metrics keep the logical source scope separate from the
+	// provider-wide synchronization metrics. Only source IDs and bounded
+	// outcomes are labels; addresses, ACL tokens, and other credentials never
+	// enter a metric label or value.
+	ConsulCatalogReadDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "consul_catalog_read_duration_seconds",
+			Help: "duration of a complete Consul catalog read by source and outcome",
+			Buckets: []float64{
+				0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1,
+				0.25, 0.5, 1, 2.5, 5, 10, 30,
+			},
+		},
+		[]string{"source", "outcome"},
+	)
+	ConsulConversionSkipsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "consul_conversion_skips_total",
+			Help: "Consul catalog endpoints rejected during instance conversion",
+		},
+		[]string{"source", "outcome"},
+	)
+	ConsulSourceErrorsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "consul_source_errors_total",
+			Help: "Consul catalog reads rejected by source or partial-read errors",
+		},
+		[]string{"source", "outcome"},
+	)
+	ConsulHealthyEmptyConfirmationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "consul_healthy_empty_confirmations_total",
+			Help: "healthy-empty Consul catalog confirmation advancements",
+		},
+		[]string{"source", "outcome"},
+	)
+	ConsulWatchToSyncDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "consul_watch_to_sync_duration_seconds",
+			Help: "duration from a Consul watch notification to provider synchronization",
+			Buckets: []float64{
+				0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1,
+				0.25, 0.5, 1, 2.5, 5, 10, 30,
+			},
+		},
+		[]string{"source", "outcome"},
+	)
 )
 
 func init() {
-	prometheus.MustRegister(SyncAllDurationsHistogram, SyncAllK8sDurationsHistogram, SyncAllEcsDurationsHistogram, SyncOnceDurationsHistogram, SyncOnceGauge, SyncErrorGauge, EventToStoreE2EDuration, EventsDroppedTotal, K8sQueueDepthGauge)
+	prometheus.MustRegister(SyncAllDurationsHistogram, SyncAllK8sDurationsHistogram, SyncAllEcsDurationsHistogram, SyncOnceDurationsHistogram, SyncOnceGauge, SyncErrorGauge, EventToStoreE2EDuration, EventsDroppedTotal, K8sQueueDepthGauge, ConsulCatalogReadDuration, ConsulConversionSkipsTotal, ConsulSourceErrorsTotal, ConsulHealthyEmptyConfirmationsTotal, ConsulWatchToSyncDuration)
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 
+	"spotter/internal/ports"
 	"spotter/pkg/metrics"
 )
 
@@ -38,6 +39,78 @@ func TestRecorderCallsDoNotPanic(t *testing.T) {
 		r.ObserveEventToStoreDuration("atlas", "error", time.Second)
 		r.IncEventsDropped("/tmp/kubeconfig-a")
 	}
+}
+
+// TestRecorderConsulMetricsDoNotPanic verifies the optional source-scoped
+// Consul recorder can be used alongside the existing synchronization port.
+// The watch-to-sync method is covered as an implementation seam; the current
+// provider deliberately does not call it because the monitor exposes no
+// authoritative watch timestamp.
+func TestRecorderConsulMetricsDoNotPanic(t *testing.T) {
+	r := New()
+	r.ObserveConsulCatalogReadDuration("catalog-a", "healthy_nonempty", 25*time.Millisecond)
+	r.IncConsulConversionSkips("catalog-a", 2)
+	r.IncConsulSourceError("catalog-a", "partial")
+	r.IncConsulHealthyEmptyConfirmation("catalog-a", "pending")
+	r.IncConsulHealthyEmptyConfirmation("catalog-a", "confirmed")
+	r.ObserveConsulWatchToSyncDuration("catalog-a", "ok", time.Millisecond)
+	var recorder ports.ConsulMetricsRecorder = r
+	if recorder == nil {
+		t.Fatal("optional Consul metrics recorder is nil")
+	}
+}
+
+func TestRecorderConsulMetricsUseSourceOutcomeLabels(t *testing.T) {
+	r := New()
+	before := consulCounterValue(t, metrics.ConsulConversionSkipsTotal, "catalog-metrics", "skipped")
+	r.IncConsulConversionSkips("catalog-metrics", 2)
+	if got := consulCounterValue(t, metrics.ConsulConversionSkipsTotal, "catalog-metrics", "skipped") - before; got != 2 {
+		t.Fatalf("conversion skip delta = %v, want 2", got)
+	}
+	beforeError := consulCounterValue(t, metrics.ConsulSourceErrorsTotal, "catalog-metrics", "partial")
+	r.IncConsulSourceError("catalog-metrics", "partial")
+	if got := consulCounterValue(t, metrics.ConsulSourceErrorsTotal, "catalog-metrics", "partial") - beforeError; got != 1 {
+		t.Fatalf("source error delta = %v, want 1", got)
+	}
+	beforeRead := consulHistogramCount(t, metrics.ConsulCatalogReadDuration, "catalog-metrics", "healthy_nonempty")
+	r.ObserveConsulCatalogReadDuration("catalog-metrics", "healthy_nonempty", time.Millisecond)
+	if got := consulHistogramCount(t, metrics.ConsulCatalogReadDuration, "catalog-metrics", "healthy_nonempty") - beforeRead; got != 1 {
+		t.Fatalf("catalog read count delta = %v, want 1", got)
+	}
+}
+
+func consulCounterValue(t *testing.T, collector *prometheus.CounterVec, labels ...string) float64 {
+	t.Helper()
+	metric, err := collector.GetMetricWithLabelValues(labels...)
+	if err != nil {
+		t.Fatalf("counter labels %v: %v", labels, err)
+	}
+	obs, ok := metric.(prometheus.Metric)
+	if !ok {
+		t.Fatal("counter metric does not implement prometheus.Metric")
+	}
+	var dtoMetric dto.Metric
+	if err := obs.Write(&dtoMetric); err != nil {
+		t.Fatalf("counter write: %v", err)
+	}
+	return dtoMetric.Counter.GetValue()
+}
+
+func consulHistogramCount(t *testing.T, collector *prometheus.HistogramVec, labels ...string) uint64 {
+	t.Helper()
+	metric, err := collector.GetMetricWithLabelValues(labels...)
+	if err != nil {
+		t.Fatalf("histogram labels %v: %v", labels, err)
+	}
+	obs, ok := metric.(prometheus.Metric)
+	if !ok {
+		t.Fatal("histogram metric does not implement prometheus.Metric")
+	}
+	var dtoMetric dto.Metric
+	if err := obs.Write(&dtoMetric); err != nil {
+		t.Fatalf("histogram write: %v", err)
+	}
+	return dtoMetric.Histogram.GetSampleCount()
 }
 
 // TestObserveEventToStoreDurationObservesSeconds pins the unit deviation

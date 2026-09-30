@@ -159,3 +159,31 @@ type MetricsRecorder interface {
 	// flight, one entry per key regardless of coalescing).
 	SetK8sQueueDepth(depth int)
 }
+
+// ConsulMetricsRecorder is the optional metrics seam for the Consul source.
+// It intentionally remains separate from MetricsRecorder so existing
+// applications and test fakes do not need to grow their synchronization
+// metrics surface. Implementations must use a stable logical source scope;
+// endpoint addresses, ACL tokens, and other credentials are never label
+// values.
+type ConsulMetricsRecorder interface {
+	// ObserveConsulCatalogReadDuration records one complete catalog read,
+	// including failed and partial reads. Outcome is a bounded state such as
+	// "healthy_nonempty", "healthy_empty", "source_error", or "partial".
+	ObserveConsulCatalogReadDuration(source, outcome string, d time.Duration)
+	// IncConsulConversionSkips counts endpoints rejected during conversion.
+	IncConsulConversionSkips(source string, count int)
+	// IncConsulSourceError counts a rejected source read. Outcome is a bounded
+	// error class (for example "source_error" or "partial"), never an error
+	// message that could contain deployment details or credentials.
+	IncConsulSourceError(source, outcome string)
+	// IncConsulHealthyEmptyConfirmation counts each healthy-empty confirmation
+	// advancement. Outcome is "pending" until the confirmation threshold is
+	// reached, then "confirmed".
+	IncConsulHealthyEmptyConfirmation(source, outcome string)
+	// ObserveConsulWatchToSyncDuration is reserved for providers that can
+	// associate a watch notification with an accurate event timestamp. The
+	// current Consul monitor does not expose that timestamp, so callers must
+	// not synthesize one.
+	ObserveConsulWatchToSyncDuration(source, outcome string, d time.Duration)
+}

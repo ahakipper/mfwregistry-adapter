@@ -680,6 +680,46 @@ type FakeMetricsRecorder struct {
 	eventToStoreObserved  []EventToStoreObservation
 	eventsDroppedObserved []EventsDroppedObservation
 	k8sQueueDepths        []K8sQueueDepthObservation
+	consulCatalogReads    []ConsulCatalogReadObservation
+	consulConversionSkips []ConsulConversionSkipsObservation
+	consulSourceErrors    []ConsulSourceErrorObservation
+	consulEmptyConfirms   []ConsulHealthyEmptyConfirmationObservation
+	consulWatchToSync     []ConsulWatchToSyncObservation
+}
+
+// ConsulCatalogReadObservation captures one optional Consul catalog read
+// duration and its bounded source outcome.
+type ConsulCatalogReadObservation struct {
+	Source   string
+	Outcome  string
+	Duration time.Duration
+}
+
+// ConsulConversionSkipsObservation captures one conversion skip batch.
+type ConsulConversionSkipsObservation struct {
+	Source string
+	Count  int
+}
+
+// ConsulSourceErrorObservation captures one rejected source read.
+type ConsulSourceErrorObservation struct {
+	Source  string
+	Outcome string
+}
+
+// ConsulHealthyEmptyConfirmationObservation captures one confirmation
+// advancement, either pending or confirmed.
+type ConsulHealthyEmptyConfirmationObservation struct {
+	Source  string
+	Outcome string
+}
+
+// ConsulWatchToSyncObservation captures an accurately measured watch-to-sync
+// duration when a provider has an event timestamp.
+type ConsulWatchToSyncObservation struct {
+	Source   string
+	Outcome  string
+	Duration time.Duration
 }
 
 // NewFakeMetricsRecorder creates an initialized metrics recorder.
@@ -730,6 +770,36 @@ func (r *FakeMetricsRecorder) SetK8sQueueDepth(depth int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.k8sQueueDepths = append(r.k8sQueueDepths, K8sQueueDepthObservation{Depth: depth})
+}
+
+func (r *FakeMetricsRecorder) ObserveConsulCatalogReadDuration(source, outcome string, d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.consulCatalogReads = append(r.consulCatalogReads, ConsulCatalogReadObservation{Source: source, Outcome: outcome, Duration: d})
+}
+
+func (r *FakeMetricsRecorder) IncConsulConversionSkips(source string, count int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.consulConversionSkips = append(r.consulConversionSkips, ConsulConversionSkipsObservation{Source: source, Count: count})
+}
+
+func (r *FakeMetricsRecorder) IncConsulSourceError(source, outcome string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.consulSourceErrors = append(r.consulSourceErrors, ConsulSourceErrorObservation{Source: source, Outcome: outcome})
+}
+
+func (r *FakeMetricsRecorder) IncConsulHealthyEmptyConfirmation(source, outcome string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.consulEmptyConfirms = append(r.consulEmptyConfirms, ConsulHealthyEmptyConfirmationObservation{Source: source, Outcome: outcome})
+}
+
+func (r *FakeMetricsRecorder) ObserveConsulWatchToSyncDuration(source, outcome string, d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.consulWatchToSync = append(r.consulWatchToSync, ConsulWatchToSyncObservation{Source: source, Outcome: outcome, Duration: d})
 }
 
 // SyncOnceDurations returns an independent snapshot of recorded durations.
@@ -791,6 +861,41 @@ func (r *FakeMetricsRecorder) K8sQueueDepthObservations() []K8sQueueDepthObserva
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]K8sQueueDepthObservation(nil), r.k8sQueueDepths...)
+}
+
+// ConsulCatalogReadObservations returns an independent snapshot.
+func (r *FakeMetricsRecorder) ConsulCatalogReadObservations() []ConsulCatalogReadObservation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]ConsulCatalogReadObservation(nil), r.consulCatalogReads...)
+}
+
+// ConsulConversionSkipsObservations returns an independent snapshot.
+func (r *FakeMetricsRecorder) ConsulConversionSkipsObservations() []ConsulConversionSkipsObservation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]ConsulConversionSkipsObservation(nil), r.consulConversionSkips...)
+}
+
+// ConsulSourceErrorObservations returns an independent snapshot.
+func (r *FakeMetricsRecorder) ConsulSourceErrorObservations() []ConsulSourceErrorObservation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]ConsulSourceErrorObservation(nil), r.consulSourceErrors...)
+}
+
+// ConsulHealthyEmptyConfirmationObservations returns an independent snapshot.
+func (r *FakeMetricsRecorder) ConsulHealthyEmptyConfirmationObservations() []ConsulHealthyEmptyConfirmationObservation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]ConsulHealthyEmptyConfirmationObservation(nil), r.consulEmptyConfirms...)
+}
+
+// ConsulWatchToSyncObservations returns an independent snapshot.
+func (r *FakeMetricsRecorder) ConsulWatchToSyncObservations() []ConsulWatchToSyncObservation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]ConsulWatchToSyncObservation(nil), r.consulWatchToSync...)
 }
 
 // FakeEventQueue is an in-memory highest-Reversion-wins retry queue.

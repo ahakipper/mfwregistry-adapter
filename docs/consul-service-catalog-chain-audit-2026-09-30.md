@@ -77,6 +77,14 @@ to Nacos-safe characters, and constructor rollback cleans providers already
 built when a later source fails. The command-line remains single-source, while
 embedded configuration can provide multiple descriptors.
 
+Stage 7 adds an optional `ConsulMetricsRecorder` seam and Prometheus/Fake
+implementations for catalog-read duration, conversion skips, source errors, and
+healthy-empty confirmation advancements. Labels use only normalized logical
+source IDs and bounded outcomes; the provider does not synthesize a
+watch-to-sync duration without an actual watch timestamp. End-to-end latency
+percentiles and real Nacos 3 qualification remain open because they require a
+live source and Nacos observation boundary.
+
 The repository release gate was rerun on 2026-10-01 after these changes:
 `go test ./... -count=1`, `go vet ./...`, and `make test-all` all passed. The
 last command covered race tests, blackbox tests, the smoke binary, and tagged

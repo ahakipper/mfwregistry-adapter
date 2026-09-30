@@ -302,6 +302,31 @@ func TestFakeMetricsRecorderCapturesConcurrentMetrics(t *testing.T) {
 	}
 }
 
+func TestFakeMetricsRecorderCapturesConsulMetrics(t *testing.T) {
+	recorder := NewFakeMetricsRecorder()
+	recorder.ObserveConsulCatalogReadDuration("catalog-a", "healthy_empty", 2*time.Millisecond)
+	recorder.IncConsulConversionSkips("catalog-a", 3)
+	recorder.IncConsulSourceError("catalog-a", "partial")
+	recorder.IncConsulHealthyEmptyConfirmation("catalog-a", "pending")
+	recorder.ObserveConsulWatchToSyncDuration("catalog-a", "ok", time.Millisecond)
+
+	if got := recorder.ConsulCatalogReadObservations(); len(got) != 1 || got[0].Source != "catalog-a" || got[0].Outcome != "healthy_empty" {
+		t.Fatalf("catalog reads = %#v, want one source-scoped observation", got)
+	}
+	if got := recorder.ConsulConversionSkipsObservations(); len(got) != 1 || got[0].Count != 3 {
+		t.Fatalf("conversion skips = %#v, want count 3", got)
+	}
+	if got := recorder.ConsulSourceErrorObservations(); len(got) != 1 || got[0].Outcome != "partial" {
+		t.Fatalf("source errors = %#v, want partial", got)
+	}
+	if got := recorder.ConsulHealthyEmptyConfirmationObservations(); len(got) != 1 || got[0].Outcome != "pending" {
+		t.Fatalf("empty confirmations = %#v, want pending", got)
+	}
+	if got := recorder.ConsulWatchToSyncObservations(); len(got) != 1 || got[0].Outcome != "ok" {
+		t.Fatalf("watch-to-sync = %#v, want ok", got)
+	}
+}
+
 func TestFakeEventQueueKeepsHighestReversionAndDrainsSnapshot(t *testing.T) {
 	queue := NewFakeEventQueue()
 	queue.AddLegacy(10, []*instance.Instance{
