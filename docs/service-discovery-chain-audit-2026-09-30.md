@@ -56,6 +56,20 @@ commit has full unit and race evidence; a fresh Nacos 3 + KWOK smoke or the
 next scheduled Observe gate should be recorded before a release artifact is
 re-certified.
 
+### Remediation status after the audit baseline
+
+The first four remediation stages have now landed as code:
+
+- `d1320d4`: collision fail-closed guard while preserving `clusterName=k8s`;
+- `429fe9f`: Nacos metadata capacity validation before any write;
+- `20ec2d2`: explicit verified health-policy mode and injected preflight seam;
+- `6a0035a`: failed-application-scope isolation for full prune/retry.
+
+These commits close the corresponding code hazards, but they do not by
+themselves prove a source-qualified wire migration, provide a deployment's
+health-policy verifier, or replace the required post-remediation Nacos 3 +
+KWOK runtime evidence. Those are the remaining Stage 5 gates.
+
 ## 3. End-to-end chain review
 
 ```text
@@ -121,7 +135,7 @@ The important correctness boundaries are present:
 
 ## 5. Remaining findings
 
-### F1 — Source-cluster collision in the Nacos wire identity (P1, design decision required)
+### F1 — Source-cluster collision in the Nacos wire identity (guard closed; migration decision open)
 
 The internal identity is source-aware (`SourceCluster + UID`), but
 `pkg/nacos/nacos.go:clusterOf` maps every K8s instance to the single Nacos
@@ -134,7 +148,10 @@ composite ID. One registration overwrites the other even though the internal
 cache and canonical payload have different `SourceKey` values. This is a real
 multi-cluster boundary, not a test-only identity mismatch.
 
-Required follow-up:
+The compatibility-safe guard now rejects the colliding full snapshot and
+tracks successful/in-flight owners for incremental and application-batch
+writes. It prevents silent overwrite but intentionally does not pretend that
+two same-address sources can coexist. Required follow-up:
 
 - choose and document a stable mapping such as a source-cluster-qualified
   Nacos cluster/group, or prove a deployment invariant that Pod IP/port tuples
@@ -142,7 +159,7 @@ Required follow-up:
 - add a two-source-cluster, same-IP/port integration test;
 - do not change the wire identity without a client compatibility decision.
 
-### F2 — Canonical metadata has no hard size policy (P1)
+### F2 — Canonical metadata capacity (guard closed)
 
 `metadataOf` writes scalar compatibility keys plus the compressed complete
 payload (`pkg/nacos/nacos.go:945-974`). The only size test uses one ordinary
@@ -150,19 +167,15 @@ instance and asserts the serialized map is below 1,024 bytes
 (`pkg/nacos/identity_whitebox_test.go`). There is no adversarial test for
 high-entropy labels, long image names, many ports, or large source metadata.
 
-An over-limit Nacos request becomes a permanent 4xx. In a full push, the
-successful items may already be written while the batch returns an error and
-prune is skipped. Silent truncation would be worse because it would make
-canonical equality false. The next change must choose one policy:
+Before the remediation, an over-limit Nacos request became a permanent 4xx.
+The current guard rejects before any Admin/SDK registration. Silent truncation
+would be worse because it would make canonical equality false. The current
+policy is permanent pre-write rejection with measured size and limit fields;
+high-entropy negative tests cover labels and resource fields. If larger
+canonical payloads become a requirement, a versioned envelope or explicit
+lossless external store must be designed as a separate wire change.
 
-- reject before sending with a permanent, observable metadata-size error;
-- split the canonical payload across a versioned metadata envelope; or
-- define an explicit lossless external store (not silent truncation).
-
-Add a property/fuzz test that generates large random labels, images, ports,
-and resource fields and asserts the chosen behavior.
-
-### F3 — Health-check policy is a deployment precondition, not a product proof (P1)
+### F3 — Health-check policy (verified mode added; deployment verifier open)
 
 The Spotter data path correctly sends persistent instances through Nacos 3
 gRPC. However, the default `HealthPolicyDeploymentOwned` intentionally does
@@ -172,8 +185,9 @@ IP/port (the observed `10.0.x.x:7096`/`limactl` symptom) and overwrite the
 health state independently of Spotter.
 
 The Observe fixture performs an explicit Admin compatibility set/readback before
-the SDK run. That proves the fixture, not every deployment. The product must
-retain one of these explicit release contracts:
+the SDK run. That proves the fixture, not every deployment. The product now
+has an explicit `verified` policy and injected verifier seam; the deployment
+must supply one of these explicit release contracts:
 
 - a deployment-owned preflight/runbook with versioned readback evidence; or
 - an approved Admin/Maintainer SDK/facade that verifies the switch before
@@ -182,20 +196,18 @@ retain one of these explicit release contracts:
 The production naming path must not silently fall back to raw HTTP. This is a
 deployment boundary, not Nacos HA/TLS/auth work in the current Spotter scope.
 
-### F4 — Full-batch permanent failure can suppress prune (P1)
+### F4 — Full-batch partial failure and prune isolation (code closed)
 
-`pushPersistentBatches` attempts every item but returns the first error in input
-order (`pkg/nacos/batch.go:130-254`). `PushAll` returns immediately on that
-error and does not prune. The worker then treats a permanent error as a
-permanent full-operation failure and drops the full retry entry. A single
-malformed/over-limit item can therefore leave the application partially
-written, skip cleanup, and rely on the next provider tick to try again.
+`pushPersistentBatches` now returns a structured error containing failed
+application scopes. `PushAll` prunes successful scopes but leaves failed
+scopes untouched, and the worker retains the structured full operation for its
+existing permanent/transient retry decision. A single malformed/over-limit
+item no longer suppresses cleanup for unrelated applications.
 
-Required follow-up is an explicit item/full-operation policy: preserve failed
-items separately, avoid pruning a scope whose desired snapshot was not fully
-accepted, and emit metrics that distinguish partial application from a clean
-full failure. Add tests for one permanent item plus healthy siblings and for a
-prune failure replay.
+The remaining follow-up is runtime qualification and metrics for partial
+application: distinguish attempted, successful, transient-failed,
+permanent-failed, prune-skipped, and retried scopes, and add a real Nacos
+failure-injection run for one permanent item plus healthy siblings.
 
 ### F5 — Overflow recovery is bounded, not lossless under arbitrary bursts (P2)
 

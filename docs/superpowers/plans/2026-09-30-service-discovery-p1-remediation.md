@@ -181,5 +181,11 @@ rolled back by deleting tests or historical evidence.
 
 ## Current status
 
-Stage 0 is being executed now. Stages 1–4 are not complete until their gates,
-commits, pushes, and post-change evidence are present.
+| Stage | Status | Commit / evidence |
+| --- | --- | --- |
+| Stage 0 baseline and ledger | **COMPLETE** | `27e6233`, pushed. |
+| Stage 1 collision protection | **CODE COMPLETE / MIGRATION DECISION OPEN** | `d1320d4`, focused unit/black-box/race tests, pushed. Existing `k8s` wire cluster is unchanged; source-qualified migration still needs consumer approval or a global address-uniqueness proof. |
+| Stage 2 metadata capacity | **CODE COMPLETE** | `429fe9f`, Nacos 1024 UTF-16 code-unit guard and high-entropy negative tests, pushed. |
+| Stage 3 health-policy preflight | **CODE COMPLETE / VERIFIER DEPLOYMENT OPEN** | `20ec2d2`, explicit `verified` policy and injected verifier gate, pushed. Default deployment-owned mode remains an operator attestation until a verifier is supplied. |
+| Stage 4 partial batch/prune | **CODE COMPLETE** | `6a0035a`, failed-scope isolation and structured retry error, pushed. Full repository requalification remains required. |
+| Stage 5 runtime qualification/docs | **PENDING** | Must run post-remediation Nacos 3 + KWOK evidence and update the final matrix. |
