@@ -236,6 +236,18 @@ func NewConsulProviderWithDeps(ctx context.Context, worker worker.Worker, pushIn
 // address list remains an HA endpoint list; sourceID distinguishes a separate
 // Consul catalog from another logical source using the same Spotter process.
 func NewConsulProviderWithSourceID(ctx context.Context, worker worker.Worker, pushInterval int, addrs []string, sourceID string, logger ports.Logger, notifier ports.Notifier) (provider providers.Provider, err error) {
+	return newConsulProvider(ctx, worker, pushInterval, ConsulSource{ID: sourceID, Addresses: addrs}, logger, notifier)
+}
+
+// NewConsulProviderWithSource constructs one logical Consul source with its
+// source-scoped authentication, TLS and tenancy settings.
+func NewConsulProviderWithSource(ctx context.Context, worker worker.Worker, pushInterval int, source ConsulSource, logger ports.Logger, notifier ports.Notifier) (provider providers.Provider, err error) {
+	return newConsulProvider(ctx, worker, pushInterval, source, logger, notifier)
+}
+
+func newConsulProvider(ctx context.Context, worker worker.Worker, pushInterval int, source ConsulSource, logger ports.Logger, notifier ports.Notifier) (provider providers.Provider, err error) {
+	addrs := source.Addresses
+	sourceID := source.ID
 	if ctx == nil || len(addrs) == 0 || worker == nil || pushInterval < 0 {
 		err = errors.New("params invalid")
 		return nil, err
@@ -245,7 +257,7 @@ func NewConsulProviderWithSourceID(ctx context.Context, worker worker.Worker, pu
 		return nil, sourceErr
 	}
 	var cf ConsulClientFactory
-	if cf, err = NeweClientFacotorySimple(addrs); err != nil {
+	if cf, err = NewClientFactoryWithOptions(addrs, source.clientOptions(), logger); err != nil {
 		return nil, err
 	}
 	var monitor Monitor

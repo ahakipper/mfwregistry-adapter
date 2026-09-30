@@ -814,7 +814,24 @@ func initializeProvidersWithDeps(ctx context.Context, w worker.Worker, cfg infra
 			}
 			providerSources := make([]consul2.ConsulSource, 0, len(sources))
 			for _, source := range sources {
-				providerSources = append(providerSources, consul2.ConsulSource{ID: source.ID, Addresses: append([]string(nil), source.Addresses...)})
+				providerSources = append(providerSources, consul2.ConsulSource{
+					ID:                    source.ID,
+					Addresses:             append([]string(nil), source.Addresses...),
+					Token:                 source.Token,
+					TokenFile:             source.TokenFile,
+					TLSCAFile:             source.TLSCAFile,
+					TLSCertFile:           source.TLSCertFile,
+					TLSKeyFile:            source.TLSKeyFile,
+					TLSServerName:         source.TLSServerName,
+					TLSInsecureSkipVerify: source.TLSInsecureSkipVerify,
+					Datacenter:            source.Datacenter,
+					Namespace:             source.Namespace,
+					CAFile:                source.CAFile,
+					CertFile:              source.CertFile,
+					KeyFile:               source.KeyFile,
+					ServerName:            source.ServerName,
+					InsecureSkipVerify:    source.InsecureSkipVerify,
+				})
 			}
 			consulProviders, providerErr := consul2.NewConsulProvidersWithSources(ctx, w, cfg.PushAllInterval, providerSources, logger, notifier)
 			if providerErr != nil {

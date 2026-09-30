@@ -20,8 +20,9 @@ Healthy empty state requires three independent confirmations; a provider-owned
 or shutdown, and guarded by the provider lock plus lifecycle state.
 
 The remaining P1/P2 work is still open: Consul-to-Nacos watch latency
-percentiles, real Consul plus Nacos 3 qualification, source metrics, and
-Consul connection security settings. Blocking
+percentiles and real Consul plus Nacos 3 qualification. Source metrics and
+Consul connection security configuration are implemented; live credential/TLS
+qualification remains open. Blocking
 query edge handling is closed and pushed; this status is still an
 implementation checkpoint, not a production-readiness claim.
 
@@ -84,6 +85,12 @@ source IDs and bounded outcomes; the provider does not synthesize a
 watch-to-sync duration without an actual watch timestamp. End-to-end latency
 percentiles and real Nacos 3 qualification remain open because they require a
 live source and Nacos observation boundary.
+
+Stage 8 adds source-scoped Consul Token/TokenFile, TLS, datacenter, and
+namespace options. Every endpoint receives a fresh API config; secrets stay
+out of logs and metric labels, and the legacy constructor remains compatible.
+The remaining security item is live TLS/ACL qualification against a real
+Consul deployment, not a missing configuration path.
 
 The repository release gate was rerun on 2026-10-01 after these changes:
 `go test ./... -count=1`, `go vet ./...`, and `make test-all` all passed. The
@@ -195,8 +202,9 @@ single-source while embedded configuration supports multiple descriptors.
 
 ### P2 findings
 
-- Consul ACL token, TLS CA, server name, datacenter, namespace, and partition
-  settings are not exposed through the current provider configuration.
+- Consul ACL token, TLS CA, server name, datacenter, and namespace settings are
+  now exposed per source; live ACL/TLS qualification and Consul Enterprise
+  partition behavior remain deployment evidence gaps.
 - Blocking-query index rollback, zero-index sanity, and rapid-change rate
   limiting are closed in the working tree; the real Consul latency and load
   qualification remains open.

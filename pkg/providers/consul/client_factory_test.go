@@ -38,6 +38,33 @@ func TestNewClientFactoryRejectsNoUsableAddresses(t *testing.T) {
 	}
 }
 
+func TestNewClientFactoryWithOptionsAppliesSecurityAndTenancy(t *testing.T) {
+	factory, err := NewClientFactoryWithOptions([]string{"consul.example:8501"}, ConsulClientOptions{
+		Token:                 "secret-token",
+		TokenFile:             "/run/secrets/consul-token",
+		TLSCAFile:             "/etc/consul/ca.pem",
+		TLSCertFile:           "/etc/consul/client.pem",
+		TLSKeyFile:            "/etc/consul/client.key",
+		TLSServerName:         "consul.example",
+		TLSInsecureSkipVerify: true,
+		Datacenter:            "dc-prod",
+		Namespace:             "payments",
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewClientFactoryWithOptions() error = %v", err)
+	}
+	config := factory.apiConfig(factory.addrs[0])
+	if config.Token != "secret-token" || config.TokenFile != "/run/secrets/consul-token" {
+		t.Fatalf("auth config did not preserve token and token-file fields")
+	}
+	if config.Datacenter != "dc-prod" || config.Namespace != "payments" {
+		t.Fatalf("tenancy config = datacenter %q/namespace %q", config.Datacenter, config.Namespace)
+	}
+	if config.TLSConfig.CAFile != "/etc/consul/ca.pem" || config.TLSConfig.CertFile != "/etc/consul/client.pem" || config.TLSConfig.KeyFile != "/etc/consul/client.key" || config.TLSConfig.Address != "consul.example" || !config.TLSConfig.InsecureSkipVerify {
+		t.Fatalf("TLS config = %+v", config.TLSConfig)
+	}
+}
+
 func TestNewClientFactorySkipsBlankAddressesAndTrimsValidAddress(t *testing.T) {
 	server := consulmock.Start()
 	defer server.Close()

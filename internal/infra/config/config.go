@@ -16,12 +16,30 @@ import (
 )
 
 // ConsulSourceConfig is the configuration descriptor for one logical Consul
-// catalog. It currently carries only the fields the provider can use; ACL/TLS
-// and other security options are an additive extension point for a later
-// provider contract.
+// catalog. Authentication, TLS and tenancy fields are source-scoped and are
+// copied into the provider descriptor without being logged or exposed as
+// metrics labels.
 type ConsulSourceConfig struct {
 	ID        string
 	Addresses []string
+
+	Token                 string
+	TokenFile             string
+	TLSCAFile             string
+	TLSCertFile           string
+	TLSKeyFile            string
+	TLSServerName         string
+	TLSInsecureSkipVerify bool
+	Datacenter            string
+	Namespace             string
+
+	// Short aliases keep descriptor construction ergonomic. The TLS-prefixed
+	// fields above are canonical when both forms are supplied.
+	CAFile             string
+	CertFile           string
+	KeyFile            string
+	ServerName         string
+	InsecureSkipVerify bool
 }
 
 // ConsulSource is retained as a short API spelling for callers that already
@@ -382,7 +400,24 @@ func normalizeConsulSources(sources []ConsulSource) ([]ConsulSource, error) {
 			}
 			seenIDs[id] = struct{}{}
 		}
-		resolved = append(resolved, ConsulSource{ID: id, Addresses: addresses})
+		resolved = append(resolved, ConsulSource{
+			ID:                    id,
+			Addresses:             addresses,
+			Token:                 source.Token,
+			TokenFile:             source.TokenFile,
+			TLSCAFile:             source.TLSCAFile,
+			TLSCertFile:           source.TLSCertFile,
+			TLSKeyFile:            source.TLSKeyFile,
+			TLSServerName:         source.TLSServerName,
+			TLSInsecureSkipVerify: source.TLSInsecureSkipVerify,
+			Datacenter:            source.Datacenter,
+			Namespace:             source.Namespace,
+			CAFile:                source.CAFile,
+			CertFile:              source.CertFile,
+			KeyFile:               source.KeyFile,
+			ServerName:            source.ServerName,
+			InsecureSkipVerify:    source.InsecureSkipVerify,
+		})
 	}
 	return resolved, nil
 }

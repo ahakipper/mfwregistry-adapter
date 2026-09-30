@@ -15,14 +15,50 @@ type ConsulClientFactory interface {
 	ConsulClientFactory() (*api.Client, error)
 }
 
+// ConsulClientOptions contains the authentication, transport and tenancy
+// settings applied to every client created by a ClientFactorySimple. The
+// nested TLSConfig mirrors the Consul API type; the flattened TLS fields are
+// provided for descriptor callers that do not otherwise depend on the Consul
+// API package. When both forms set a value, the flattened field wins.
+//
+// Token and TokenFile are intentionally retained only in memory. They are not
+// included in probe errors, logs, metrics, or other diagnostic strings.
+type ConsulClientOptions struct {
+	Token     string
+	TokenFile string
+
+	TLSConfig             api.TLSConfig
+	TLSCAFile             string
+	TLSCertFile           string
+	TLSKeyFile            string
+	TLSServerName         string
+	TLSInsecureSkipVerify bool
+
+	Datacenter string
+	Namespace  string
+}
+
+// ClientFactoryOptions is retained as an alias for callers that used the
+// generic factory terminology before ConsulClientOptions was named.
+type ClientFactoryOptions = ConsulClientOptions
+
 type ClientFactorySimple struct {
 	addrs   []string
 	clients map[string]*api.Client
 	logger  ports.Logger
+	options ConsulClientOptions
 	mu      sync.RWMutex
 }
 
 func NewClientFactory(addrs []string, logger ports.Logger) (*ClientFactorySimple, error) {
+	return NewClientFactoryWithOptions(addrs, ConsulClientOptions{}, logger)
+}
+
+// NewClientFactoryWithOptions constructs a client factory with the supplied
+// Consul API options. A fresh api.Config is derived for each address so that
+// each client has the same authentication, TLS and tenancy settings and no
+// client can accidentally inherit a mutable config from another address.
+func NewClientFactoryWithOptions(addrs []string, options ConsulClientOptions, logger ports.Logger) (*ClientFactorySimple, error) {
 	usableAddrs := make([]string, 0, len(addrs))
 	seen := make(map[string]struct{}, len(addrs))
 	for _, addr := range addrs {
@@ -47,7 +83,14 @@ func NewClientFactory(addrs []string, logger ports.Logger) (*ClientFactorySimple
 		addrs:   usableAddrs,
 		clients: make(map[string]*api.Client),
 		logger:  logger,
+		options: normalizeClientOptions(options),
 	}, nil
+}
+
+// NewClientFactoryWithConfig is a descriptive compatibility spelling for
+// callers that prefer to call the option bundle a config.
+func NewClientFactoryWithConfig(addrs []string, options ConsulClientOptions, logger ports.Logger) (*ClientFactorySimple, error) {
+	return NewClientFactoryWithOptions(addrs, options, logger)
 }
 
 // NeweClientFacotorySimple is deprecated. Use NewClientFactory instead.
@@ -82,8 +125,7 @@ func (cfs *ClientFactorySimple) ConsulClientFactory() (*api.Client, error) {
 		}
 		attempted[addr] = struct{}{}
 
-		config := api.DefaultConfig()
-		config.Address = addr
+		config := cfs.apiConfig(addr)
 
 		client, err := api.NewClient(config)
 		if err != nil {
@@ -115,6 +157,50 @@ func (cfs *ClientFactorySimple) ConsulClientFactory() (*api.Client, error) {
 		return nil, errors.New("no valid Consul client found")
 	}
 	return nil, &clientProbeAggregateError{failures: failures}
+}
+
+func normalizeClientOptions(options ConsulClientOptions) ConsulClientOptions {
+	// Keep the option value immutable from the caller's perspective. TLSConfig
+	// currently contains slices only for PEM values, so copy those slices when
+	// retaining the factory option.
+	if options.TLSConfig.CAPem != nil {
+		options.TLSConfig.CAPem = append([]byte(nil), options.TLSConfig.CAPem...)
+	}
+	if options.TLSConfig.CertPEM != nil {
+		options.TLSConfig.CertPEM = append([]byte(nil), options.TLSConfig.CertPEM...)
+	}
+	if options.TLSConfig.KeyPEM != nil {
+		options.TLSConfig.KeyPEM = append([]byte(nil), options.TLSConfig.KeyPEM...)
+	}
+	return options
+}
+
+// apiConfig builds a fresh Consul API config for one endpoint. It deliberately
+// does not log or otherwise expose any credential fields.
+func (cfs *ClientFactorySimple) apiConfig(addr string) *api.Config {
+	config := api.DefaultConfig()
+	config.Address = addr
+	config.Token = cfs.options.Token
+	config.TokenFile = cfs.options.TokenFile
+	config.Datacenter = cfs.options.Datacenter
+	config.Namespace = cfs.options.Namespace
+	config.TLSConfig = cfs.options.TLSConfig
+	if cfs.options.TLSCAFile != "" {
+		config.TLSConfig.CAFile = cfs.options.TLSCAFile
+	}
+	if cfs.options.TLSCertFile != "" {
+		config.TLSConfig.CertFile = cfs.options.TLSCertFile
+	}
+	if cfs.options.TLSKeyFile != "" {
+		config.TLSConfig.KeyFile = cfs.options.TLSKeyFile
+	}
+	if cfs.options.TLSServerName != "" {
+		config.TLSConfig.Address = cfs.options.TLSServerName
+	}
+	if cfs.options.TLSInsecureSkipVerify {
+		config.TLSConfig.InsecureSkipVerify = true
+	}
+	return config
 }
 
 type clientProbeAggregateError struct {
