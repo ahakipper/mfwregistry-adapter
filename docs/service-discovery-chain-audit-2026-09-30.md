@@ -76,6 +76,13 @@ found Docker and kwokctl binaries on arm64 but no local Nacos image and no
 active KWOK cluster, so the real Stage 5 run is recorded as NOT VERIFIED rather
 than started with an incomplete fixture.
 
+That fixture has since been provisioned for a bounded smoke. The
+[post-remediation smoke report](evidence/nacos3-kwok-p1-remediation-smoke-2026-09-30.md)
+records a real Nacos 3 ARM64 + KWOK run with 7/7 exact ticks, 2/2 mutation
+correlations, zero drops/errors, Crash/Recovery samples, exact final snapshot,
+and successful cleanup. It is a smoke PASS only; the 1,000-Pod sustained gate
+remains open.
+
 ## 3. End-to-end chain review
 
 ```text
