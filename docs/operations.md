@@ -4,7 +4,7 @@ Operational reference for building, running, monitoring and troubleshooting
 spotter. See [architecture.md](architecture.md) for design background and
 [data-model.md](data-model.md) for the pushed data model.
 
-## Current release status (2026-09-30, P1 remediation in progress)
+## Current release status (2026-09-30, P1 code and local runtime gates complete)
 
 - The supported Nacos target is `nacos/nacos-server:v3.2.4-slim` on
   `linux/arm64`. The historical Nacos 2.1.0 scratch records below are
@@ -30,6 +30,14 @@ spotter. See [architecture.md](architecture.md) for design background and
   `--nacos-health-policy=verified` only when composition injects an approved
   verifier; without one, startup fails before naming readiness and business
   writes. `admin-managed` remains a separate injected-facade mode.
+- The current Sink reconstructs source ownership from the Nacos catalog after a
+  process restart before accepting source-aware writes. A catalog read failure
+  or ambiguous Spotter-owned identity fails closed. Batch metrics expose
+  attempted/succeeded/skipped/transient-failed/permanent-failed items and
+  prune-skipped scopes.
+- The post-closure local runtime evidence is recorded in
+  [the P1 closure report](evidence/nacos3-kwok-p1-closure-runtime-2026-09-30.md):
+  79/79 exact 1,000-Pod ticks and a final-HEAD smoke with clean teardown.
 - Real Nacos deployment HA, multi-node failover, TLS/auth policy, namespace
   authorization, and leaderless recovery remain outside this Spotter release
   scope.

@@ -138,3 +138,18 @@ if a later implementation is rolled back.
 | F3 health policy | verified mode fails closed without readback; no hidden HTTP | verifier ordering test and deployment attestation/readback record |
 | F4 batch failure | failed scopes preserved; successful scopes prune; retry metadata intact | permanent/transient fault-injection matrix and `make test-all` |
 
+## Execution status
+
+| Stage | Status | Evidence |
+| --- | --- | --- |
+| Stage 0 baseline and ledger | COMPLETE | `ba4fabb`, pushed |
+| Stage 1 restart-safe source ownership | CODE COMPLETE | `0ca4c83`; restart regression, focused/race/full tests passed |
+| Stage 2 metadata envelope qualification | CODE COMPLETE | `a2ac038`; exact UTF-16 boundary, Unicode, high-entropy, and fuzz tests passed |
+| Stage 3 health-policy contract | CODE COMPLETE / DEPLOYMENT VERIFIER OPEN | `ef31724`; explicit startup evidence labels, verified-mode fail-closed tests, and operations contract |
+| Stage 4 batch failure closure | CODE COMPLETE | `deda80c`, `0ba6610`; outcome metrics, all-branch permanent classification, mixed-failure recovery tests, race/full gates passed |
+| Stage 5 runtime qualification | PASS / BOUNDED DECISIONS OPEN | `nacos3-kwok-p1-closure-runtime-2026-09-30.md`; post-closure 20-minute Nacos 3 ARM64 + KWOK run passed 79/79 exact ticks at 1,000 Pods, and final HEAD smoke passed 7/7 exact ticks with clean teardown |
+
+The remaining open decisions are intentionally bounded: a source-qualified
+Nacos wire mapping requires consumer compatibility approval, and a real
+deployment must provide the approved verifier if it wants `verified` health
+policy rather than the default deployment attestation.

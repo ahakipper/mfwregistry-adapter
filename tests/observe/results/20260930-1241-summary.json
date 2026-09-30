@@ -1,0 +1,311 @@
+{
+  "stamp": "20260930-1241",
+  "duration": "20m0s",
+  "scale": 1000,
+  "services": 20,
+  "churnRatePctPerMin": 5,
+  "obsBound": "1m0s",
+  "pushIntervalSecs": 60,
+  "reconcileSource": "nacos",
+  "ticks": 79,
+  "consistent": 79,
+  "divergent": 0,
+  "obserr": 0,
+  "consistencyRatio": 1,
+  "exactEqualTicks": 79,
+  "transitionalTicks": 0,
+  "steadyTicks": 36,
+  "steadyExactTicks": 36,
+  "spotterEqualTicks": 79,
+  "spotterMismatchTicks": 0,
+  "snapshotAttempts": 140,
+  "unstableSnapshotAttempts": 61,
+  "obserrRatio": 0,
+  "maxObserrStreak": 0,
+  "ticksSourceGeBase": 79,
+  "ticksSourceGeBaseRatio": 1,
+  "minSourceCount": 1000,
+  "finalSourceCount": 1000,
+  "finalSnapshotExact": true,
+  "productDivergentTicks": 0,
+  "maxHeal": "0s",
+  "maxInFlight": 0,
+  "maxRetryDepth": 0,
+  "maxRobotDepth": 0,
+  "droppedTotal": 0,
+  "drainedAtEnd": true,
+  "latency": {
+    "p50": 0.01,
+    "p90": 0.025,
+    "p95": 0.025,
+    "p99": 0.05,
+    "count": 4204
+  },
+  "watch": {
+    "subscriptionsWanted": 20,
+    "subscriptionsStarted": 20,
+    "k8sEvents": 13050,
+    "spotterEvents": 28582,
+    "nacosEvents": 4049,
+    "mutations": 3268,
+    "correlated": 3268,
+    "missing": 0,
+    "byOperation": {
+      "crash": {
+        "apiToK8s": {
+          "samples": 1,
+          "p50": 0.152344375,
+          "p90": 0.152344375,
+          "p95": 0.152344375,
+          "p99": 0.152344375,
+          "max": 0.152344375
+        },
+        "apiToSpotter": {
+          "samples": 1,
+          "p50": 0.152672,
+          "p90": 0.152672,
+          "p95": 0.152672,
+          "p99": 0.152672,
+          "max": 0.152672
+        },
+        "spotterProviderTriggerToWorker": {
+          "samples": 1,
+          "p50": 0.000136,
+          "p90": 0.000136,
+          "p95": 0.000136,
+          "p99": 0.000136,
+          "max": 0.000136
+        },
+        "spotterToNacos": {
+          "samples": 1,
+          "p50": 0.528896,
+          "p90": 0.528896,
+          "p95": 0.528896,
+          "p99": 0.528896,
+          "max": 0.528896
+        },
+        "k8sWatchToNacos": {
+          "samples": 1,
+          "p50": 0.52921925,
+          "p90": 0.52921925,
+          "p95": 0.52921925,
+          "p99": 0.52921925,
+          "max": 0.52921925
+        },
+        "apiToNacos": {
+          "samples": 1,
+          "p50": 0.681563625,
+          "p90": 0.681563625,
+          "p95": 0.681563625,
+          "p99": 0.681563625,
+          "max": 0.681563625
+        }
+      },
+      "create": {
+        "apiToK8s": {
+          "samples": 1633,
+          "p50": 3.150316791,
+          "p90": 15.821132333,
+          "p95": 18.217723958,
+          "p99": 20.022909667,
+          "max": 20.42742675
+        },
+        "apiToSpotter": {
+          "samples": 1633,
+          "p50": 3.150644,
+          "p90": 15.821334,
+          "p95": 18.218114,
+          "p99": 20.023246,
+          "max": 20.427869
+        },
+        "spotterProviderTriggerToWorker": {
+          "samples": 1633,
+          "p50": 0.00017,
+          "p90": 0.000327,
+          "p95": 0.000501,
+          "p99": 0.001258,
+          "max": 0.005743
+        },
+        "spotterToNacos": {
+          "samples": 1633,
+          "p50": 0.571981,
+          "p90": 0.605914,
+          "p95": 0.61217,
+          "p99": 0.635871,
+          "max": 1.542797
+        },
+        "k8sWatchToNacos": {
+          "samples": 1633,
+          "p50": 0.572288916,
+          "p90": 0.606094042,
+          "p95": 0.612509542,
+          "p99": 0.63901225,
+          "max": 1.5428654590000002
+        },
+        "apiToNacos": {
+          "samples": 1633,
+          "p50": 3.720487,
+          "p90": 16.383000792,
+          "p95": 18.783181084,
+          "p99": 20.611707958,
+          "max": 21.021127125
+        }
+      },
+      "delete": {
+        "apiToK8s": {
+          "samples": 1633,
+          "p50": 2.805595875,
+          "p90": 14.426350417,
+          "p95": 16.833247083,
+          "p99": 19.424904042,
+          "max": 20.423897375
+        },
+        "apiToSpotter": {
+          "samples": 1633,
+          "p50": 2.794613,
+          "p90": 14.409926,
+          "p95": 16.816541,
+          "p99": 19.402172,
+          "max": 20.41478
+        },
+        "spotterProviderTriggerToWorker": {
+          "samples": 1633,
+          "p50": 0.00028,
+          "p90": 0.000493,
+          "p95": 0.000759,
+          "p99": 0.001568,
+          "max": 0.011922
+        },
+        "spotterToNacos": {
+          "samples": 1633,
+          "p50": 0.561485,
+          "p90": 0.607589,
+          "p95": 0.615022,
+          "p99": 0.649624,
+          "max": 1.5674299999999999
+        },
+        "k8sWatchToNacos": {
+          "samples": 1633,
+          "p50": 0.548873,
+          "p90": 0.593247417,
+          "p95": 0.5992815,
+          "p99": 0.6172665,
+          "max": 1.559172
+        },
+        "apiToNacos": {
+          "samples": 1633,
+          "p50": 3.3183703749999998,
+          "p90": 14.986435875,
+          "p95": 17.412858208,
+          "p99": 19.999187833,
+          "max": 21.011524667
+        }
+      },
+      "recover": {
+        "apiToK8s": {
+          "samples": 1,
+          "p50": 0.035590458,
+          "p90": 0.035590458,
+          "p95": 0.035590458,
+          "p99": 0.035590458,
+          "max": 0.035590458
+        },
+        "apiToSpotter": {
+          "samples": 1,
+          "p50": 0.040281,
+          "p90": 0.040281,
+          "p95": 0.040281,
+          "p99": 0.040281,
+          "max": 0.040281
+        },
+        "spotterProviderTriggerToWorker": {
+          "samples": 1,
+          "p50": 0.000666,
+          "p90": 0.000666,
+          "p95": 0.000666,
+          "p99": 0.000666,
+          "max": 0.000666
+        },
+        "spotterToNacos": {
+          "samples": 1,
+          "p50": 0.565155,
+          "p90": 0.565155,
+          "p95": 0.565155,
+          "p99": 0.565155,
+          "max": 0.565155
+        },
+        "k8sWatchToNacos": {
+          "samples": 1,
+          "p50": 0.569835292,
+          "p90": 0.569835292,
+          "p95": 0.569835292,
+          "p99": 0.569835292,
+          "max": 0.569835292
+        },
+        "apiToNacos": {
+          "samples": 1,
+          "p50": 0.60542575,
+          "p90": 0.60542575,
+          "p95": 0.60542575,
+          "p99": 0.60542575,
+          "max": 0.60542575
+        }
+      }
+    },
+    "eventsFile": "20260930-1241-events.jsonl"
+  },
+  "churnCreates": 1633,
+  "churnDeletes": 1633,
+  "churnErrors": 0,
+  "bursts": [
+    {
+      "name": "storm-100",
+      "size": 100,
+      "createIssued": "2026-09-30T12:46:18.769021+08:00",
+      "convergedUp": "2026-09-30T12:46:39.763406+08:00",
+      "upConvergence": "20.994236417s",
+      "upMaxPerItem": "20.994236417s",
+      "deleteIssued": "2026-09-30T12:47:49.170079+08:00",
+      "convergedDown": "2026-09-30T12:48:08.344179+08:00",
+      "downConvergence": "19.173964542s",
+      "downMaxPerItem": "19.173964542s"
+    },
+    {
+      "name": "batch-200@25%",
+      "size": 200,
+      "createIssued": "2026-09-30T12:50:18.568911+08:00",
+      "convergedUp": "2026-09-30T12:50:59.919904+08:00",
+      "upConvergence": "41.3507005s",
+      "upMaxPerItem": "21.003737958s",
+      "deleteIssued": "2026-09-30T12:52:09.376991+08:00",
+      "convergedDown": "2026-09-30T12:52:48.585055+08:00",
+      "downConvergence": "39.207786375s",
+      "downMaxPerItem": "20.995676125s"
+    },
+    {
+      "name": "batch-200@50%",
+      "size": 200,
+      "createIssued": "2026-09-30T12:55:18.563342+08:00",
+      "convergedUp": "2026-09-30T12:55:59.978169+08:00",
+      "upConvergence": "41.414539083s",
+      "upMaxPerItem": "21.009061791s",
+      "deleteIssued": "2026-09-30T12:57:09.377229+08:00",
+      "convergedDown": "2026-09-30T12:57:48.513563+08:00",
+      "downConvergence": "39.136059125s",
+      "downMaxPerItem": "20.927127958s"
+    },
+    {
+      "name": "batch-200@75%",
+      "size": 200,
+      "createIssued": "2026-09-30T13:00:18.168569+08:00",
+      "convergedUp": "2026-09-30T13:00:59.599052+08:00",
+      "upConvergence": "41.430192s",
+      "upMaxPerItem": "21.021127125s",
+      "deleteIssued": "2026-09-30T13:02:08.977883+08:00",
+      "convergedDown": "2026-09-30T13:02:48.198488+08:00",
+      "downConvergence": "39.220329084s",
+      "downMaxPerItem": "21.011524667s"
+    }
+  ],
+  "pass": true
+}

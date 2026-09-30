@@ -23,6 +23,33 @@ diagnostics are closed in code or evidence. Atlas wire compatibility and
 AppCenter remain explicitly excluded, and Consul equal-scale observation
 remains an accepted non-goal.
 
+### Closure addendum — 2026-09-30
+
+The four P1 implementation stages are now code-complete on current HEAD
+`0ba6610`:
+
+- F1 has restart-safe ownership recovery. Before the first source-aware
+  mutation in a service/cluster scope, the Sink reads the Nacos catalog and
+  reconstructs ownership from canonical source metadata; read failure or an
+  ambiguous owned record fails closed. The existing `k8s`/`ecs` wire names are
+  unchanged. (`0ca4c83`)
+- F2 has exact UTF-16 Nacos metadata-boundary, Unicode, high-entropy, and fuzz
+  coverage. (`a2ac038`)
+- F3 now labels startup evidence as deployment attestation, approved admin
+  facade, or control-plane readback. `verified` still requires an injected
+  verifier and fails closed; no raw HTTP was added to the product path.
+  (`ef31724`)
+- F4 now classifies all branches of aggregate errors, retains mixed
+  permanent/transient full retries, and reports batch outcomes plus skipped
+  prune scopes. (`deda80c`, `0ba6610`)
+
+The post-closure runtime Observe qualification is now PASS: the 20-minute
+1,000-Pod report records 79/79 exact ticks, 3,268/3,268 mutation correlations,
+zero divergence/errors/drops, and clean teardown; the final HEAD smoke records
+7/7 exact ticks and clean teardown. The only non-code decisions remain the
+source-qualified wire migration approval and deployment supply of a real
+health-policy verifier.
+
 ## 2. Evidence boundary
 
 ### Current static evidence
@@ -170,8 +197,10 @@ multi-cluster boundary, not a test-only identity mismatch.
 
 The compatibility-safe guard now rejects the colliding full snapshot and
 tracks successful/in-flight owners for incremental and application-batch
-writes. It prevents silent overwrite but intentionally does not pretend that
-two same-address sources can coexist. Required follow-up:
+writes. Since `0ca4c83`, a process restart no longer empties that protection:
+the first source-aware write recovers ownership from the remote canonical
+metadata before mutation. It prevents silent overwrite but intentionally does
+not pretend that two same-address sources can coexist. Required follow-up:
 
 - choose and document a stable mapping such as a source-cluster-qualified
   Nacos cluster/group, or prove a deployment invariant that Pod IP/port tuples
@@ -224,10 +253,12 @@ scopes untouched, and the worker retains the structured full operation for its
 existing permanent/transient retry decision. A single malformed/over-limit
 item no longer suppresses cleanup for unrelated applications.
 
-The remaining follow-up is runtime qualification and metrics for partial
-application: distinguish attempted, successful, transient-failed,
-permanent-failed, prune-skipped, and retried scopes, and add a real Nacos
-failure-injection run for one permanent item plus healthy siblings.
+The sink now exposes attempted, successful, skipped, transient-failed,
+permanent-failed, prune-skipped, and retried counts. The worker also retains a
+full operation whenever an aggregate contains any transient branch, even if
+another branch is permanent. Focused and race fault-injection tests cover one
+permanent item plus healthy siblings and mixed prune failures; real Nacos
+failure injection remains a runtime evidence item.
 
 ### F5 — Overflow recovery is bounded, not lossless under arbitrary bursts (P2)
 
