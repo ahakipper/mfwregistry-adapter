@@ -206,6 +206,12 @@ type Sink struct {
 	// map to one wire ID instead of allowing a last-write-wins overwrite.
 	wireOwners map[string]string
 	wireClaims map[string]string
+	// wireScanMu serializes the first catalog ownership read for each
+	// service/cluster scope. The in-memory owner ledger is intentionally not
+	// trusted across process restarts; the first write after a restart rebuilds
+	// it from Nacos before allowing a register or deregister.
+	wireScanMu  sync.Mutex
+	wireScanned map[clusterKeyOf]bool
 	// healthCheckDone records every (service, cluster) pair whose cluster
 	// configuration the sink has successfully applied — the UpdateCluster
 	// PUT that switches Nacos's own server-side health check off (see
@@ -370,6 +376,7 @@ func NewSinkWithConfig(config ClientConfig, logger ports.Logger) (*Sink, error) 
 		remembered:        map[clusterKeyOf]bool{},
 		wireOwners:        map[string]string{},
 		wireClaims:        map[string]string{},
+		wireScanned:       map[clusterKeyOf]bool{},
 		healthCheckDone:   map[clusterKeyOf]bool{},
 		healthCheckClaims: map[clusterKeyOf]bool{},
 		healthCheckWait:   map[clusterKeyOf]*healthCheckAttempt{},
@@ -430,6 +437,86 @@ func (s *Sink) validateWireIdentitySet(instances []*instance.Instance) error {
 		}
 	}
 	return nil
+}
+
+// recoverWireOwnership rebuilds the sink-local ownership ledger from the
+// remote catalog before the first mutation of a service/cluster scope. The
+// ledger alone is insufficient after a process restart: without this read a
+// new Spotter process could overwrite a different source that already owns
+// the same Nacos composite identity. Catalog read failures fail closed so a
+// transient Nacos outage cannot be mistaken for an empty scope.
+func (s *Sink) recoverWireOwnership(ins *instance.Instance) error {
+	if s == nil || s.client == nil || ins == nil || ins.Ip == "" {
+		return nil
+	}
+	// Legacy callers that never supplied source-aware identity cannot be
+	// distinguished after a restart; preserve their historical wire path and
+	// let the existing provider/instance fallback semantics apply. Kubernetes
+	// source conversion always supplies SourceKey/SourceCluster, so the
+	// restart-safe guard covers the production path without adding a catalog
+	// read to old compatibility fixtures.
+	if ins.SourceKey == "" && ins.SourceCluster == "" {
+		return nil
+	}
+	scope := clusterKeyOf{service: ins.AppCode, cluster: clusterOf(ins)}
+	s.wireScanMu.Lock()
+	defer s.wireScanMu.Unlock()
+	if s.wireScanned == nil {
+		s.wireScanned = map[clusterKeyOf]bool{}
+	}
+	if s.wireScanned[scope] {
+		return nil
+	}
+	hosts, err := s.client.ListCatalogInstances(scope.service, scope.cluster)
+	if err != nil && !isCatalogNotFound(err) {
+		return fmt.Errorf("nacos: recover wire ownership for %s/%s: %w", scope.service, scope.cluster, err)
+	}
+
+	owners := make(map[string]string, len(hosts))
+	for _, host := range hosts {
+		if host.Metadata["spotterOwner"] != metadataOwner {
+			continue
+		}
+		wireID := hostCompositeID(scope.service, s.groupName, host)
+		sourceID := sourceIdentityFromHost(scope.service, host)
+		if sourceID == "" {
+			// A Spotter-owned record with no recoverable source identity is
+			// unsafe to overwrite. Preserve the fail-closed behavior instead
+			// of guessing from a mutable Pod name.
+			sourceID = "<unknown-spotter-source>"
+		}
+		if previous := owners[wireID]; previous != "" && previous != sourceID {
+			return &WireIdentityCollisionError{CompositeID: wireID, Existing: previous, Incoming: sourceID}
+		}
+		owners[wireID] = sourceID
+	}
+
+	s.rememberedMu.Lock()
+	if s.wireOwners == nil {
+		s.wireOwners = map[string]string{}
+	}
+	for wireID, sourceID := range owners {
+		if previous := s.wireOwners[wireID]; previous != "" && previous != sourceID {
+			s.rememberedMu.Unlock()
+			return &WireIdentityCollisionError{CompositeID: wireID, Existing: previous, Incoming: sourceID}
+		}
+		s.wireOwners[wireID] = sourceID
+	}
+	s.wireScanned[scope] = true
+	s.rememberedMu.Unlock()
+	return nil
+}
+
+func sourceIdentityFromHost(service string, host Host) string {
+	decoded := reconstruct(service, host)
+	if decoded == nil || (decoded.SourceKey == "" && decoded.SourceCluster == "" && decoded.InstanceId == "") {
+		return ""
+	}
+	return instance.IdentityKey(decoded)
+}
+
+func hostCompositeID(service, group string, host Host) string {
+	return fmt.Sprintf("%s#%d#%s#%s@@%s", host.IP, host.Port, host.ClusterName, effectiveGroup(group), service)
 }
 
 // claimWireIdentity reserves a composite ID before a mutating write. Same
@@ -873,6 +960,9 @@ func (s *Sink) register(ins *instance.Instance) error {
 	if err := validateMetadataSize(metadata); err != nil {
 		return err
 	}
+	if err := s.recoverWireOwnership(ins); err != nil {
+		return err
+	}
 	releaseWireIdentity, err := s.claimWireIdentity(ins)
 	if err != nil {
 		return err
@@ -1059,6 +1149,9 @@ func (s *Sink) deregister(service, ip string, port int, cluster string) error {
 }
 
 func (s *Sink) deregisterInstance(ins *instance.Instance) error {
+	if err := s.recoverWireOwnership(ins); err != nil {
+		return err
+	}
 	wireID := s.compositeID(ins)
 	sourceID := instance.IdentityKey(ins)
 	s.rememberedMu.Lock()

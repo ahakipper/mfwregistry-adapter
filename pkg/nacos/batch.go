@@ -270,6 +270,12 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 							go func() {
 								defer wg.Done()
 								ins := validInstances[pos]
+								if ownershipErr := s.recoverWireOwnership(ins); ownershipErr != nil {
+									mu.Lock()
+									errs[validIndexes[pos]] = ownershipErr
+									mu.Unlock()
+									return
+								}
 								releaseWireIdentity, claimErr := s.claimWireIdentity(ins)
 								if claimErr != nil {
 									mu.Lock()

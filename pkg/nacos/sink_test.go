@@ -639,6 +639,52 @@ func TestBlackboxSinkRejectsIncrementalWireIdentityReuse(t *testing.T) {
 	}
 }
 
+func TestBlackboxSinkRejectsWireIdentityReuseAfterProcessRestart(t *testing.T) {
+	first, server := newSinkAt(t)
+	firstInstance := domainInstance("pod-a-hash", "pay-user", "10.0.0.1", 8080, "k8s", 1)
+	firstInstance.SourceCluster = "cluster-a"
+	firstInstance.SourceKey = "cluster-a/uid-a"
+	if err := first.Push(1, []*instance.Instance{firstInstance}); err != nil {
+		t.Fatalf("first Push() error = %v", err)
+	}
+
+	// A new Sink models a process restart: the in-memory wire-owner ledger is
+	// empty, but the remote Nacos catalog still contains the first source.
+	second, err := nacos.NewSinkWithConfig(nacos.ClientConfig{
+		ServerURL:     server.URL(),
+		TransportMode: nacos.TransportHTTPCompat,
+		HealthPolicy:  nacos.HealthPolicyDeploymentOwned,
+	}, &fakes.FakeLogger{})
+	if err != nil {
+		t.Fatalf("new restarted sink = %v", err)
+	}
+	defer second.Close()
+	secondInstance := domainInstance("pod-b-hash", "pay-user", "10.0.0.1", 8080, "k8s", 1)
+	secondInstance.SourceCluster = "cluster-b"
+	secondInstance.SourceKey = "cluster-b/uid-b"
+	registersBefore := 0
+	for _, request := range server.Requests() {
+		if request.Method == http.MethodPost && request.Path == "/nacos/v1/ns/instance" {
+			registersBefore++
+		}
+	}
+
+	err = second.Push(2, []*instance.Instance{secondInstance})
+	var collision *nacos.WireIdentityCollisionError
+	if !errors.As(err, &collision) {
+		t.Fatalf("restarted Push() error = %v, want WireIdentityCollisionError", err)
+	}
+	registersAfter := 0
+	for _, request := range server.Requests() {
+		if request.Method == http.MethodPost && request.Path == "/nacos/v1/ns/instance" {
+			registersAfter++
+		}
+	}
+	if registersAfter != registersBefore {
+		t.Fatalf("restarted collision issued register request: before=%d after=%d requests=%v", registersBefore, registersAfter, server.Requests())
+	}
+}
+
 func TestBlackboxSinkRejectsOversizedMetadataBeforeNacosMutation(t *testing.T) {
 	sink, server := newSinkAt(t)
 	item := domainInstance("large", "pay-user", "10.0.0.9", 8080, "k8s", instance.InstanceStatusOnline)
