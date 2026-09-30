@@ -26,7 +26,7 @@ remains an accepted non-goal.
 ### Closure addendum — 2026-09-30
 
 The four P1 implementation stages are now code-complete on current HEAD
-`0ba6610`:
+`9f2e798`:
 
 - F1 has restart-safe ownership recovery. Before the first source-aware
   mutation in a service/cluster scope, the Sink reads the Nacos catalog and
@@ -49,6 +49,21 @@ zero divergence/errors/drops, and clean teardown; the final HEAD smoke records
 7/7 exact ticks and clean teardown. The only non-code decisions remain the
 source-qualified wire migration approval and deployment supply of a real
 health-policy verifier.
+
+### Source-qualified identity correction — 2026-09-30
+
+The follow-up implementation now makes the source distinction explicit:
+`Provider` remains the source type, `Cluster` remains workload metadata, and
+`SourceCluster` becomes the stable input to the Nacos wire `clusterName`.
+Source-aware K8s instances therefore use distinct `k8s-*` wire scopes, while
+Consul instances carry a configured or deterministically derived logical source
+ID under the legacy `ecs` provider value. SDK `GetAll` enumerates all wire
+clusters and filters by canonical Provider; legacy HTTP compatibility retains
+its explicit old cluster-scoped behavior.
+
+This closes the previous same-type source conflation in code and tagged E2E
+coverage. Existing consumers and old Nacos records still need an explicit
+migration decision because the wire names change for source-aware instances.
 
 ## 2. Evidence boundary
 

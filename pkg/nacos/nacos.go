@@ -1198,6 +1198,10 @@ func clusterOf(ins *instance.Instance) string {
 	return DefaultCluster
 }
 
+// WireClusterName exposes the stable Nacos cluster projection to integration
+// fixtures and migration tooling without exposing the sink's internal ledger.
+func WireClusterName(ins *instance.Instance) string { return clusterOf(ins) }
+
 // sourceQualifiedClusterName is the stable Nacos wire projection of a logical
 // source cluster. Provider remains the instance type; SourceCluster carries
 // the actual K8s/Consul source identity. A short digest prevents two distinct

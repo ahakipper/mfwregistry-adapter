@@ -54,11 +54,11 @@ merging source clusters is not an acceptable rollback.
 ## Current execution status
 
 - Stage 0 contract: COMPLETE in this plan.
-- Stage 1 source data and source-qualified mapping: IMPLEMENTED in the current
-  working tree; focused tests cover K8s/Consul source identities and the
-  `cluster-name` business label.
-- Stage 2 authoritative SDK reads and source-aware prune: IMPLEMENTED; full
-  Nacos/provider tests are the next commit gate.
-- Stages 3–5 migration evidence and final runtime qualification: PENDING the
-  focused/race/full test gate and a fresh Nacos 3 smoke after this mapping
-  change.
+- Stage 1 source data and source-qualified mapping: COMPLETE; focused tests
+  cover K8s/Consul source identities and the `cluster-name` business label.
+- Stage 2 authoritative SDK reads and source-aware prune: COMPLETE; SDK,
+  provider, and legacy compatibility tests pass.
+- Stage 3 migration/regression coverage: COMPLETE; tagged E2E fixtures now
+  derive the expected source-qualified wire cluster rather than assuming
+  `k8s`/`ecs`.
+- Stage 4–5 final race/full gate and Nacos 3 smoke: IN PROGRESS.

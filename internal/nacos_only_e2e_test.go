@@ -98,6 +98,7 @@ func TestE2ENacosOnlyCompositionPublishesWithoutAtlas(t *testing.T) {
 		Status: instance.InstanceStatusOnline, Reversion: 42,
 		Label: map[string]string{"team": "discovery"}, Image: map[string]string{"app": "repo/pay:v1"},
 	}
+	wireCluster := nacos.WireClusterName(want)
 	captured.Handle(&worker.Event{
 		Trigger: time.Now().UnixNano(), Operate: worker.OperateTypeSyncAll,
 		Scope: "k8s", BatchID: worker.FullBatchID("k8s", []*instance.Instance{want}),
@@ -106,7 +107,7 @@ func TestE2ENacosOnlyCompositionPublishesWithoutAtlas(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		got := remote.Instances("pay-user", "k8s")
+		got := remote.Instances("pay-user", wireCluster)
 		if len(got) == 1 {
 			break
 		}
@@ -115,7 +116,7 @@ func TestE2ENacosOnlyCompositionPublishesWithoutAtlas(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	view, err := captured.GetAll([]int32{instance.InstanceStatusOnline}, "k8s")
+	view, err := captured.GetAll([]int32{instance.InstanceStatusOnline}, wireCluster)
 	if err != nil {
 		t.Fatalf("Nacos authoritative GetAll: %v", err)
 	}

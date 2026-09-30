@@ -192,11 +192,12 @@ func TestE2ENacosCanonicalFullFieldDriftRoundTrip(t *testing.T) {
 		Label: map[string]string{"team": "discovery", "zone": "a"}, Hostname: "pod-a",
 		Cpu: 2.5, Memory: 256, Disk: 10, Os: "linux", Image: map[string]string{"app": "repo/pay:v1"}, Idc: "idc-a",
 	}
+	wireCluster := nacos.WireClusterName(want)
 	if err := sink.Push(time.Now().UnixNano(), []*instance.Instance{want}); err != nil {
 		t.Fatalf("initial canonical push: %v", err)
 	}
 	read := func() *instance.Instance {
-		list, err := sink.GetAll([]int32{instance.InstanceStatusOnline}, "k8s")
+		list, err := sink.GetAll([]int32{instance.InstanceStatusOnline}, wireCluster)
 		if err != nil {
 			t.Fatalf("GetAll canonical view: %v", err)
 		}
@@ -209,7 +210,7 @@ func TestE2ENacosCanonicalFullFieldDriftRoundTrip(t *testing.T) {
 		t.Fatalf("initial round-trip lost fields: got=%s want=%s", instance.CanonicalPayload(got), instance.CanonicalPayload(want))
 	}
 
-	stored := server.Instances("pay-user", "k8s")
+	stored := server.Instances("pay-user", wireCluster)
 	if len(stored) != 1 {
 		t.Fatalf("stored hosts = %d, want 1", len(stored))
 	}
@@ -225,7 +226,7 @@ func TestE2ENacosCanonicalFullFieldDriftRoundTrip(t *testing.T) {
 		Enabled: stored[0].Enabled, Healthy: true, Ephemeral: stored[0].Ephemeral,
 		ClusterName: stored[0].ClusterName, ServiceName: stored[0].ServiceName,
 		Metadata: driftedMetadata,
-	}}, "DEFAULT_GROUP", "pay-user", "k8s")
+	}}, "DEFAULT_GROUP", "pay-user", wireCluster)
 	if got := read(); !instance.DiffNacosReconcile(want, got) {
 		t.Fatal("equal-Reversion canonical field drift was not detected")
 	}

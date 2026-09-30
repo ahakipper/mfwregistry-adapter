@@ -5,11 +5,13 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/consul/api"
 
+	"spotter/internal/domain/instance"
 	"spotter/internal/testkit/consulmock"
 	"spotter/internal/testkit/discoverymock"
 	"spotter/internal/testkit/fakes"
@@ -113,7 +115,7 @@ func TestE2EConsulFanoutPipelineRealTick(t *testing.T) {
 	// nothing is hand-fed through w.Handle. The provider constructor assigns the
 	// interval argument to the provider's interval field (consul.go, since
 	// b3578b6), so the tick runs at 1s inside the bounded test.
-	provider, err := consul.NewConsulProviderWithDeps(ctx, w, 1, []string{consulServer.Address()}, &fakes.FakeLogger{}, &fakes.FakeNotifier{})
+	provider, err := consul.NewConsulProviderWithSourceID(ctx, w, 1, []string{consulServer.Address()}, "consul-test", &fakes.FakeLogger{}, &fakes.FakeNotifier{})
 	if err != nil {
 		t.Fatalf("consul provider constructor error = %v", err)
 	}
@@ -132,7 +134,8 @@ func TestE2EConsulFanoutPipelineRealTick(t *testing.T) {
 	// registered under the ecs cluster of the payments service with the
 	// plan §7.3 mapping (provider -> clusterName, DEFAULT_GROUP, port from
 	// Ports[0], the metadata round-trip fields).
-	awaitNacosInstance(t, nacosServer)
+	wireCluster := nacos.WireClusterName(&instance.Instance{Provider: "ecs", SourceCluster: "consul-test"})
+	awaitNacosInstance(t, nacosServer, wireCluster)
 
 	// Out-of-band drift on the Nacos side: a stale instance the sink never
 	// pushed. The production 1s tick's SyncAll event (§7.4) runs the PushAll
@@ -140,16 +143,16 @@ func TestE2EConsulFanoutPipelineRealTick(t *testing.T) {
 	nacosServer.SetInstances([]nacosmock.Host{
 		{IP: "127.0.0.9", Port: 9999, Enabled: true, Ephemeral: false,
 			Metadata: map[string]string{"instanceId": "payments-ghost"}},
-	}, "DEFAULT_GROUP", "payments", "ecs")
+	}, "DEFAULT_GROUP", "payments", wireCluster)
 
 	// The real tick drives the prune: ProcessIntervalFullPush fires within
 	// 1s and its emitSyncAll -> worker.Handle(SyncAll) -> PushAll -> prune
 	// chain must converge within the full-push bound.
-	awaitNacosPrune(t, nacosServer)
+	awaitNacosPrune(t, nacosServer, wireCluster)
 
 	// The sink's own GetAll reconstructs the instance from Nacos state
 	// (metadata round-trip, provider cluster filter).
-	list, err := nacosSink.GetAll(nil, "ecs")
+	list, err := nacosSink.GetAll(nil, wireCluster)
 	if err != nil {
 		t.Fatalf("nacosSink.GetAll(nil, ecs) error = %v", err)
 	}
@@ -175,24 +178,25 @@ func TestE2EConsulFanoutPipelineRealTick(t *testing.T) {
 
 // awaitNacosInstance polls the nacosmock until the payments-1 instance is
 // registered under the ecs cluster, then asserts the field mapping.
-func awaitNacosInstance(t *testing.T, server *nacosmock.Server) {
+func awaitNacosInstance(t *testing.T, server *nacosmock.Server, wireCluster string) {
 	t.Helper()
 
 	deadline := time.Now().Add(8 * time.Second)
 	var instances []nacosmock.Instance
 	for time.Now().Before(deadline) {
-		instances = server.Instances("payments", "ecs")
+		instances = server.Instances("payments", wireCluster)
 		if len(instances) == 1 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	if len(instances) != 1 {
-		t.Fatalf("nacos payments/ecs instances = %d, want 1 (the fanned-out push)", len(instances))
+		t.Fatalf("nacos payments/%s instances = %d, want 1 (the fanned-out push)", wireCluster, len(instances))
 	}
 	stored := instances[0]
-	if stored.InstanceID != "127.0.0.1#8080#ecs#DEFAULT_GROUP@@payments" {
-		t.Errorf("composite id = %q, want the plan §7.3 mapping", stored.InstanceID)
+	wantID := fmt.Sprintf("127.0.0.1#8080#%s#DEFAULT_GROUP@@payments", wireCluster)
+	if stored.InstanceID != wantID {
+		t.Errorf("composite id = %q, want %s", stored.InstanceID, wantID)
 	}
 	if stored.Ephemeral {
 		t.Errorf("instance is ephemeral, want persistent (ephemeral=false)")
@@ -214,16 +218,16 @@ func awaitNacosInstance(t *testing.T, server *nacosmock.Server) {
 // awaitNacosPrune polls the nacosmock until the out-of-band drift instance
 // is pruned by the full-push SyncAll event, and the desired instance
 // survives the sweep.
-func awaitNacosPrune(t *testing.T, server *nacosmock.Server) {
+func awaitNacosPrune(t *testing.T, server *nacosmock.Server, wireCluster string) {
 	t.Helper()
 
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		instances := server.Instances("payments", "ecs")
+		instances := server.Instances("payments", wireCluster)
 		if len(instances) == 1 && instances[0].IP == "127.0.0.1" {
 			return // the ghost is gone, the desired instance survived
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("the drifted instance was not pruned within the full-push bound; instances = %+v", server.Instances("payments", "ecs"))
+	t.Fatalf("the drifted instance was not pruned within the full-push bound; instances = %+v", server.Instances("payments", wireCluster))
 }
