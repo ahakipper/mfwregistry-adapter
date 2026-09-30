@@ -525,7 +525,7 @@ func (s *Server) startProviders() error {
 		if group == "" {
 			group = nacos.DefaultGroup
 		}
-		s.logger.Infof("nacos sink registered at %s (persistent instances, group %s)", address, group)
+		s.logger.Infof("nacos sink registered at %s (persistent instances, group %s, health_policy=%s, health_policy_evidence=%s)", address, group, effectiveHealthPolicy, healthPolicyEvidence(effectiveHealthPolicy))
 	}
 	// NewFanoutSinkWithMetrics (not NewFanoutSink): the per-sink e2e
 	// decorator of dsca-2 §6 row 7 observes on the real recorder, so every
@@ -639,6 +639,17 @@ func (s *Server) startProviders() error {
 	cleanup()
 	s.clearStartup(generation, nil)
 	return err
+}
+
+func healthPolicyEvidence(policy nacos.HealthPolicy) string {
+	switch policy {
+	case nacos.HealthPolicyVerified:
+		return "control-plane-readback"
+	case nacos.HealthPolicyAdminManaged:
+		return "approved-admin-facade"
+	default:
+		return "deployment-attestation"
+	}
 }
 
 const (

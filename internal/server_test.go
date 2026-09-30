@@ -38,6 +38,22 @@ func (serverAdmin) UpdateHealthChecker(context.Context, string, string, string, 
 }
 func (serverAdmin) Close(context.Context) error { return nil }
 
+func TestHealthPolicyEvidenceLabelsDistinguishAttestationAndReadback(t *testing.T) {
+	cases := []struct {
+		policy nacos.HealthPolicy
+		want   string
+	}{
+		{policy: nacos.HealthPolicyDeploymentOwned, want: "deployment-attestation"},
+		{policy: nacos.HealthPolicyAdminManaged, want: "approved-admin-facade"},
+		{policy: nacos.HealthPolicyVerified, want: "control-plane-readback"},
+	}
+	for _, tc := range cases {
+		if got := healthPolicyEvidence(tc.policy); got != tc.want {
+			t.Errorf("healthPolicyEvidence(%q) = %q, want %q", tc.policy, got, tc.want)
+		}
+	}
+}
+
 func TestStartProvidersInvokesFreshNacosAdminFactoryForAdminManagedPolicy(t *testing.T) {
 	logger := zap.NewNop().Sugar()
 	calls := 0
