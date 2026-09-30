@@ -21,9 +21,9 @@ Healthy empty state requires three independent confirmations; a provider-owned
 or shutdown, and guarded by the provider lock plus lifecycle state.
 
 The remaining P1/P2 work is still open: Consul-to-Nacos watch latency
-percentiles and real Consul plus Nacos 3 qualification. Source metrics and
-Consul connection security configuration are implemented; live credential/TLS
-qualification remains open. Blocking
+percentiles and live qualification. Source metrics and Consul connection
+security configuration are implemented; the guarded real qualification entry
+point is present, while live credential/TLS/Nacos3 execution remains open. Blocking
 query edge handling is closed and pushed; this status is still an
 implementation checkpoint, not a production-readiness claim.
 
@@ -93,6 +93,15 @@ namespace options. Every endpoint receives a fresh API config; secrets stay
 out of logs and metric labels, and the legacy constructor remains compatible.
 The remaining security item is live TLS/ACL qualification against a real
 Consul deployment, not a missing configuration path.
+
+Stage 9 adds the guarded `consul_real` qualification test. With explicit
+Consul and Nacos scratch/write guards it drives real Consul Agent register,
+TTL health, deregister, the real provider, the DefaultWorker, and the official
+Nacos SDK, then reports create/delete/recovery P50/P90/P95/P99 and cleanup
+residual status. Without both real endpoints and write guards it skips as
+`NOT VERIFIED`; it does not turn mock or absent-environment results into a
+production pass. The current scenario covers create/delete/recovery; update
+and health-transition samples remain a follow-up coverage item.
 
 The repository release gate was rerun on 2026-10-01 after these changes:
 `go test ./... -count=1`, `go vet ./...`, and `make test-all` all passed. The

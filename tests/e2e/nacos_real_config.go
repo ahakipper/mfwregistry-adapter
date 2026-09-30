@@ -1,5 +1,5 @@
-//go:build nacos_real || nacos_sdk_eval || nacos_restart
-// +build nacos_real nacos_sdk_eval nacos_restart
+//go:build nacos_real || nacos_sdk_eval || nacos_restart || consul_real
+// +build nacos_real nacos_sdk_eval nacos_restart consul_real
 
 package e2e
 
@@ -57,10 +57,10 @@ func parseNacosRealConfig() (nacosRealConfig, error) {
 		}
 		u, err := url.Parse(address)
 		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-			return cfg, fmt.Errorf("invalid NACOS_SERVER address %q", address)
+			return cfg, errors.New("invalid NACOS_SERVER address: malformed URL or unsupported scheme")
 		}
 		if u.User != nil || len(u.RawQuery) != 0 {
-			return cfg, fmt.Errorf("NACOS_SERVER address %q must not contain credentials or query parameters", address)
+			return cfg, errors.New("NACOS_SERVER address must not contain credentials or query parameters")
 		}
 		if u.Scheme == "https" {
 			cfg.tls = true
