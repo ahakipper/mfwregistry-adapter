@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"spotter/internal/domain/instance"
+	spotternacos "spotter/pkg/nacos"
 	"spotter/pkg/providers"
 )
 
@@ -356,10 +357,11 @@ func expectedSourceEntry(pod sourcePod, enabled bool, status string) sourceEntry
 		if len(ins.Ports) > 0 && ins.Ports[0] != nil && ins.Ports[0].Port != 0 {
 			wirePort = int(ins.Ports[0].Port)
 		}
+		wireCluster := spotternacos.WireClusterName(ins)
 		return sourceEntry{
-			ID: ins.InstanceId, IP: ins.Ip, Port: wirePort, ClusterName: ins.Provider,
+			ID: ins.InstanceId, IP: ins.Ip, Port: wirePort, ClusterName: wireCluster,
 			ServiceName: ins.AppCode,
-			CompositeID: fmt.Sprintf("%s#%d#%s#%s@@%s", ins.Ip, wirePort, ins.Provider, group, ins.AppCode),
+			CompositeID: fmt.Sprintf("%s#%d#%s#%s@@%s", ins.Ip, wirePort, wireCluster, group, ins.AppCode),
 			Enabled:     ins.Enabled, Healthy: ins.Enabled, Ephemeral: false,
 			Status: strconv.FormatInt(int64(ins.Status), 10), Metadata: expectedMetadata(ins),
 		}

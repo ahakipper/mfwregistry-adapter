@@ -61,4 +61,7 @@ merging source clusters is not an acceptable rollback.
 - Stage 3 migration/regression coverage: COMPLETE; tagged E2E fixtures now
   derive the expected source-qualified wire cluster rather than assuming
   `k8s`/`ecs`.
-- Stage 4–5 final race/full gate and Nacos 3 smoke: IN PROGRESS.
+- Stage 4 final race/full gate: COMPLETE; `make test-all` and tagged E2E pass.
+- Stage 5 Nacos 3 smoke: COMPLETE; source-qualified 1-minute KWOK smoke passed
+  7/7 exact ticks with clean teardown. Evidence is recorded in
+  `docs/evidence/nacos3-source-qualified-smoke-2026-09-30.md`.

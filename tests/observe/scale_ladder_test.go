@@ -19,6 +19,7 @@ import (
 	domaininstance "spotter/internal/domain/instance"
 	"spotter/internal/testkit/discoverymock"
 	"spotter/internal/testkit/etcdmock"
+	spotternacos "spotter/pkg/nacos"
 )
 
 // ladderSample is one measured source mutation-to-exact-Nacos convergence
@@ -161,6 +162,7 @@ func TestObserveScaleLadder(t *testing.T) {
 
 	const appCode = "ladder-app-0"
 	driver := newChurnDriver(cfg.Kubeconfig, []string{appCode}, "ladder")
+	wireCluster := spotternacos.WireClusterName(&domaininstance.Instance{Provider: "k8s", SourceCluster: driver.sourceClusterID()})
 	if err := driver.ping(); err != nil {
 		t.Skipf("NOT VERIFIED: client-go K8s preflight: %v", err)
 	}
@@ -185,7 +187,7 @@ func TestObserveScaleLadder(t *testing.T) {
 	if err := waitForNacosSDKReadiness(cfg.NacosAddr, 10*time.Minute); err != nil {
 		t.Fatalf("Nacos SDK readiness: %v", err)
 	}
-	view := newNacosView(cfg.NacosAddr)
+	view := newNacosView(cfg.NacosAddr, wireCluster)
 	t.Cleanup(view.close)
 
 	etcd, err := etcdmock.Start()
@@ -217,7 +219,7 @@ func TestObserveScaleLadder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start independent K8s watch: %v", err)
 	}
-	nacosEvents, err := startNacosServiceWatch(watchCtx, cfg.NacosAddr, appCode)
+	nacosEvents, err := startNacosServiceWatch(watchCtx, cfg.NacosAddr, appCode, wireCluster)
 	if err != nil {
 		t.Fatalf("start independent Nacos Subscribe watch: %v", err)
 	}

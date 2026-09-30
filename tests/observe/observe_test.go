@@ -15,8 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"spotter/internal/domain/instance"
 	"spotter/internal/testkit/discoverymock"
 	"spotter/internal/testkit/etcdmock"
+	spotternacos "spotter/pkg/nacos"
 )
 
 // TestObserveConsistency is the dsca-4 §4 harness: the sustained
@@ -59,6 +61,7 @@ func TestObserveConsistency(t *testing.T) {
 		appCodes[i] = fmt.Sprintf("%s-app-%d", observePodPrefix, i)
 	}
 	driver := newChurnDriver(cfg.Kubeconfig, appCodes, observePodPrefix)
+	wireCluster := spotternacos.WireClusterName(&instance.Instance{Provider: "k8s", SourceCluster: driver.sourceClusterID()})
 	if err := driver.ping(); err != nil {
 		t.Skipf("NOT VERIFIED: EnvError client-go K8s preflight failed with %s: %v; cleanup_status=not_started", cfg.Kubeconfig, err)
 	}
@@ -102,7 +105,7 @@ func TestObserveConsistency(t *testing.T) {
 		t.Skipf("NOT VERIFIED: EnvError/InfraError configure Nacos healthCheckEnabled=false: %v; cleanup_status=pending", err)
 	}
 	harnessLog.event("Nacos naming healthCheckEnabled=false provisioned for %d k8s service clusters", len(appCodes))
-	view := newNacosView(cfg.NacosAddr)
+	view := newNacosView(cfg.NacosAddr, wireCluster)
 	defer view.close()
 	if err := waitForNacosSDKReadiness(cfg.NacosAddr, 10*time.Minute); err != nil {
 		t.Skipf("NOT VERIFIED: EnvError/InfraError Nacos 3 SDK read/write readiness failed: %v; cleanup_status=pending", err)
@@ -157,7 +160,7 @@ func TestObserveConsistency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start sustained K8s watch: %v", err)
 	}
-	nacosWatches, err := startNacosServiceWatches(watchCtx, cfg.NacosAddr, appCodes)
+	nacosWatches, err := startNacosServiceWatches(watchCtx, cfg.NacosAddr, appCodes, wireCluster)
 	if err != nil {
 		watchCancel()
 		t.Fatalf("start sustained Nacos subscriptions: %v", err)

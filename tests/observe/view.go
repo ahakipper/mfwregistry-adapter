@@ -33,8 +33,9 @@ import (
 
 // nacosView is the observe package's nacos reader.
 type nacosView struct {
-	addr string
-	http *http.Client
+	addr    string
+	cluster string
+	http    *http.Client
 	// sdk is the active Nacos 3 read/write path used by real Observe runs.
 	// The HTTP client remains only for unit fixtures and historical Nacos 2
 	// compatibility tests; it is never initialized by newNacosView.
@@ -42,7 +43,11 @@ type nacosView struct {
 	sdkErr error
 }
 
-func newNacosView(addr string) *nacosView {
+func newNacosView(addr string, clusters ...string) *nacosView {
+	cluster := "k8s"
+	if len(clusters) > 0 && clusters[0] != "" {
+		cluster = clusters[0]
+	}
 	client, err := spotternacos.NewClientWithConfig(spotternacos.ClientConfig{
 		ServerURL:     addr,
 		TransportMode: spotternacos.TransportSDK,
@@ -50,7 +55,7 @@ func newNacosView(addr string) *nacosView {
 		GroupName:     nacosGroup,
 		Timeout:       10 * time.Second,
 	}, nil)
-	return &nacosView{addr: "http://" + addr, sdk: client, sdkErr: err}
+	return &nacosView{addr: "http://" + addr, cluster: cluster, sdk: client, sdkErr: err}
 }
 
 // close releases the official Nacos 3 SDK session owned by a live Observe
@@ -81,7 +86,7 @@ func (v *nacosView) freshSDKView() (*nacosView, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &nacosView{addr: v.addr, sdk: client}, nil
+	return &nacosView{addr: v.addr, cluster: v.cluster, sdk: client}, nil
 }
 
 // waitForNacosSDKReadiness retries the authoritative SDK read/write canary
@@ -188,7 +193,7 @@ func (v *nacosView) fullServiceView(service string) (serviceView, error) {
 		return nil, fmt.Errorf("nacos sdk view unavailable: %w", v.sdkErr)
 	}
 	if v.sdk != nil {
-		hosts, err := v.sdk.ListCatalogInstances(service, "k8s")
+		hosts, err := v.sdk.ListCatalogInstances(service, v.cluster)
 		if err != nil {
 			return nil, err
 		}
@@ -215,7 +220,7 @@ func (v *nacosView) fullServiceView(service string) (serviceView, error) {
 	}
 
 	listIDs, listErr := v.listView(service)
-	catalogIDs, catalogErr := v.catalogView(service, "k8s")
+	catalogIDs, catalogErr := v.catalogView(service, v.cluster)
 	if listErr != nil && catalogErr != nil {
 		return nil, listErr
 	}

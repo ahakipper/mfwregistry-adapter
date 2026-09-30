@@ -62,8 +62,11 @@ clusters and filters by canonical Provider; legacy HTTP compatibility retains
 its explicit old cluster-scoped behavior.
 
 This closes the previous same-type source conflation in code and tagged E2E
-coverage. Existing consumers and old Nacos records still need an explicit
-migration decision because the wire names change for source-aware instances.
+coverage. A final Nacos 3 + KWOK source-qualified smoke also passed 7/7 exact
+ticks with clean teardown; see
+[the source-qualified smoke report](evidence/nacos3-source-qualified-smoke-2026-09-30.md).
+Existing consumers and old Nacos records still need an explicit migration
+decision because the wire names change for source-aware instances.
 
 ## 2. Evidence boundary
 

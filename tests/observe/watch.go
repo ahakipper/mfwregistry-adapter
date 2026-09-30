@@ -942,7 +942,7 @@ func (t *watchTimeline) healthErrors() []string {
 	return errors
 }
 
-func startNacosServiceWatch(ctx context.Context, addr, service string) (*nacosServiceWatch, error) {
+func startNacosServiceWatch(ctx context.Context, addr, service string, clusters ...string) (*nacosServiceWatch, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -954,7 +954,11 @@ func startNacosServiceWatch(ctx context.Context, addr, service string) (*nacosSe
 	if err != nil {
 		return nil, err
 	}
-	watch := &nacosServiceWatch{client: client, service: service, group: nacosGroup, clusters: []string{"k8s"}, events: make(chan nacosWatchEvent, 256)}
+	cluster := "k8s"
+	if len(clusters) > 0 && clusters[0] != "" {
+		cluster = clusters[0]
+	}
+	watch := &nacosServiceWatch{client: client, service: service, group: nacosGroup, clusters: []string{cluster}, events: make(chan nacosWatchEvent, 256)}
 	watch.callback = func(hosts []spotternacos.Host, callbackErr error) {
 		callbackAt := time.Now()
 		watch.callbackMu.Lock()
@@ -988,14 +992,14 @@ func startNacosServiceWatch(ctx context.Context, addr, service string) (*nacosSe
 	return watch, nil
 }
 
-func startNacosServiceWatches(ctx context.Context, addr string, services []string) (*nacosWatchGroup, error) {
+func startNacosServiceWatches(ctx context.Context, addr string, services []string, clusters ...string) (*nacosWatchGroup, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	merged := make(chan nacosWatchEvent, 4096)
 	var wg sync.WaitGroup
 	for _, service := range services {
-		watch, err := startNacosServiceWatch(ctx, addr, service)
+		watch, err := startNacosServiceWatch(ctx, addr, service, clusters...)
 		if err != nil {
 			return nil, fmt.Errorf("start Nacos Subscribe for %s: %w", service, err)
 		}
