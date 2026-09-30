@@ -58,6 +58,20 @@ func TestWorkerSyncAllPreservesScopeAndEmptyConfirmation(t *testing.T) {
 	}
 }
 
+func TestWorkerLegacySinkDropsUnconfirmedEmptyFullSnapshot(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sink := &fakes.FakeInstanceSink{}
+	w, err := NewResourceWorker(ctx, sink, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+	if err != nil {
+		t.Fatalf("NewResourceWorker() error = %v", err)
+	}
+	w.Handle(&Event{Trigger: 9, Scope: "ecs", BatchID: "empty-ecs", Operate: OperateTypeSyncAll, EmptyConfirmed: false})
+	if got := len(sink.Calls()); got != 0 {
+		t.Fatalf("legacy sink calls = %d, want zero for unconfirmed empty snapshot", got)
+	}
+}
+
 // TestFullSyncRetryPreservesBatchIdentityAndScope proves that a failed
 // application-scoped full operation remains one typed SyncAll retry. The
 // retry must retain the provider scope, stable batch identity, and source

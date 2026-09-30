@@ -64,6 +64,13 @@ func (w *DefaultWorker) InitEventHandlers() {
 		return nil
 	})
 	w.AddEventHandler(OperateTypeSyncAll, func(e *Event) error {
+		// Legacy sinks do not receive RetryOperation.EmptyConfirmed metadata.
+		// Never let an unconfirmed provider-empty snapshot reach PushAll through
+		// that compatibility path, where it could destructively prune Nacos.
+		if e.Scope != "" && len(e.Data) == 0 && !e.EmptyConfirmed {
+			w.logger.Warnf("dropping unconfirmed empty full snapshot for scope %q", e.Scope)
+			return nil
+		}
 		var err error
 		if operationSink, ok := w.pusher.(ports.FullOperationSink); ok {
 			err = operationSink.PushAllOperation(ports.RetryOperation{

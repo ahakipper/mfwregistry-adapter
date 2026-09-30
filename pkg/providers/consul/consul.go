@@ -376,7 +376,7 @@ func (c *consul) syncInstance() (err error) {
 	oldCache := c.cache
 	newCache := providers.NewCache(8)
 	// Get all services from consul
-	currentInss := c.GetAll()
+	currentInss := c.getAllLocked()
 	if currentInss == nil {
 		c.emptyConfirmations = 0
 		c.emptyConfirmationPending = false
@@ -496,19 +496,19 @@ func (c *consul) toInstanceWithSkipped(endpoints []*api.ServiceEntry) (inss []*s
 	return inss, skipped
 }
 
-// GetAll returns the full consul instance list. A nil result is ambiguous
+// GetAll returns the full Consul instance list under the provider lock. A nil result is ambiguous
 // between "source errored" (monitor GetServices/GetServiceEntries failure)
 // and "source legitimately empty": the sourceErr flag below distinguishes
 // the two.
-//
-// Lock discipline: every caller holds the provider lock across its GetAll
-// call — syncInstance and CompareAndFlush take it themselves, and
-// emitSyncAll takes it around its own read — so GetAll runs entirely under
-// the lock and writes the flag in-lock (a mutex orders only accesses that
-// BOTH take it; an unlocked tick-path write racing the handler-goroutine
-// writes was the round-2 review's data race). Callers outside this file
-// must not call GetAll without the lock.
-func (c *consul) GetAll() (result []*v2.Instance) {
+func (c *consul) GetAll() []*v2.Instance {
+	c.Lock()
+	defer c.Unlock()
+	return c.getAllLocked()
+}
+
+// getAllLocked performs the source read and updates snapshot state. Callers
+// must hold c.Lock; the public GetAll wrapper provides the safe external path.
+func (c *consul) getAllLocked() (result []*v2.Instance) {
 	snapshot := c.readSnapshot()
 	c.snapshotState = snapshot.state
 	c.sourceErr = snapshot.err
@@ -809,7 +809,7 @@ func (c *consul) snapshotForFullPushMode(advanceEmptyConfirmation bool) ([]*v2.I
 	all := c.cache.List()
 	if c.monitor != nil {
 		cached := c.cache
-		all = c.GetAll()
+		all = c.getAllLocked()
 		if all != nil {
 			all = c.mergeMonotonicInstances(cached, all)
 		}
@@ -838,7 +838,7 @@ func (c *consul) CompareAndFlush() {
 	c.Lock()
 	defer c.Unlock()
 	c.logger.Infof("%s: trying to compare and find diff instances then flush", c.providerName)
-	all := c.GetAll()
+	all := c.getAllLocked()
 	if all == nil {
 		return
 	}

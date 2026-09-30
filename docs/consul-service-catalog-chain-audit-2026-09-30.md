@@ -57,6 +57,13 @@ evidence gap is end-to-end DefaultWorker/Fanout/orderedSink recovery coverage
 and a deliberate transient-omission test; legitimate source omission remains
 the deletion signal after a complete, non-partial read.
 
+Stage 5 closes two safety boundaries around that chain. Public Consul `GetAll`
+now owns the provider lock while internal paths use an explicit locked helper,
+so the optional observe/debug endpoint cannot race source state. The worker's
+legacy plain-sink compatibility path rejects scoped unconfirmed empty full
+snapshots before `PushAll`; confirmed empty operations still retain their
+typed retry metadata and destructive authority.
+
 ## Executive assessment
 
 The refactor branch already contains a real Consul provider and a DDD-style
