@@ -193,17 +193,18 @@ Nacos update is emitted.
 
 #### P1-4 — No Consul Watch → Nacos Watch latency measurement
 
-The existing E2E fan-out test proves eventual delivery to a Nacos mock, but it
-does not record source mutation time, Consul watch observation time, worker
-submission, Nacos SDK acknowledgement, and Nacos Watch visibility as one
-sample. There are no Consul-specific P90/P95/P99 results.
+The guarded `consul_real` gate now records source mutation acknowledgement to
+Nacos catalog visibility for create, update, health-down, health-recovery,
+delete, and recovery, with P50/P90/P95/P99 output. A live run is still
+required; the local environment has no Consul/Nacos3 target, so no production
+percentile result is claimed.
 
 #### P1-5 — Real Consul + Nacos 3 qualification is absent
 
-The current Consul E2E tests use `consulmock` and `nacosmock`. Historical local
-soak records include Consul, but they are not current Nacos 3/source-qualified
-release evidence. A guarded real Consul catalog plus Nacos 3 SDK run is needed
-for the final release claim.
+The repository now contains a guarded real Consul plus Nacos3 SDK gate, but
+the current local run is `NOT VERIFIED` because no real endpoints and scratch
+write guards are configured. A guarded live run with preserved report and
+cleanup evidence is still required for the final release claim.
 
 #### P1-6 — Multiple logical Consul sources are not a single-process model yet
 
