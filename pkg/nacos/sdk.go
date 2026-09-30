@@ -311,6 +311,7 @@ func newSDKNamingFacade(cfg ClientConfig) (*sdkNamingFacade, error) {
 	clientCfg := &constant.ClientConfig{
 		TimeoutMs:            timeoutMs,
 		LogLevel:             "warn",
+		LogDir:               cacheDir,
 		NamespaceId:          ns,
 		Username:             cfg.Username,
 		Password:             cfg.Password,
