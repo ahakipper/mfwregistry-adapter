@@ -758,6 +758,52 @@ func TestPushPersistentBatchesClassifiesFailureMetrics(t *testing.T) {
 	}
 }
 
+func TestBatchMetricsExcludeIgnoredInputAndSeparateEmptyIPSkip(t *testing.T) {
+	sink := newBatchTestSink(&batchRecorder{errByIP: map[string]error{}})
+	items := []*instance.Instance{
+		nil,
+		{InstanceId: "unknown", AppCode: "app", Provider: "k8s", Status: instance.InstanceStatusUnknown},
+		{InstanceId: "empty-ip", AppCode: "app", Provider: "k8s", Status: instance.InstanceStatusOnline},
+		{InstanceId: "valid", AppCode: "app", Provider: "k8s", Ip: "10.0.0.1", Status: instance.InstanceStatusOnline},
+	}
+	if err := sink.pushPersistentBatches(items); err != nil {
+		t.Fatal(err)
+	}
+	got := sink.BatchMetrics()
+	if got.Items != 2 || got.AttemptedItems != 1 || got.SucceededItems != 1 || got.SkippedItems != 1 {
+		t.Fatalf("ignored/skipped input reported as successful writes: %+v", got)
+	}
+}
+
+func TestBatchApplyErrorClassifiesAllFailureBranches(t *testing.T) {
+	p := &batchPermanentError{message: "invalid metadata"}
+	transient := errors.New("prune catalog timeout")
+	scope := persistentBatchScope{service: "app", cluster: "k8s"}
+	for _, tc := range []struct {
+		name string
+		errs []error
+		want bool
+	}{
+		{"permanent", []error{p}, true},
+		{"transient", []error{transient}, false},
+		{"mixed", []error{p, transient}, false},
+		{"nested join", []error{errors.Join(p, transient)}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := &batchApplyError{}
+			for _, err := range tc.errs {
+				result.failures = append(result.failures, batchApplyFailure{scope: scope, err: err})
+			}
+			if result.Permanent() != tc.want {
+				t.Fatalf("Permanent()=%t want %t", result.Permanent(), tc.want)
+			}
+			if !errors.Is(result, tc.errs[0]) {
+				t.Fatal("lost underlying error")
+			}
+		})
+	}
+}
+
 func TestPushAllSkipsPruneWhenPersistentBatchFails(t *testing.T) {
 	recorder := &batchRecorder{errByIP: map[string]error{"10.0.0.1": errors.New("registration failed")}}
 	sink := newBatchTestSink(recorder)

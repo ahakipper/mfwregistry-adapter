@@ -153,6 +153,7 @@ type Sink struct {
 	batchItemCount      atomic.Uint64
 	batchAttemptedCount atomic.Uint64
 	batchSucceededCount atomic.Uint64
+	batchSkippedCount   atomic.Uint64
 	batchTransientCount atomic.Uint64
 	batchPermanentCount atomic.Uint64
 	batchFailedCount    atomic.Uint64

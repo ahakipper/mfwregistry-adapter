@@ -1,12 +1,12 @@
 package nacos
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
 
 	"spotter/internal/domain/instance"
+	"spotter/internal/ports"
 )
 
 // MaxPersistentBatchSize is the maximum number of desired instances carried by
@@ -40,7 +40,9 @@ type persistentBatch struct {
 // BatchMetricsSnapshot is the sink-local accounting exported for Observe and
 // test harnesses. LogicalBatches and Items are cumulative full-sync work;
 // AttemptedItems counts items admitted to an application batch, while the
-// success/failure fields classify the resulting item outcomes. RetryCount
+// success/failure fields classify the resulting item outcomes. SkippedItems
+// counts source records intentionally ignored because they have no wire IP.
+// RetryCount
 // counts failed executions that the worker retry queue may replay, and
 // PruneSkippedScopes counts application scopes deliberately protected from
 // prune after an incomplete batch. ConcurrencyCap is the configured global
@@ -50,6 +52,7 @@ type BatchMetricsSnapshot struct {
 	Items                uint64
 	AttemptedItems       uint64
 	SucceededItems       uint64
+	SkippedItems         uint64
 	TransientFailedItems uint64
 	PermanentFailedItems uint64
 	RetryCount           uint64
@@ -68,6 +71,7 @@ func (s *Sink) BatchMetrics() BatchMetricsSnapshot {
 		Items:                s.batchItemCount.Load(),
 		AttemptedItems:       s.batchAttemptedCount.Load(),
 		SucceededItems:       s.batchSucceededCount.Load(),
+		SkippedItems:         s.batchSkippedCount.Load(),
 		TransientFailedItems: s.batchTransientCount.Load(),
 		PermanentFailedItems: s.batchPermanentCount.Load(),
 		RetryCount:           s.batchFailedCount.Load(),
@@ -177,8 +181,7 @@ func (e *batchApplyError) Permanent() bool {
 		return false
 	}
 	for _, failure := range e.failures {
-		var permanent interface{ Permanent() bool }
-		if !errors.As(failure.err, &permanent) || !permanent.Permanent() {
+		if !ports.IsPermanentError(failure.err) {
 			return false
 		}
 	}
@@ -212,11 +215,18 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 		return nil
 	}
 	s.batchConcurrencyCap.Store(uint64(currentPushConcurrency()))
-	admittedItems := 0
+	admittedItems, skippedItems := 0, 0
 	for _, batch := range batches {
 		s.batchLogicalCount.Add(1)
 		s.batchItemCount.Add(uint64(len(batch.Items)))
 		admittedItems += len(batch.Items)
+		if batch.Key.Operation == batchRegister {
+			for _, item := range batch.Items {
+				if item.Ip == "" {
+					skippedItems++
+				}
+			}
+		}
 	}
 
 	// Keep scope order separate from the map used to append batches. This lets
@@ -234,10 +244,12 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 
 	errs := make([]error, len(instances))
 	scopesByIndex := make([]persistentBatchScope, len(instances))
+	batchIndexPresent := make([]bool, len(instances))
 	for _, batch := range batches {
 		scope := persistentBatchScope{namespace: batch.Key.Namespace, group: batch.Key.Group, service: batch.Key.Service, cluster: batch.Key.Cluster}
 		for _, index := range batch.Indexes {
 			scopesByIndex[index] = scope
+			batchIndexPresent[index] = true
 		}
 	}
 	var scopes sync.WaitGroup
@@ -347,6 +359,9 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 	var succeeded, transientFailed, permanentFailed uint64
 	var failures []batchApplyFailure
 	for index, err := range errs {
+		if !batchIndexPresent[index] {
+			continue
+		}
 		if err != nil {
 			if isPermanentBatchError(err) {
 				permanentFailed++
@@ -362,8 +377,9 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 	// application attempt. This includes a permanent pre-write validation
 	// error: it was intentionally evaluated by the executor and must remain
 	// visible in the item outcome accounting.
-	s.batchAttemptedCount.Add(uint64(admittedItems))
-	s.batchSucceededCount.Add(succeeded)
+	s.batchAttemptedCount.Add(uint64(admittedItems - skippedItems))
+	s.batchSucceededCount.Add(succeeded - uint64(skippedItems))
+	s.batchSkippedCount.Add(uint64(skippedItems))
 	s.batchTransientCount.Add(transientFailed)
 	s.batchPermanentCount.Add(permanentFailed)
 	if len(failures) > 0 {
@@ -374,6 +390,5 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 }
 
 func isPermanentBatchError(err error) bool {
-	var permanent interface{ Permanent() bool }
-	return errors.As(err, &permanent) && permanent.Permanent()
+	return ports.IsPermanentError(err)
 }

@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -540,6 +541,37 @@ func TestPrune4xxDropsOnlyPermanentTask(t *testing.T) {
 	ops := s.DrainOperations()
 	if len(ops) != 1 || ops[0].Operate != ports.OperateTypeSync {
 		t.Fatalf("remaining operations = %#v, want only the incremental retry", ops)
+	}
+}
+
+func TestFullRetryKeepsTransientPruneBesidePermanentApplyFailure(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		for _, fanout := range []bool{false, true} {
+			t.Run(fmt.Sprintf("reverse=%t/fanout=%t", reverse, fanout), func(t *testing.T) {
+				permanent := error(&nacosPermanentTestError{})
+				transient := errors.New("prune catalog timeout")
+				joined := errors.Join(permanent, transient)
+				if reverse {
+					joined = errors.Join(transient, permanent)
+				}
+				sink := &fakes.FakeInstanceSink{PushAllErr: fmt.Errorf("full apply/prune: %w", joined)}
+				var pusher ports.InstanceSink = sink
+				if fanout {
+					pusher = newTestFanout(t, &fakes.FakeInstanceSink{}, sink)
+				}
+				queue := NewUnsyncedService(context.Background(), pusher, nil, nil)
+				queue.AddFull(1, []*instance.Instance{{Provider: "k8s", InstanceId: "pod", Reversion: 1}}, nil)
+				queue.syncOnce()
+				if got := queue.Len(); got != 1 {
+					t.Fatalf("mixed failure left %d retries, want one full operation retained for transient prune", got)
+				}
+				sink.SetErrors(nil, nil, nil)
+				queue.syncOnce()
+				if queue.Len() != 0 || len(sink.PushAllCalls()) != 2 || len(sink.PushCalls()) != 0 {
+					t.Fatalf("recovery: queue=%d full=%d incremental=%d", queue.Len(), len(sink.PushAllCalls()), len(sink.PushCalls()))
+				}
+			})
+		}
 	}
 }
 

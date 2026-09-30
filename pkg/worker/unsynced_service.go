@@ -492,8 +492,7 @@ func (s *UnsyncedService) retryKeyed(sink string, key retryKey, pending pendingP
 		// succeed and would spin forever (the live incident: 9624 futile
 		// retries of an unregisterable DELETE). Drop the entry from the queue
 		// instead of re-queuing it for the next cycle.
-		var p interface{ Permanent() bool }
-		if errors.As(err, &p) && p.Permanent() {
+		if ports.IsPermanentError(err) {
 			if pending.Full {
 				s.logger.Errorf("permanent_full_operation: dropping non-retryable full operation sink=%s scope=%s batch_id=%s", sink, pending.Scope, pending.BatchID)
 			}
