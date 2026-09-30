@@ -45,6 +45,13 @@ type consulMonitor struct {
 	handlersWG       sync.WaitGroup
 }
 
+// consulPassingOnly keeps the source contract explicit: desired catalog reads
+// include only Consul entries whose checks are passing. Unhealthy instances
+// therefore disappear from desired state and are cleaned up through deletion;
+// repeated healthy-empty snapshots remain protected by CompareAndFlush's
+// confirmation gate.
+const consulPassingOnly = true
+
 const (
 	refreshIdleTime    time.Duration = 50 * time.Millisecond
 	periodicCheckTime  time.Duration = 50 * time.Millisecond
@@ -302,7 +309,7 @@ func (m *consulMonitor) GetServiceEntries(name string, q *api.QueryOptions) ([]*
 		m.logger.Errorf("get consul client: %v", err)
 		return nil, err
 	}
-	endpoints, _, err := client.Health().Service(name, tagMicroservice, true, q)
+	endpoints, _, err := client.Health().Service(name, tagMicroservice, consulPassingOnly, q)
 	if err != nil {
 		m.logger.Warnf("Could not retrieve service catalog from consul: %v", err)
 		return nil, err

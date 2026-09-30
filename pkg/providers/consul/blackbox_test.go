@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/consul/api"
 	"github.com/panjf2000/ants/v2"
 
+	"spotter/internal/ports"
 	"spotter/internal/testkit/consulmock"
 	"spotter/internal/testkit/fakes"
 	sv "spotter/pkg/beehive/service/v2"
@@ -1140,6 +1141,81 @@ func (m *staticMonitor) GetServiceEntries(name string, q *api.QueryOptions) ([]*
 func (m *staticMonitor) AppendServiceHandler(ServiceHandler)   {}
 func (m *staticMonitor) AppendInstanceHandler(InstanceHandler) {}
 
+func TestConsulExtractDiffRepairsEqualReversionFieldDrift(t *testing.T) {
+	provider := &consul{filters: providers.InitInstanceFilters(), logger: ports.NopLogger{}}
+	base := &sv.Instance{
+		SourceCluster: "consul-a",
+		SourceKey:     "consul-a/srv-a",
+		InstanceId:    "srv-a",
+		Ports:         []*sv.PortInfo{{Name: "http", Protocol: "http", Port: 8080, ServicePort: 8080}},
+		Ip:            "10.0.0.1",
+		EnvType:       providers.EnvTest,
+		EnvGroup:      "blue",
+		Version:       "v1",
+		Enabled:       true,
+		State:         providers.InstanceStateRunning,
+		AppCode:       "payments",
+		Provider:      providers.ProviderEcs,
+		Label:         map[string]string{"zone": "a"},
+		Hostname:      "node-a",
+		Image:         map[string]string{"image": "sha256:one"},
+		Reversion:     42,
+		Status:        providers.InstanceStatusOnline,
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*sv.Instance)
+	}{
+		{name: "label", mutate: func(ins *sv.Instance) { ins.Label = map[string]string{"zone": "b"} }},
+		{name: "port", mutate: func(ins *sv.Instance) {
+			ins.Ports = []*sv.PortInfo{{Name: "http", Protocol: "http", Port: 9090, ServicePort: 9090}}
+		}},
+		{name: "image", mutate: func(ins *sv.Instance) { ins.Image = map[string]string{"image": "sha256:two"} }},
+		{name: "hostname", mutate: func(ins *sv.Instance) { ins.Hostname = "node-b" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			oldCache := providers.NewCache(8)
+			newCache := providers.NewCache(8)
+			oldCache.ReplaceOrInsert(base)
+			updated := *base
+			tc.mutate(&updated)
+			newCache.ReplaceOrInsert(&updated)
+			_, updates, deletes := provider.extractDiff(oldCache, newCache)
+			if len(updates) != 1 || len(deletes) != 0 {
+				t.Fatalf("equal-reversion %s diff = updates:%d deletes:%d, want one update", tc.name, len(updates), len(deletes))
+			}
+		})
+	}
+}
+
+func TestConsulExtractDiffRejectsLowerReversionEvenWhenFieldsDiffer(t *testing.T) {
+	provider := &consul{filters: providers.InitInstanceFilters(), logger: ports.NopLogger{}}
+	old := &sv.Instance{
+		SourceKey:  "consul-a/srv-a",
+		InstanceId: "srv-a",
+		AppCode:    "payments",
+		EnvType:    providers.EnvTest,
+		Ip:         "10.0.0.1",
+		Provider:   providers.ProviderEcs,
+		Label:      map[string]string{"zone": "a"},
+		Reversion:  42,
+		Status:     providers.InstanceStatusOnline,
+	}
+	updated := *old
+	updated.Reversion = 41
+	updated.Label = map[string]string{"zone": "b"}
+	oldCache := providers.NewCache(8)
+	newCache := providers.NewCache(8)
+	oldCache.ReplaceOrInsert(old)
+	newCache.ReplaceOrInsert(&updated)
+	_, updates, _ := provider.extractDiff(oldCache, newCache)
+	if len(updates) != 0 {
+		t.Fatalf("lower-reversion field drift produced %d updates, want none", len(updates))
+	}
+}
+
 // newStaticConsulProvider builds a consul provider whose monitor serves the
 // given entries verbatim (the local-shape injection seam).
 func newStaticConsulProvider(t *testing.T, w worker.Worker, entries map[string][]*api.ServiceEntry) *consul {
@@ -1404,18 +1480,15 @@ func TestConsulAtlasModeCase3KeepsStatus2(t *testing.T) {
 	var events []*worker.Event
 	for time.Now().Before(deadline) {
 		events = w.handleSnapshot()
-		if len(events) >= 1 {
-			break
+		for _, e := range events {
+			if len(e.Data) == 1 && e.Data[0].InstanceId == "srv-ghost" {
+				if got := e.Data[0].Status; got != providers.InstanceStatusUnhealthy {
+					t.Fatalf("Atlas-mode ghost push status = %d, want %d (the Atlas semantics are unchanged)", got, providers.InstanceStatusUnhealthy)
+				}
+				return
+			}
 		}
 		time.Sleep(5 * time.Millisecond)
-	}
-	for _, e := range events {
-		if len(e.Data) == 1 && e.Data[0].InstanceId == "srv-ghost" {
-			if got := e.Data[0].Status; got != providers.InstanceStatusUnhealthy {
-				t.Fatalf("Atlas-mode ghost push status = %d, want %d (the Atlas semantics are unchanged)", got, providers.InstanceStatusUnhealthy)
-			}
-			return
-		}
 	}
 	t.Fatalf("no push for the remote-only ghost in Atlas mode; events = %#v", events)
 }

@@ -16,12 +16,21 @@ Healthy empty state requires three independent confirmations; a provider-owned
 6-hour full-push interval. The timer is single-instance, stopped on recovery
 or shutdown, and guarded by the provider lock plus lifecycle state.
 
-The remaining P1/P2 work is still open: the explicit health-state contract,
-equal-`ModifyIndex` field fingerprinting, Consul-to-Nacos watch latency
+The remaining P1/P2 work is still open: Consul-to-Nacos watch latency
 percentiles, real Consul plus Nacos 3 qualification, multiple logical Consul
 sources, blocking-query edge handling, source metrics, and Consul connection
 security settings. This status is an implementation checkpoint, not a
 production-readiness claim.
+
+Stage 2 has now closed the first two items in that list. Equal `Reversion`
+updates use the complete Spotter canonical payload, so same-index changes to
+labels, ports, images, hostname, and other owned fields are delivered while a
+lower revision remains ignored. The Consul health contract is explicitly
+`passingOnly=true`: unhealthy entries leave the desired catalog and are
+removed through the normal deletion path; a completely unhealthy catalog is
+still protected by the Stage 1 healthy-empty confirmation gate. A legacy Atlas
+snapshot that omits canonical source fields may receive one corrective push
+to republish the complete projection.
 
 ## Executive assessment
 

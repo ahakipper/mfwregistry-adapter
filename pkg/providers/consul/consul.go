@@ -562,7 +562,11 @@ func (c *consul) extractDiff(old, new providers.CacheIterface) (add []*v2.Instan
 			// new cache has the instance in old cache
 			if oldIns := old.Get(providers.IdentityKey(newIns)); oldIns != nil {
 				// update events
-				if newIns.Reversion > oldIns.Reversion {
+				// Reversion remains monotonic: lower revisions never win. For
+				// equal revisions, compare the complete Spotter-owned canonical
+				// payload so field drift is repaired as well.
+				if newIns.Reversion > oldIns.Reversion ||
+					(newIns.Reversion == oldIns.Reversion && domaininstance.CanonicalPayload(newIns) != domaininstance.CanonicalPayload(oldIns)) {
 					if ver := c.VerifyInstance(newIns); ver == nil {
 						update = append(update, newIns)
 					} else {
@@ -902,47 +906,12 @@ func (c *consul) CompareAndFlush() {
 				} else if !c.nacosReconcile && consulIns.Reversion > servIns.Reversion {
 					diff = true
 				} else if !c.nacosReconcile && consulIns.Reversion == servIns.Reversion {
-					// The wire projection of Enabled (dsca-3 §3.3 / dsca-5
-					// DS-5-2), nacos-reconcile mode only: compare
-					// wireEnabled(local) = local.Enabled && local.Status !=
-					// InstanceStatusUnhealthy against remote.Enabled —
-					// exactly the derivation the nacos register applies
-					// before writing (register forces enabled=false for
-					// every status-2 instance) — so the compare asserts
-					// precisely "would the next push write a different
-					// enabled than the remote holds". The raw compare is
-					// asymmetric on the consul leg (the converter hardcodes
-					// local Enabled=true, convertion.go) and would diff
-					// every status-2 pair every cycle forever.
-					//
-					// Provider replaces Cluster (dsca-5 §4.2-3, DS-3-4):
-					// the nacos reconstruction leaves Cluster empty (the
-					// metadata never carried it; clusterName lands in
-					// Provider, which round-trips exactly — clusterOf <->
-					// clusterName), so comparing the reconstructed Cluster
-					// against a local Cluster that both converters leave
-					// "" would false-positive every instance every cycle.
-					// In Atlas-primary mode the remote view round-trips the
-					// model verbatim, so the original Cluster compare stays.
-					consulEnabled := consulIns.Enabled
-					remoteCluster := servIns.Cluster
-					if c.nacosReconcile {
-						consulEnabled = consulIns.Enabled && consulIns.Status != providers.InstanceStatusUnhealthy
-						remoteCluster = servIns.Provider
-					}
-					// If env-type not equal
-					if consulIns.EnvType != servIns.EnvType ||
-						consulIns.EnvGroup != servIns.EnvGroup ||
-						consulIns.Status != servIns.Status ||
-						consulIns.State != servIns.State ||
-						consulIns.Ip != servIns.Ip ||
-						consulIns.Idc != servIns.Idc ||
-						remoteCluster != consulClusterOf(c.nacosReconcile, consulIns) ||
-						consulEnabled != servIns.Enabled ||
-						consulIns.AppCode != servIns.AppCode ||
-						consulIns.Cpu != servIns.Cpu {
-						diff = true
-					}
+					// Atlas is authoritative for the full Spotter-owned model.
+					// Compare its complete canonical fingerprint at equal
+					// Reversion so labels, ports, images, hostname, and source
+					// identity drift are repaired; Nacos-owned wire fields are
+					// outside this projection.
+					diff = domaininstance.CanonicalPayload(consulIns) != domaininstance.CanonicalPayload(servIns)
 				}
 				if diff {
 					c.logger.Infof("the instance: %s of appcode: %s is newer, trigger a push.", consulIns.InstanceId, consulIns.AppCode)
