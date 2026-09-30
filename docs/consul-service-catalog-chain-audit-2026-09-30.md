@@ -58,9 +58,10 @@ conservative source/provider/application/IP fallback keeps old explicit
 SourceKey records matchable during migration. Recovery after a confirmed empty
 state emits a trusted complete snapshot after releasing the provider lock, so
 an equal-revision sink tombstone can be healed immediately. The remaining
-evidence gap is end-to-end DefaultWorker/Fanout/orderedSink recovery coverage
-and a deliberate transient-omission test; legitimate source omission remains
-the deletion signal after a complete, non-partial read.
+transient-omission evidence gap remains; the source pipeline now covers
+DefaultWorker/Fanout/orderedSink recovery against a Nacos mock, and legitimate
+source omission remains the deletion signal after a complete, non-partial
+read.
 
 Stage 5 closes two safety boundaries around that chain. Public Consul `GetAll`
 now owns the provider lock while internal paths use an explicit locked helper,
