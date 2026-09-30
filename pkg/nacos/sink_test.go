@@ -3,6 +3,7 @@ package nacos_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -635,6 +636,23 @@ func TestBlackboxSinkRejectsIncrementalWireIdentityReuse(t *testing.T) {
 	}
 	if got := len(server.Instances("pay-user", "k8s")); got != 1 {
 		t.Fatalf("Nacos instances after rejected collision = %d, want 1", got)
+	}
+}
+
+func TestBlackboxSinkRejectsOversizedMetadataBeforeNacosMutation(t *testing.T) {
+	sink, server := newSinkAt(t)
+	item := domainInstance("large", "pay-user", "10.0.0.9", 8080, "k8s", instance.InstanceStatusOnline)
+	item.Label = map[string]string{}
+	for i := 0; i < 80; i++ {
+		item.Label[fmt.Sprintf("entropy-%03d", i)] = fmt.Sprintf("value-%03d-abcdefghijklmnopqrstuvwxyz-0123456789", i)
+	}
+	err := sink.Push(1, []*instance.Instance{item})
+	var tooLarge *nacos.MetadataTooLargeError
+	if !errors.As(err, &tooLarge) {
+		t.Fatalf("Push() error = %v, want MetadataTooLargeError", err)
+	}
+	if len(server.Requests()) != 0 {
+		t.Fatalf("oversized metadata issued Nacos requests = %v, want fail-closed before mutation", server.Requests())
 	}
 }
 

@@ -2,6 +2,8 @@ package nacos
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"testing"
 
 	"spotter/internal/domain/instance"
@@ -34,6 +36,26 @@ func TestNacosMetadataRoundTripsLabelsAndReversion(t *testing.T) {
 	}
 	if got.SourceKey != original.SourceKey || got.SourceCluster != original.SourceCluster || got.EnvCode != original.EnvCode || got.Cluster != original.Cluster || got.HealthState != original.HealthState || got.Disk != original.Disk || got.Os != original.Os {
 		t.Fatalf("full metadata round-trip lost identity/resource fields: got=%#v want=%#v", got, original)
+	}
+}
+
+func TestNacosMetadataRejectsHighEntropyPayloadBeforeWrite(t *testing.T) {
+	original := &instance.Instance{
+		SourceKey: "cluster-a/uid-oversized", SourceCluster: "cluster-a", InstanceId: "pod-large",
+		AppCode: "pay-user", Ip: "10.0.0.1", EnvType: "test", State: "running",
+		Provider: "k8s", Reversion: 42, Status: instance.InstanceStatusOnline,
+		Label: map[string]string{}, Image: map[string]string{"application": "registry.example.com/" + fmt.Sprintf("%0100d", 7)},
+	}
+	for i := 0; i < 80; i++ {
+		original.Label[fmt.Sprintf("entropy-%03d", i)] = fmt.Sprintf("value-%03d-abcdefghijklmnopqrstuvwxyz-0123456789", i)
+	}
+	metadata := metadataOf(original)
+	var tooLarge *MetadataTooLargeError
+	if err := validateMetadataSize(metadata); !errors.As(err, &tooLarge) {
+		t.Fatalf("validateMetadataSize() error = %v, want MetadataTooLargeError", err)
+	}
+	if tooLarge.Length <= MaxNacosMetadataLength || tooLarge.Limit != MaxNacosMetadataLength {
+		t.Fatalf("metadata size error = %+v, want length > %d", tooLarge, MaxNacosMetadataLength)
 	}
 }
 

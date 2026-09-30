@@ -185,8 +185,13 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 							errs[batch.Indexes[position]] = nil
 							continue
 						}
+						metadata := metadataOf(ins)
+						if metadataErr := validateMetadataSize(metadata); metadataErr != nil {
+							errs[batch.Indexes[position]] = metadataErr
+							continue
+						}
 						enabled, healthy := persistentWireFlags(ins, true)
-						params = append(params, InstanceParams{ServiceName: ins.AppCode, IP: ins.Ip, Port: firstPort(ins), ClusterName: clusterOf(ins), GroupName: batch.Key.Group, NamespaceID: batch.Key.Namespace, Enabled: enabled, Healthy: &healthy, Ephemeral: false, Metadata: metadataOf(ins)})
+						params = append(params, InstanceParams{ServiceName: ins.AppCode, IP: ins.Ip, Port: firstPort(ins), ClusterName: clusterOf(ins), GroupName: batch.Key.Group, NamespaceID: batch.Key.Namespace, Enabled: enabled, Healthy: &healthy, Ephemeral: false, Metadata: metadata})
 					}
 					if len(params) > 0 {
 						validIndexes := make([]int, 0, len(params))

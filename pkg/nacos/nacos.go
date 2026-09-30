@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf16"
 
 	"spotter/internal/domain/instance"
 	"spotter/internal/ports"
@@ -284,6 +285,23 @@ func (e *WireIdentityCollisionError) Error() string {
 }
 
 func (*WireIdentityCollisionError) Permanent() bool { return true }
+
+const MaxNacosMetadataLength = 1024
+
+// MetadataTooLargeError matches Nacos's naming validation contract: the
+// server counts the Java String length of every metadata key and value. UTF-16
+// code-unit counting keeps Go validation aligned for supplementary Unicode
+// characters instead of silently accepting a value the server rejects.
+type MetadataTooLargeError struct {
+	Length int
+	Limit  int
+}
+
+func (e *MetadataTooLargeError) Error() string {
+	return fmt.Sprintf("nacos: instance metadata length %d exceeds limit %d", e.Length, e.Limit)
+}
+
+func (*MetadataTooLargeError) Permanent() bool { return true }
 
 type healthCheckAttempt struct {
 	done chan struct{}
@@ -824,6 +842,10 @@ func (s *Sink) pushOne(ins *instance.Instance) error {
 // transport-enabled but marks them unhealthy so official query/Subscribe can
 // still observe and reconcile them.
 func (s *Sink) register(ins *instance.Instance) error {
+	metadata := metadataOf(ins)
+	if err := validateMetadataSize(metadata); err != nil {
+		return err
+	}
 	releaseWireIdentity, err := s.claimWireIdentity(ins)
 	if err != nil {
 		return err
@@ -849,7 +871,7 @@ func (s *Sink) register(ins *instance.Instance) error {
 		Enabled:     enabled,
 		Healthy:     &healthy,
 		Ephemeral:   false, // persistent: the sink owns the lifecycle (§7.1)
-		Metadata:    metadataOf(ins),
+		Metadata:    metadata,
 	})
 	if err != nil {
 		return fmt.Errorf("nacos: register %s: %w", ins.InstanceId, err)
@@ -1107,6 +1129,18 @@ func metadataOf(ins *instance.Instance) map[string]string {
 	// because Nacos limits the serialized metadata parameter to 1024 bytes.
 	metadata["spotter.instance"] = instance.CompressedCanonicalPayload(ins)
 	return metadata
+}
+
+func validateMetadataSize(metadata map[string]string) error {
+	length := 0
+	for key, value := range metadata {
+		length += len(utf16.Encode([]rune(key)))
+		length += len(utf16.Encode([]rune(value)))
+	}
+	if length > MaxNacosMetadataLength {
+		return &MetadataTooLargeError{Length: length, Limit: MaxNacosMetadataLength}
+	}
+	return nil
 }
 
 // reconstruct rebuilds a domain instance from one remote host. The status
