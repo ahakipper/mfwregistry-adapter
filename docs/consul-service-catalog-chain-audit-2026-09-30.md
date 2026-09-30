@@ -8,8 +8,7 @@ Audited HEAD: `e1ae3b5`
 
 The following implementation checkpoints are pushed on `refactor/all`:
 `a324be5`, `38e1108`, `0d60bd4`, `11289dc`, `7977780`, `66f825f`,
-`661fec4`, `cab47b0`, and `d13319e`.
-The real-gate scenario extension is pushed as `93c35c6`.
+`661fec4`, `cab47b0`, `d13319e`, `93c35c6`, and `5649909`.
 
 Stage 1 correctness work is implemented and pushed, and has passed
 the independent code review and the Consul package race suite. The provider
@@ -130,10 +129,10 @@ Consul blocking health-state query
 ```
 
 The core implementation is reusable, but Consul-to-Nacos production readiness
-is not yet proved. The current test suite proves most local mechanics and one
-loopback fan-out path; it does not yet prove end-to-end latency percentiles,
-all health transitions, complete source disappearance, or a real Nacos 3
-Consul-backed run.
+is not yet proved. The current test suite proves most local mechanics, one
+loopback fan-out path, and a guarded real qualification entry point; it does
+not yet contain live Consul/Nacos3 latency percentiles or a real deployment
+qualification result.
 
 There is no `main` branch ref in this checkout. The historical baseline is
 `origin/master`, which also contains an older Consul provider. `refactor/all`
@@ -149,7 +148,7 @@ factory, cache diff, Nacos reconcile, source identity, and E2E changes.
 | Watch | Blocking `/v1/health/state/any`, 5 s wait, 50 ms debounce, burst-2/15 s rapid-change limiter | Focused and race-tested; nil/zero metadata, rollback reset, timeout/error, and rapid-change behavior are pinned |
 | Catalog read | `Catalog.Services` then `Health.Service(..., passingOnly=true)` | Healthy-only semantics need an explicit contract |
 | Conversion | Service metadata → `Instance`; `ModifyIndex` → `Reversion`; source ID propagation exists | Good shape; malformed metadata is skipped and needs metrics |
-| Cache/diff | Source-aware `IdentityKey`; add/update/delete event generation | Same-name source identities are covered; health/equal-revision behavior needs more proof |
+| Cache/diff | Source-aware `IdentityKey`; add/update/delete event generation | Same-name source identities, health contract, equal revisions, stale revisions, and recovery are covered |
 | Worker/Fanout | Bounded pool, overflow queue, ordered sink gate, full retry metadata | Reusable and tested |
 | Nacos | Source-qualified cluster name, SDK persistent writes, batch/prune/reconcile | Consul path inherits Nacos correctness; live Consul + Nacos evidence is missing |
 
