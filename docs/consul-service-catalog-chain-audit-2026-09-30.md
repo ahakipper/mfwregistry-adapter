@@ -100,8 +100,9 @@ TTL health, deregister, the real provider, the DefaultWorker, and the official
 Nacos SDK, then reports create/delete/recovery P50/P90/P95/P99 and cleanup
 residual status. Without both real endpoints and write guards it skips as
 `NOT VERIFIED`; it does not turn mock or absent-environment results into a
-production pass. The current scenario covers create/delete/recovery; update
-and health-transition samples remain a follow-up coverage item.
+production pass. The scenario now covers create/update/health-down/
+health-recovery/delete/recovery samples; live execution is still required to
+populate production P50/P90/P95/P99 evidence.
 
 The repository release gate was rerun on 2026-10-01 after these changes:
 `go test ./... -count=1`, `go vet ./...`, and `make test-all` all passed. The

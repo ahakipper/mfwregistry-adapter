@@ -32,8 +32,11 @@ type consulRealQualificationReport struct {
 	SourceID        string                   `json:"source_id"`
 	ConfiguredRuns  int                      `json:"configured_runs"`
 	Create          consulRealLatencySummary `json:"create"`
+	Update          consulRealLatencySummary `json:"update"`
 	Delete          consulRealLatencySummary `json:"delete"`
 	Recovery        consulRealLatencySummary `json:"recovery"`
+	HealthDown      consulRealLatencySummary `json:"health_down"`
+	HealthRecovery  consulRealLatencySummary `json:"health_recovery"`
 	CleanupStatus   string                   `json:"cleanup_status"`
 	ResidualUnknown bool                     `json:"residual_unknown"`
 }
@@ -113,6 +116,9 @@ func TestConsulRealToNacos3Qualification(t *testing.T) {
 	createSamples := make([]time.Duration, 0, consulCfg.samples)
 	deleteSamples := make([]time.Duration, 0, consulCfg.samples)
 	recoverySamples := make([]time.Duration, 0, consulCfg.samples)
+	updateSamples := make([]time.Duration, 0, consulCfg.samples)
+	healthDownSamples := make([]time.Duration, 0, consulCfg.samples)
+	healthRecoverySamples := make([]time.Duration, 0, consulCfg.samples)
 	services := make(map[string][]string)
 	active := make(map[string]map[string]bool)
 	cleanupAttempted := false
@@ -169,8 +175,11 @@ func TestConsulRealToNacos3Qualification(t *testing.T) {
 			t.Errorf("CONSUL_REAL_QUALIFICATION cleanup failed: status=%s residual_unknown=%t", report.CleanupStatus, report.ResidualUnknown)
 		}
 		report.Create = summarizeConsulRealLatencies(createSamples)
+		report.Update = summarizeConsulRealLatencies(updateSamples)
 		report.Delete = summarizeConsulRealLatencies(deleteSamples)
 		report.Recovery = summarizeConsulRealLatencies(recoverySamples)
+		report.HealthDown = summarizeConsulRealLatencies(healthDownSamples)
+		report.HealthRecovery = summarizeConsulRealLatencies(healthRecoverySamples)
 		encoded, _ := json.Marshal(report)
 		t.Logf("CONSUL_REAL_QUALIFICATION report=%s cleanup_attempted=%t cleanup_errors=%d", encoded, cleanupAttempted, len(cleanupErrs))
 	}()
@@ -193,6 +202,44 @@ func TestConsulRealToNacos3Qualification(t *testing.T) {
 			t.Fatalf("create catalog convergence %s: %v", serviceName, err)
 		}
 		createSamples = append(createSamples, time.Since(registerAck))
+
+		// Update the same registered service through the Consul Agent API and
+		// require the Nacos catalog to expose the changed port and metadata.
+		updated := realConsulRegistration(serviceName, firstID, 19500+i)
+		updated.Meta["version"] = "consul-real-updated"
+		updateStarted := time.Now()
+		if err := consulClient.Agent().ServiceRegister(updated); err != nil {
+			t.Fatalf("Consul ServiceRegister update %s: %v", serviceName, err)
+		}
+		if err := consulClient.Agent().PassTTL(updated.Check.CheckID, "spotter consul qualification update passing"); err != nil {
+			t.Fatalf("Consul PassTTL update %s: %v", serviceName, err)
+		}
+		if _, err := waitForNacosHost(verifyClient, serviceName, normalizedSource.ID, firstID, func(host nacos.Host) bool {
+			return host.Port == 19500+i && host.Metadata["version"] == "consul-real-updated"
+		}, nacosCfg.timeout); err != nil {
+			t.Fatalf("update catalog convergence %s: %v", serviceName, err)
+		}
+		updateSamples = append(updateSamples, time.Since(updateStarted))
+
+		healthDownStarted := time.Now()
+		if err := consulClient.Agent().FailTTL(updated.Check.CheckID, "spotter consul qualification health down"); err != nil {
+			t.Fatalf("Consul FailTTL %s: %v", serviceName, err)
+		}
+		if _, err := waitForNacosCatalogEmpty(verifyClient, serviceName, normalizedSource.ID, nacosCfg.timeout); err != nil {
+			t.Fatalf("health-down catalog convergence %s: %v", serviceName, err)
+		}
+		healthDownSamples = append(healthDownSamples, time.Since(healthDownStarted))
+
+		healthRecoveryStarted := time.Now()
+		if err := consulClient.Agent().PassTTL(updated.Check.CheckID, "spotter consul qualification health recovery"); err != nil {
+			t.Fatalf("Consul PassTTL recovery %s: %v", serviceName, err)
+		}
+		if _, err := waitForNacosHost(verifyClient, serviceName, normalizedSource.ID, firstID, func(host nacos.Host) bool {
+			return host.Port == 19500+i && host.Metadata["version"] == "consul-real-updated"
+		}, nacosCfg.timeout); err != nil {
+			t.Fatalf("health-recovery catalog convergence %s: %v", serviceName, err)
+		}
+		healthRecoverySamples = append(healthRecoverySamples, time.Since(healthRecoveryStarted))
 
 		deleteAck := time.Now()
 		if err := consulClient.Agent().ServiceDeregister(firstID); err != nil {
@@ -306,6 +353,23 @@ func waitForNacosCatalog(client *nacos.Client, service, cluster string, want int
 func waitForNacosCatalogEmpty(client *nacos.Client, service, cluster string, timeout time.Duration) (time.Duration, error) {
 	latency, _, err := waitForNacosCatalog(client, service, cluster, 0, "", timeout)
 	return latency, err
+}
+
+func waitForNacosHost(client *nacos.Client, service, cluster, instanceID string, predicate func(nacos.Host) bool, timeout time.Duration) (time.Duration, error) {
+	started := time.Now()
+	deadline := started.Add(timeout)
+	for time.Now().Before(deadline) {
+		hosts, err := client.ListCatalogInstances(service, cluster)
+		if err == nil {
+			for _, host := range hosts {
+				if host.Metadata["instanceId"] == instanceID && predicate(host) {
+					return time.Since(started), nil
+				}
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return 0, fmt.Errorf("catalog host %s did not satisfy predicate", instanceID)
 }
 
 func summarizeConsulRealLatencies(samples []time.Duration) consulRealLatencySummary {
