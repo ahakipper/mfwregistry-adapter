@@ -51,8 +51,9 @@ diagnostic values rather than statistically meaningful percentiles:
 
 The first smoke passed, but exposed unbounded SDK debug output in the child
 log. The SDK facade now initializes the official logger at `warn`; the rerun
-used owned KWOK cluster `dsca-observe-21989`, passed the same acceptance gates,
-and produced a 138 KiB child log instead of the prior multi-gigabyte growth.
+used owned KWOK cluster `dsca-observe-30646`, passed the same acceptance gates,
+and the writable SDK log path left a 17-byte child log with no read-only path
+errors.
 
 ## Artifacts and hashes
 
@@ -75,6 +76,17 @@ Latest rerun artifacts:
   SHA256 `41ebd340e90909432ae2ee6a80114b3a0f1c395da85df6d53a93276d841863dd`
 - [Tick records](../../tests/observe/results/20260930-1041-ticks.jsonl) —
   SHA256 `cc3c46e0e4e44909cecc1f7f6dd39cb6c613b84b403af0467b678f512c02c696`
+
+Latest logger-path rerun artifacts:
+
+- [Summary Markdown](../../tests/observe/results/20260930-1054-summary.md) —
+  SHA256 `541ccfa35846ecc9619aa72cfc96414257c1389a032465fee5abb4076049ceeb`
+- [Summary JSON](../../tests/observe/results/20260930-1054-summary.json) —
+  SHA256 `1fa543cba8c9bf6180f5c531f6f2b30b97fffe3773717bb470a85fdcd6018a2c`
+- [Watch events](../../tests/observe/results/20260930-1054-events.jsonl) —
+  SHA256 `361904fee920f450921ec6e9a2609228bbb350da5f593ef9a7e050d4d59d565d`
+- [Tick records](../../tests/observe/results/20260930-1054-ticks.jsonl) —
+  SHA256 `5f1098238e6df96f4dc7effc90797ca153812911798edbc153d340e9f14ca559`
 
 ## Boundary
 
