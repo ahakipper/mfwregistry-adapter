@@ -56,6 +56,8 @@ const (
 	refreshIdleTime    time.Duration = 50 * time.Millisecond
 	periodicCheckTime  time.Duration = 50 * time.Millisecond
 	blockQueryWaitTime time.Duration = 5 * time.Second
+	watchChangeBurst                 = 2
+	watchChangeRefill                = 15 * time.Second
 
 	tagMicroservice string = "microservice"
 )
@@ -72,6 +74,112 @@ func (realClock) Now() time.Time {
 
 func (realClock) After(d time.Duration) <-chan time.Time {
 	return time.After(d)
+}
+
+// consulWatchIndex tracks the index returned by the health-state query and
+// the index sent on the next request. Consul can return an empty/zero index
+// or an index older than the one previously observed (for example after a
+// Raft snapshot restore). Invalid indexes must never become change tokens.
+type consulWatchIndex struct {
+	waitIndex uint64
+	lastIndex uint64
+}
+
+// observe records one query result. A rollback is a real change notification,
+// but resets the next query to index zero so Consul can establish a fresh
+// blocking baseline. The fresh response is compared with the rolled-back
+// index, so it cannot produce a duplicate notification.
+func (i *consulWatchIndex) observe(queryMeta *api.QueryMeta) (changed, retryImmediately bool) {
+	if queryMeta == nil || queryMeta.LastIndex == 0 {
+		// Consul requires a positive index after the initial request. Retain an
+		// explicit floor after every invalid response to prevent an immediate
+		// zero-index retry loop.
+		i.waitIndex = 1
+		return false, false
+	}
+
+	lastIndex := queryMeta.LastIndex
+	if i.lastIndex != 0 && lastIndex < i.lastIndex {
+		i.lastIndex = lastIndex
+		i.waitIndex = 0
+		return true, true
+	}
+
+	changed = i.lastIndex != lastIndex
+	i.lastIndex = lastIndex
+	i.waitIndex = lastIndex
+	return changed, false
+}
+
+// consulChangeLimiter is a small token bucket for the blocking-query watch.
+// Two changes may be delivered back-to-back; once the burst is exhausted, a
+// token is replenished every watchChangeRefill. This keeps normal sparse
+// changes immediate while bounding load during an index-change storm.
+type consulChangeLimiter struct {
+	burst      int
+	refill     time.Duration
+	tokens     int
+	lastRefill time.Time
+}
+
+func newConsulChangeLimiter(burst int, refill time.Duration) *consulChangeLimiter {
+	return &consulChangeLimiter{
+		burst:  burst,
+		refill: refill,
+		tokens: burst,
+	}
+}
+
+// waitForChange waits until a token is available. It returns false only when
+// the monitor context is cancelled while rate-limited.
+func (l *consulChangeLimiter) waitForChange(ctx context.Context, clock ports.Clock) bool {
+	if l == nil || l.burst <= 0 || l.refill <= 0 {
+		return true
+	}
+
+	now := clock.Now()
+	if l.tokens > 0 {
+		l.tokens--
+		if l.tokens == 0 {
+			l.lastRefill = now
+		}
+		return true
+	}
+
+	if l.lastRefill.IsZero() {
+		l.lastRefill = now
+	}
+	if elapsed := now.Sub(l.lastRefill); elapsed >= l.refill {
+		refilled := int(elapsed / l.refill)
+		if refilled > l.burst {
+			refilled = l.burst
+		}
+		l.tokens = refilled
+		l.lastRefill = l.lastRefill.Add(time.Duration(refilled) * l.refill)
+		if l.tokens > 0 {
+			l.tokens--
+			if l.tokens == 0 {
+				l.lastRefill = now
+			}
+			return true
+		}
+	}
+
+	// Once the burst is exhausted, wait for one complete refill interval
+	// from this attempt. Keeping the interval discrete prevents a fractional
+	// token from shortening the promised rapid-change delay.
+	waitFor := l.refill
+	select {
+	case <-ctx.Done():
+		return false
+	case <-clock.After(waitFor):
+		// The newly replenished token is consumed by this change. Re-anchor
+		// the refill clock at the wake-up time so the next change cannot use
+		// the same token a second time.
+		l.tokens = 0
+		l.lastRefill = clock.Now()
+		return true
+	}
 }
 
 // NewConsulMonitor watches for changes in Consul services and catalog services.
@@ -134,7 +242,8 @@ func (m *consulMonitor) Start(ctx context.Context) error {
 
 // watchConsul watches Consul service, node, and health changes.
 func (m *consulMonitor) watchConsul(ctx context.Context, change chan<- struct{}) error {
-	var consulWaitIndex uint64
+	var consulIndex consulWatchIndex
+	changeLimiter := newConsulChangeLimiter(watchChangeBurst, watchChangeRefill)
 
 	for {
 		select {
@@ -154,7 +263,7 @@ func (m *consulMonitor) watchConsul(ctx context.Context, change chan<- struct{})
 		}
 
 		queryOptions := (&api.QueryOptions{
-			WaitIndex: consulWaitIndex,
+			WaitIndex: consulIndex.waitIndex,
 			WaitTime:  blockQueryWaitTime,
 		}).WithContext(ctx)
 		_, queryMeta, err := client.Health().State(api.HealthAny, queryOptions)
@@ -164,12 +273,22 @@ func (m *consulMonitor) watchConsul(ctx context.Context, change chan<- struct{})
 			}
 			m.logger.Warnf("could not fetch services: %s", err.Error())
 			m.notifier.Notify("Failed to fetch data from consul while watching for consul data changes", err.Error())
-		} else if queryMeta != nil && consulWaitIndex != queryMeta.LastIndex {
-			consulWaitIndex = queryMeta.LastIndex
-			select {
-			case change <- struct{}{}:
-			case <-ctx.Done():
-				return nil
+		} else {
+			changed, retryImmediately := consulIndex.observe(queryMeta)
+			if changed {
+				// A rollback must re-establish the blocking baseline without
+				// delay; only ordinary rapid changes consume rate-limit tokens.
+				if !retryImmediately && !changeLimiter.waitForChange(ctx, m.clock) {
+					return nil
+				}
+				select {
+				case change <- struct{}{}:
+				case <-ctx.Done():
+					return nil
+				}
+			}
+			if retryImmediately {
+				continue
 			}
 		}
 

@@ -3,7 +3,11 @@ package consul
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -234,6 +238,281 @@ func TestConsulMonitorHealthStateUsesWaitIndexAndFiveSecondWait(t *testing.T) {
 	}
 }
 
+func TestConsulWatchIndexRejectsMissingAndZeroMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		meta *api.QueryMeta
+	}{
+		{name: "missing"},
+		{name: "zero", meta: &api.QueryMeta{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, lastIndex := range []uint64{0, 10} {
+				index := consulWatchIndex{waitIndex: lastIndex, lastIndex: lastIndex}
+				changed, reset := index.observe(tc.meta)
+				if changed || reset {
+					t.Fatalf("observe(%#v) = changed %v, reset %v, want neither", tc.meta, changed, reset)
+				}
+				if index.waitIndex != 1 || index.lastIndex != lastIndex {
+					t.Fatalf("index after invalid metadata = %#v, want wait 1 and last %d", index, lastIndex)
+				}
+			}
+		})
+	}
+}
+
+func TestConsulMonitorZeroIndexUsesBlockingFloorWithoutChange(t *testing.T) {
+	client, requests, responses := newScriptedHealthStateClient(t)
+	clock := &observedClock{
+		FakeClock:  fakes.NewFakeClock(time.Unix(175, 0)),
+		afterCalls: make(chan time.Duration, 8),
+	}
+	monitor := newTestConsulMonitor(t, &staticConsulClientFactory{client: client}, nil, nil, clock)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	change := make(chan struct{}, 4)
+	go func() { done <- monitor.watchConsul(ctx, change) }()
+
+	assertWatchRequest(t, requests, "")
+	for attempt := 0; attempt < 2; attempt++ {
+		responses <- healthStateResponse{index: 0}
+		assertPeriodicWatchWait(t, clock)
+		assertNoWatchChange(t, change)
+		assertNoWatchRequest(t, requests)
+		clock.Advance(periodicCheckTime)
+		assertWatchRequest(t, requests, "1")
+	}
+
+	responses <- healthStateResponse{index: 10}
+	awaitSignal(t, change, "first valid index change")
+	assertPeriodicWatchWait(t, clock)
+	assertNoWatchChange(t, change)
+	cancel()
+	if err := awaitError(t, done); err != nil {
+		t.Fatalf("watchConsul() error = %v", err)
+	}
+}
+
+func TestConsulMonitorIndexRollbackRetriesImmediatelyAndSignalsOnce(t *testing.T) {
+	client, requests, responses := newScriptedHealthStateClient(t)
+	clock := &observedClock{
+		FakeClock:  fakes.NewFakeClock(time.Unix(180, 0)),
+		afterCalls: make(chan time.Duration, 8),
+	}
+	monitor := newTestConsulMonitor(t, &staticConsulClientFactory{client: client}, nil, nil, clock)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	change := make(chan struct{}, 4)
+	go func() { done <- monitor.watchConsul(ctx, change) }()
+
+	assertWatchRequest(t, requests, "")
+	responses <- healthStateResponse{index: 10}
+	awaitSignal(t, change, "initial index change")
+	assertPeriodicWatchWait(t, clock)
+	clock.Advance(periodicCheckTime)
+	assertWatchRequest(t, requests, "10")
+	responses <- healthStateResponse{index: 20}
+	awaitSignal(t, change, "second index change")
+	assertPeriodicWatchWait(t, clock)
+	clock.Advance(periodicCheckTime)
+	assertWatchRequest(t, requests, "20")
+
+	responses <- healthStateResponse{index: 15}
+	awaitSignal(t, change, "rollback change")
+	// The reset query must start without advancing the periodic retry clock.
+	assertWatchRequest(t, requests, "")
+	responses <- healthStateResponse{index: 15}
+	assertPeriodicWatchWait(t, clock)
+	assertNoWatchChange(t, change)
+	assertNoWatchRequest(t, requests)
+	clock.Advance(periodicCheckTime)
+	assertWatchRequest(t, requests, "15")
+	responses <- healthStateResponse{index: 15}
+	assertPeriodicWatchWait(t, clock)
+	assertNoWatchChange(t, change)
+
+	cancel()
+	if err := awaitError(t, done); err != nil {
+		t.Fatalf("watchConsul() error = %v", err)
+	}
+}
+
+func TestConsulMonitorUnchangedTimeoutAndErrorRetainIndexAndRateLimit(t *testing.T) {
+	client, requests, responses := newScriptedHealthStateClient(t)
+	clock := &observedClock{
+		FakeClock:  fakes.NewFakeClock(time.Unix(185, 0)),
+		afterCalls: make(chan time.Duration, 16),
+	}
+	logger, notifier := &fakes.FakeLogger{}, &fakes.FakeNotifier{}
+	monitor := newTestConsulMonitor(t, &staticConsulClientFactory{client: client}, logger, notifier, clock)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	change := make(chan struct{}, 4)
+	go func() { done <- monitor.watchConsul(ctx, change) }()
+
+	assertWatchRequest(t, requests, "")
+	responses <- healthStateResponse{index: 10}
+	awaitSignal(t, change, "initial index change")
+	assertPeriodicWatchWait(t, clock)
+
+	for attempt := 0; attempt < 3; attempt++ {
+		clock.Advance(periodicCheckTime)
+		assertWatchRequest(t, requests, "10")
+		responses <- healthStateResponse{index: 10}
+		assertPeriodicWatchWait(t, clock)
+		assertNoWatchChange(t, change)
+		assertNoWatchRequest(t, requests)
+	}
+
+	clock.Advance(periodicCheckTime)
+	assertWatchRequest(t, requests, "10")
+	// A blocking query may consume its whole wait period and return the same
+	// index. Its completion is not a change notification.
+	clock.Advance(blockQueryWaitTime)
+	responses <- healthStateResponse{index: 10}
+	assertPeriodicWatchWait(t, clock)
+	assertNoWatchChange(t, change)
+	clock.Advance(periodicCheckTime)
+	assertWatchRequest(t, requests, "10")
+	responses <- healthStateResponse{status: http.StatusInternalServerError}
+	assertPeriodicWatchWait(t, clock)
+	assertNoWatchChange(t, change)
+	assertNoWatchRequest(t, requests)
+	if got := notifier.Notifications(); len(got) != 1 || got[0].Title != "Failed to fetch data from consul while watching for consul data changes" {
+		t.Fatalf("health failure notices = %#v, want one fetch failure notice", got)
+	}
+	if !hasLog(logger.Entries(), "warn", "could not fetch services:") {
+		t.Fatalf("missing health failure log: %#v", logger.Entries())
+	}
+	clock.Advance(periodicCheckTime)
+	assertWatchRequest(t, requests, "10")
+
+	cancel()
+	if err := awaitError(t, done); err != nil {
+		t.Fatalf("watchConsul() error = %v", err)
+	}
+}
+
+func TestConsulChangeLimiterAllowsBurstThenRefills(t *testing.T) {
+	clock := &observedClock{
+		FakeClock:  fakes.NewFakeClock(time.Unix(190, 0)),
+		afterCalls: make(chan time.Duration, 8),
+	}
+	limiter := newConsulChangeLimiter(watchChangeBurst, watchChangeRefill)
+	ctx := context.Background()
+
+	if !limiter.waitForChange(ctx, clock) || !limiter.waitForChange(ctx, clock) {
+		t.Fatal("limiter rejected one of the configured burst tokens")
+	}
+
+	third := make(chan bool, 1)
+	go func() { third <- limiter.waitForChange(ctx, clock) }()
+	if got := awaitDuration(t, clock.afterCalls); got != watchChangeRefill {
+		t.Fatalf("third rapid change delay = %v, want %v", got, watchChangeRefill)
+	}
+	select {
+	case <-third:
+		t.Fatal("third rapid change bypassed the refill delay")
+	default:
+	}
+	clock.Advance(watchChangeRefill)
+	select {
+	case ok := <-third:
+		if !ok {
+			t.Fatal("third rapid change was cancelled")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for third change after refill")
+	}
+
+	fourth := make(chan bool, 1)
+	go func() { fourth <- limiter.waitForChange(ctx, clock) }()
+	if got := awaitDuration(t, clock.afterCalls); got != watchChangeRefill {
+		t.Fatalf("fourth rapid change delay = %v, want %v", got, watchChangeRefill)
+	}
+	select {
+	case <-fourth:
+		t.Fatal("fourth rapid change reused the consumed token")
+	default:
+	}
+	clock.Advance(watchChangeRefill)
+	select {
+	case ok := <-fourth:
+		if !ok {
+			t.Fatal("fourth rapid change was cancelled")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for fourth change after refill")
+	}
+
+	// A sparse change after one refill interval proceeds without another
+	// limiter sleep.
+	clock.Advance(watchChangeRefill)
+	if !limiter.waitForChange(ctx, clock) {
+		t.Fatal("sparse change was rejected after token refill")
+	}
+}
+
+func TestConsulChangeLimiterContextCancellation(t *testing.T) {
+	clock := &observedClock{
+		FakeClock:  fakes.NewFakeClock(time.Unix(195, 0)),
+		afterCalls: make(chan time.Duration, 4),
+	}
+	limiter := newConsulChangeLimiter(watchChangeBurst, watchChangeRefill)
+	if !limiter.waitForChange(context.Background(), clock) || !limiter.waitForChange(context.Background(), clock) {
+		t.Fatal("limiter failed to consume burst tokens")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if limiter.waitForChange(ctx, clock) {
+		t.Fatal("rate-limited change succeeded after context cancellation")
+	}
+}
+
+func TestConsulMonitorRapidChangesAreRateLimitedAfterBurst(t *testing.T) {
+	client, requests, responses := newScriptedHealthStateClient(t)
+	clock := &observedClock{
+		FakeClock:  fakes.NewFakeClock(time.Unix(200, 0)),
+		afterCalls: make(chan time.Duration, 16),
+	}
+	monitor := newTestConsulMonitor(t, &staticConsulClientFactory{client: client}, nil, nil, clock)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	change := make(chan struct{}, 4)
+	go func() { done <- monitor.watchConsul(ctx, change) }()
+
+	assertWatchRequest(t, requests, "")
+	responses <- healthStateResponse{index: 10}
+	awaitSignal(t, change, "first rapid change")
+	assertPeriodicWatchWait(t, clock)
+
+	clock.Advance(periodicCheckTime)
+	assertWatchRequest(t, requests, "10")
+	responses <- healthStateResponse{index: 20}
+	awaitSignal(t, change, "second rapid change")
+	assertPeriodicWatchWait(t, clock)
+
+	clock.Advance(periodicCheckTime)
+	assertWatchRequest(t, requests, "20")
+	responses <- healthStateResponse{index: 30}
+	if got := awaitDuration(t, clock.afterCalls); got != watchChangeRefill {
+		t.Fatalf("third rapid change delay = %v, want %v", got, watchChangeRefill)
+	}
+	assertNoWatchChange(t, change)
+	clock.Advance(watchChangeRefill)
+	awaitSignal(t, change, "third change after rate limit")
+	assertPeriodicWatchWait(t, clock)
+
+	cancel()
+	if err := awaitError(t, done); err != nil {
+		t.Fatalf("watchConsul() error = %v", err)
+	}
+}
+
 func TestConsulMonitorWatchConsulCancelUnblocksFullChangeChannel(t *testing.T) {
 	server := consulmock.Start()
 	defer server.Close()
@@ -252,6 +531,80 @@ func TestConsulMonitorWatchConsulCancelUnblocksFullChangeChannel(t *testing.T) {
 	cancel()
 	if err := awaitError(t, done); err != nil {
 		t.Fatalf("watchConsul() error = %v", err)
+	}
+}
+
+type healthStateResponse struct {
+	index  uint64
+	status int
+}
+
+func newScriptedHealthStateClient(t *testing.T) (*api.Client, <-chan url.Values, chan<- healthStateResponse) {
+	t.Helper()
+	requests := make(chan url.Values, 1)
+	responses := make(chan healthStateResponse, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		select {
+		case requests <- request.URL.Query():
+		case <-request.Context().Done():
+			return
+		}
+		var response healthStateResponse
+		select {
+		case response = <-responses:
+		case <-request.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Consul-Index", strconv.FormatUint(response.index, 10))
+		status := response.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte("[]"))
+	}))
+	t.Cleanup(server.Close)
+	return newConsulClient(t, server.URL), requests, responses
+}
+
+func assertWatchRequest(t *testing.T, requests <-chan url.Values, wantIndex string) {
+	t.Helper()
+	select {
+	case query := <-requests:
+		if got := query.Get("index"); got != wantIndex {
+			t.Fatalf("Health.State index query = %q, want %q", got, wantIndex)
+		}
+		if got := query.Get("wait"); got != "5000ms" {
+			t.Fatalf("Health.State wait query = %q, want 5000ms", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for health state request")
+	}
+}
+
+func assertNoWatchRequest(t *testing.T, requests <-chan url.Values) {
+	t.Helper()
+	select {
+	case query := <-requests:
+		t.Fatalf("Health.State bypassed periodic retry wait: %#v", query)
+	default:
+	}
+}
+
+func assertNoWatchChange(t *testing.T, change <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-change:
+		t.Fatal("unexpected Consul change notification")
+	default:
+	}
+}
+
+func assertPeriodicWatchWait(t *testing.T, clock *observedClock) {
+	t.Helper()
+	if got := awaitDuration(t, clock.afterCalls); got != periodicCheckTime {
+		t.Fatalf("periodic watch wait = %v, want %v", got, periodicCheckTime)
 	}
 }
 func TestConsulMonitorDebouncesChangeForFiftyMilliseconds(t *testing.T) {

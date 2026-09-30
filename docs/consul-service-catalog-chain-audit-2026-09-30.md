@@ -18,9 +18,9 @@ or shutdown, and guarded by the provider lock plus lifecycle state.
 
 The remaining P1/P2 work is still open: Consul-to-Nacos watch latency
 percentiles, real Consul plus Nacos 3 qualification, multiple logical Consul
-sources, blocking-query edge handling, source metrics, and Consul connection
-security settings. This status is an implementation checkpoint, not a
-production-readiness claim.
+sources, source metrics, and Consul connection security settings. Blocking
+query edge handling is closed in the working tree; this status is still an
+implementation checkpoint, not a production-readiness claim.
 
 Stage 2 has now closed the first two items in that list. Equal `Reversion`
 updates use the complete Spotter canonical payload, so same-index changes to
@@ -31,6 +31,19 @@ removed through the normal deletion path; a completely unhealthy catalog is
 still protected by the Stage 1 healthy-empty confirmation gate. A legacy Atlas
 snapshot that omits canonical source fields may receive one corrective push
 to republish the complete projection.
+
+The blocking-query edge cases are now hardened in the working tree. The watch
+tracks the last valid positive `X-Consul-Index` separately from the next
+`WaitIndex`: a missing or zero query meta never emits a change and floors the
+next request at index `1`; a rollback emits exactly one change token, resets
+`WaitIndex` to `0`, and immediately re-establishes a fresh baseline. The
+baseline response is not emitted a second time, and unchanged responses,
+timeouts, and errors continue through the existing `periodicCheckTime` wait so
+rapid unchanged responses cannot form a tight loop. A clock-injected token
+bucket allows two rapid change deliveries, then requires a complete 15-second
+refill interval; rollback baseline retries bypass this delivery limiter so the
+reset remains immediate. Focused and race tests cover zero, rollback,
+unchanged timeout/error, burst refill, cancellation, and rapid changes.
 
 ## Executive assessment
 
@@ -67,7 +80,7 @@ factory, cache diff, Nacos reconcile, source identity, and E2E changes.
 | --- | --- | --- |
 | Provider abstraction | `pkg/providers/iface.go` exposes `Run`, `CompareAndFlush`, `GetAll` | Reusable and already wired |
 | Consul client | `ClientFactorySimple` probes leader and fails over configured addresses | Good local failover coverage; ACL/TLS config is incomplete |
-| Watch | Blocking `/v1/health/state/any`, 5 s wait, 50 ms debounce | Works in tests; index rollback/reset and rate-limit rules are not pinned |
+| Watch | Blocking `/v1/health/state/any`, 5 s wait, 50 ms debounce, burst-2/15 s rapid-change limiter | Focused and race-tested; nil/zero metadata, rollback reset, timeout/error, and rapid-change behavior are pinned |
 | Catalog read | `Catalog.Services` then `Health.Service(..., passingOnly=true)` | Healthy-only semantics need an explicit contract |
 | Conversion | Service metadata → `Instance`; `ModifyIndex` → `Reversion`; source ID propagation exists | Good shape; malformed metadata is skipped and needs metrics |
 | Cache/diff | Source-aware `IdentityKey`; add/update/delete event generation | Same-name source identities are covered; health/equal-revision behavior needs more proof |
@@ -148,8 +161,9 @@ provider/cache/watch scope per descriptor.
 
 - Consul ACL token, TLS CA, server name, datacenter, namespace, and partition
   settings are not exposed through the current provider configuration.
-- The blocking-query loop does not yet pin Consul's documented index rollback,
-  zero-index sanity, and rapid-change rate-limit behavior.
+- Blocking-query index rollback, zero-index sanity, and rapid-change rate
+  limiting are closed in the working tree; the real Consul latency and load
+  qualification remains open.
 - Conversion skips endpoints with missing `ports`, `appCode`, `version`, or
   required metadata; the skip is logged but not exposed as a source metric.
 - The current Consul evidence does not include a scale run comparable to the
