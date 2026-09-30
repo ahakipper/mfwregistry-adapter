@@ -9,6 +9,7 @@ Audited HEAD: `e1ae3b5`
 The following implementation checkpoints are pushed on `refactor/all`:
 `a324be5`, `38e1108`, `0d60bd4`, `11289dc`, `7977780`, `66f825f`,
 `661fec4`, `cab47b0`, and `d13319e`.
+The real-gate scenario extension is pushed as `93c35c6`.
 
 Stage 1 correctness work is implemented and pushed, and has passed
 the independent code review and the Consul package race suite. The provider
