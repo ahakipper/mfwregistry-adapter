@@ -238,6 +238,84 @@ the no-probe policy, choose verified mode and provide the approved verifier;
 otherwise the health setting remains a deployment-owned attestation, not a
 Spotter evidence claim.
 
+### Guarded real Consul → Nacos 3 qualification
+
+`TestConsulRealToNacos3Qualification` is an opt-in, write-enabled scratch
+qualification of the real Consul Agent → Consul provider → `DefaultWorker` →
+official Nacos SDK path. It is compiled only with the `consul_real` build tag
+and is not part of `make test-all`:
+
+```bash
+go test -v -vet=off -tags=consul_real ./tests/e2e/... \
+  -run '^TestConsulRealToNacos3Qualification$' -count=1
+```
+
+Both real endpoints and both write guards are required. `CONSUL_SERVER` is a
+comma-separated Consul HTTP(S) endpoint list (all entries must use the same
+scheme) and must not contain credentials, paths, or query parameters.
+`NACOS_SERVER` is a comma-separated Nacos endpoint list; credentials and query
+parameters are forbidden, while a deployment-specific Nacos context path is
+allowed. The test creates
+throwaway service names beginning with `__spotter_consul_real_`, so use an
+isolated Consul/Nacos scratch namespace and ACL policy.
+
+```bash
+CONSUL_SERVER='https://consul-a:8501,https://consul-b:8501' \
+CONSUL_REAL_SCRATCH=1 CONSUL_REAL_ALLOW_WRITE=1 \
+NACOS_SERVER='https://nacos-a:8848,https://nacos-b:8848' \
+NACOS_REAL_SCRATCH=1 NACOS_REAL_ALLOW_WRITE=1 \
+CONSUL_SOURCE_ID='consul-scratch' CONSUL_REAL_SAMPLES=5 \
+  go test -v -vet=off -tags=consul_real ./tests/e2e/... \
+  -run '^TestConsulRealToNacos3Qualification$' -count=1
+```
+
+Consul authentication accepts either `CONSUL_TOKEN` or `CONSUL_TOKEN_FILE`
+(never both). TLS is enabled by `CONSUL_TLS=1`, an HTTPS endpoint, or any of
+`CONSUL_CA_FILE`, `CONSUL_CERT_FILE`, `CONSUL_KEY_FILE`, and
+`CONSUL_SERVER_NAME`; `CONSUL_INSECURE_SKIP_VERIFY=1` is permitted only for a
+scratch target with the write guards. `CONSUL_DATACENTER` and
+`CONSUL_NAMESPACE` are passed to every Consul client. `CONSUL_SOURCE_ID`
+(or the compatibility alias `CONSUL_REAL_SOURCE_ID`) must contain only
+letters, digits, `-`, `_`, and `.`; when omitted it is derived from the sorted
+endpoint set. `CONSUL_REAL_TIMEOUT` is a positive Go duration (default 20s),
+and `CONSUL_REAL_SAMPLES` is an integer from 1 to 100 (default 2).
+
+Nacos uses the official SDK with `NACOS_NAMESPACE` and optional
+`NACOS_GROUP`, `NACOS_USERNAME`/`NACOS_PASSWORD` (provided as a pair),
+`NACOS_CA_FILE`, `NACOS_SERVER_NAME`, `NACOS_TLS`, and
+`NACOS_INSECURE_SKIP_VERIFY`. `NACOS_ACCESS_TOKEN` is rejected because it is
+not supported by the pinned SDK. `NACOS_REAL_TIMEOUT` is a positive Go
+duration (default 10s). Insecure TLS (`*_INSECURE_SKIP_VERIFY=1`) requires the
+scratch guard; plaintext credentials additionally require the corresponding
+`*_ALLOW_INSECURE_AUTH=1` and scratch/write guards. Otherwise configuration
+fails closed.
+
+For each configured sample the test performs real Consul mutations and waits
+for the Nacos catalog oracle to converge: create/register, update (port and
+metadata), TTL health-down, TTL health-recovery, delete/deregister, and a new
+service recovery/register followed by final deregistration. The log line
+`CONSUL_REAL_QUALIFICATION report=<json>` contains redacted endpoints, the
+normalized `source_id`, `configured_runs`, and per-operation `samples`,
+`p50_ms`, `p90_ms`, `p95_ms`, and `p99_ms` for `create`, `update`, `delete`,
+`recovery`, `health_down`, and `health_recovery`. These are measured
+source-mutation-to-Nacos-catalog-convergence timings; they are evidence for
+the exact scratch run only, not a production SLO.
+
+Missing `CONSUL_SERVER`/`NACOS_SERVER`, missing scratch/write guards, or an
+otherwise unconfigured external target is logged as `NOT VERIFIED` and the
+test is skipped. A skip is not a pass and must not populate production
+percentile evidence. Malformed configuration, failed operations, or failed
+convergence are hard test failures.
+
+Cleanup runs even after a write attempt: active Consul registrations are
+deregistered, each generated Nacos catalog is verified empty, Consul Agent
+services are read back for residual IDs, the provider is cancelled and joined,
+and both Nacos clients are closed. The final report must contain
+`cleanup_status="passed"` and `residual_unknown=false`; a cleanup/read-back,
+provider-stop, client-close, or timeout error sets `cleanup_status="failed"`
+and `residual_unknown=true`, and fails the test. Preserve the complete log and
+the exact (redacted) report with any qualification result.
+
 ### Final-code two-hour gate
 
 The durable run is launched outside the interactive shell through
