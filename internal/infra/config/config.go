@@ -11,8 +11,22 @@ import (
 	"fmt"
 	"strings"
 
+	"spotter/internal/domain/instance"
 	"spotter/pkg/nacos"
 )
+
+// ConsulSourceConfig is the configuration descriptor for one logical Consul
+// catalog. It currently carries only the fields the provider can use; ACL/TLS
+// and other security options are an additive extension point for a later
+// provider contract.
+type ConsulSourceConfig struct {
+	ID        string
+	Addresses []string
+}
+
+// ConsulSource is retained as a short API spelling for callers that already
+// use the descriptor name from the provider package.
+type ConsulSource = ConsulSourceConfig
 
 // Endpoints holds an environment-specific endpoint preset.
 //
@@ -37,6 +51,11 @@ type Endpoints struct {
 	// an HA endpoint list for this one source, not a list of independent
 	// clusters.
 	ConsulClusterID string
+	// ConsulSources describes independent Consul catalogs. The current CLI
+	// flags populate the legacy fields above and therefore resolve to one
+	// descriptor; callers embedding Config may provide multiple descriptors
+	// through this explicit API.
+	ConsulSources []ConsulSource
 	// LockCampaignKey is the etcd prefix key used for the leader campaign.
 	LockCampaignKey string
 	// Providers lists the providers enabled by the preset (may be empty).
@@ -225,6 +244,10 @@ type Flags struct {
 	// ConsulClusterID identifies the logical Consul source for source-qualified
 	// Nacos cluster names.
 	ConsulClusterID string
+	// ConsulSources explicitly configures independent Consul catalogs. It is
+	// intentionally an API field for now; the current CLI remains single-source
+	// and adapts ConsulAddress + ConsulClusterID into one descriptor.
+	ConsulSources []ConsulSource
 	// EtcdEndpointsFlag is the --etcd-endpoints flag: a comma list that
 	// overrides the preset's EtcdEndpoints (plan §8.4). Empty keeps the
 	// preset endpoints, TLS and all; non-empty resolves CertFile/KeyFile/
@@ -314,6 +337,54 @@ type Config struct {
 	// compare reads. Empty resolves to Nacos for the default Nacos-only graph;
 	// an explicit compatibility graph may leave it empty to read Atlas.
 	ReconcileSource string
+}
+
+// ResolveConsulSources returns the normalized logical Consul source set.
+// Explicit descriptors take precedence; otherwise the legacy single-source
+// fields are adapted without merging any independent address lists.
+func (c Config) ResolveConsulSources() ([]ConsulSource, error) {
+	if len(c.ConsulSources) > 0 {
+		return normalizeConsulSources(c.ConsulSources)
+	}
+	return normalizeConsulSources([]ConsulSource{{ID: c.ConsulClusterID, Addresses: c.ConsulAddress}})
+}
+
+func normalizeConsulSources(sources []ConsulSource) ([]ConsulSource, error) {
+	if len(sources) == 0 {
+		return nil, errors.New("no consul sources configured")
+	}
+	resolved := make([]ConsulSource, 0, len(sources))
+	seenIDs := make(map[string]struct{}, len(sources))
+	for index, source := range sources {
+		addresses := make([]string, 0, len(source.Addresses))
+		seenAddresses := make(map[string]struct{}, len(source.Addresses))
+		for _, address := range source.Addresses {
+			address = strings.TrimSpace(address)
+			if address == "" {
+				continue
+			}
+			if _, exists := seenAddresses[address]; exists {
+				continue
+			}
+			seenAddresses[address] = struct{}{}
+			addresses = append(addresses, address)
+		}
+		if len(addresses) == 0 {
+			return nil, fmt.Errorf("normalize consul source %d: consul source has no usable addresses", index)
+		}
+		id, idErr := instance.ConsulSourceID(source.ID, addresses)
+		if idErr != nil {
+			return nil, fmt.Errorf("normalize consul source %d: %w", index, idErr)
+		}
+		if id != "" {
+			if _, exists := seenIDs[id]; exists {
+				return nil, fmt.Errorf("duplicate consul source ID %q", id)
+			}
+			seenIDs[id] = struct{}{}
+		}
+		resolved = append(resolved, ConsulSource{ID: id, Addresses: addresses})
+	}
+	return resolved, nil
 }
 
 // Default flag values applied by Load when a flag is not set (zero). They
@@ -464,6 +535,20 @@ func Load(env string, flags Flags) (Config, error) {
 	}
 	if strings.TrimSpace(flags.ConsulClusterID) != "" {
 		cfg.ConsulClusterID = strings.TrimSpace(flags.ConsulClusterID)
+	}
+	if len(flags.ConsulSources) > 0 {
+		resolved, sourceErr := normalizeConsulSources(flags.ConsulSources)
+		if sourceErr != nil {
+			return Config{}, sourceErr
+		}
+		cfg.ConsulSources = resolved
+		// Keep legacy fields populated for callers that still inspect them. A
+		// multi-source config cannot be represented by those fields, so only
+		// expose the first descriptor there; composition uses ConsulSources.
+		if len(resolved) == 1 {
+			cfg.ConsulAddress = append([]string(nil), resolved[0].Addresses...)
+			cfg.ConsulClusterID = resolved[0].ID
+		}
 	}
 	if etcdEndpoints := cleanList(flags.EtcdEndpointsFlag); len(etcdEndpoints) > 0 {
 		cfg.EtcdEndpoints = etcdEndpoints

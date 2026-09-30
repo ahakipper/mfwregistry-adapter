@@ -653,6 +653,50 @@ func TestLoadCarriesConsulLogicalClusterID(t *testing.T) {
 	}
 }
 
+func TestLoadExplicitConsulSourcesPreservesLegacySingleSourceView(t *testing.T) {
+	flags := Flags{
+		Providers: []string{"ecs"},
+		ConsulSources: []ConsulSource{
+			{ID: "consul-blue", Addresses: []string{" blue:8500 ", "blue-standby:8500"}},
+			{ID: "consul-green", Addresses: []string{"green:8500"}},
+		},
+	}
+	got, err := Load("test", flags)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(got.ConsulSources) != 2 {
+		t.Fatalf("ConsulSources count = %d, want 2", len(got.ConsulSources))
+	}
+	if got.ConsulSources[0].ID != "consul-blue" || got.ConsulSources[1].ID != "consul-green" {
+		t.Fatalf("ConsulSources IDs = %#v, want blue/green", got.ConsulSources)
+	}
+	resolved, err := got.ResolveConsulSources()
+	if err != nil {
+		t.Fatalf("ResolveConsulSources() error = %v", err)
+	}
+	if len(resolved) != 2 || resolved[0].ID != "consul-blue" || resolved[1].ID != "consul-green" {
+		t.Fatalf("resolved sources = %#v, want two explicit sources", resolved)
+	}
+}
+
+func TestResolveConsulSourcesAdaptsLegacyFields(t *testing.T) {
+	cfg, err := Load("test", Flags{Providers: []string{"ecs"}, ConsulAddrFlag: []string{"legacy-a:8500", "legacy-b:8500"}, ConsulClusterID: " legacy "})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	resolved, err := cfg.ResolveConsulSources()
+	if err != nil {
+		t.Fatalf("ResolveConsulSources() error = %v", err)
+	}
+	if len(resolved) != 1 || resolved[0].ID != "legacy" {
+		t.Fatalf("resolved legacy sources = %#v, want one legacy descriptor", resolved)
+	}
+	if !reflect.DeepEqual(resolved[0].Addresses, []string{"legacy-a:8500", "legacy-b:8500"}) {
+		t.Fatalf("resolved legacy addresses = %#v", resolved[0].Addresses)
+	}
+}
+
 // TestLoadLocalSourceFlagsKeepPresetWhenEmpty: the additive local-source
 // flags of plan §8.4 — --kubeconfig, --consul-addr, --etcd-endpoints — must
 // be pure overrides: empty (the default) keeps every preset endpoint

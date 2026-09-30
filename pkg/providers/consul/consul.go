@@ -24,8 +24,12 @@ import (
 
 // K8S provider implement
 type consul struct {
-	providerName       string
-	sourceCluster      string
+	providerName  string
+	sourceCluster string
+	// acceptLegacyRemote is enabled only for the single-source compatibility
+	// constructor. Multiple-source construction disables legacy records whose
+	// missing SourceCluster makes ownership ambiguous.
+	acceptLegacyRemote bool
 	clientFactory      ConsulClientFactory        // consul api factory
 	monitor            Monitor                    // monitor
 	ctx                context.Context            // context
@@ -174,6 +178,10 @@ func NewConsulProviderWithSourceID(ctx context.Context, worker worker.Worker, pu
 		err = errors.New("params invalid")
 		return nil, err
 	}
+	sourceCluster, sourceErr := domaininstance.ConsulSourceID(sourceID, addrs)
+	if sourceErr != nil {
+		return nil, sourceErr
+	}
 	var cf ConsulClientFactory
 	if cf, err = NeweClientFacotorySimple(addrs); err != nil {
 		return nil, err
@@ -189,12 +197,13 @@ func NewConsulProviderWithSourceID(ctx context.Context, worker worker.Worker, pu
 		return nil, err
 	}
 	consulProvider := &consul{
-		providerName:  "consul",
-		sourceCluster: consulSourceClusterID(addrs, sourceID),
-		ctx:           ctx,
-		monitor:       monitor,
-		worker:        worker,
-		clientFactory: cf,
+		providerName:       "consul",
+		sourceCluster:      sourceCluster,
+		acceptLegacyRemote: true,
+		ctx:                ctx,
+		monitor:            monitor,
+		worker:             worker,
+		clientFactory:      cf,
 		// interval honors --push-interval for the ecs leg exactly like the
 		// k8s provider does (the provider constructor assigns the same field): it
 		// bounds the periodic CompareAndFlush + SyncAll cadence. The field
@@ -432,13 +441,15 @@ func (c *consul) syncInstance() (err error) {
 	}
 	// Compare to generate events
 	addEvents, updateEvents, deleteEvents := c.extractDiff(oldCache, newCache)
-	//pp.Println(map[string][]*sv.Instance{"add": addEvents, "update": updateEvents, "delete": deleteEvents})
-	// push events
-	c.EventsSync(addEvents, updateEvents, deleteEvents)
 	// Update cache
 	c.cache = newCache
 	c.generation++
 	c.Unlock()
+	// Dispatch after releasing c.Lock. Worker sinks may synchronously acquire
+	// their full-operation gate and invoke Revalidate, which reads this
+	// provider snapshot and therefore needs c.Lock; dispatching under the lock
+	// would invert that order during an incremental/full-push race.
+	c.EventsSync(addEvents, updateEvents, deleteEvents)
 	if recovered {
 		// An incremental recovery with the same revision can be rejected by
 		// the sink's delete tombstone. Emit a trusted complete snapshot after
@@ -676,12 +687,17 @@ func (c *consul) EventsSync(add, update, del []*sv.Instance) {
 // eventSync sync the event to the finder
 func (c *consul) eventSync(ins *sv.Instance, triggerTime int64) {
 	sequence := uint64(0)
-	scope := "ecs"
+	scope := c.sourceCluster
 	if ins != nil && ins.Reversion > 0 {
 		sequence = uint64(ins.Reversion)
 	}
-	if ins != nil && ins.Provider != "" {
+	if ins != nil && ins.SourceCluster != "" {
+		scope = ins.SourceCluster
+	} else if ins != nil && ins.Provider != "" && scope == "" {
 		scope = ins.Provider
+	}
+	if scope == "" {
+		scope = "ecs"
 	}
 	c.worker.Handle(&worker.Event{
 		Trigger:  triggerTime,
@@ -763,26 +779,26 @@ func (c *consul) ProcessIntervalFullPush() {
 // equivalent: its informer-cache List cannot error, and the full-push loop
 // starts only after HasSynced.)
 //
-// The whole read-then-decide sequence runs under the provider lock (the
-// round-2 review's fix): the lock pairs this goroutine's sourceErr write
-// (inside GetAll) with the handler-goroutine writes under
-// syncInstance/CompareAndFlush — the tick path must take the same lock or
-// the flag has no happens-before edge. Holding it across worker.Handle is
-// safe: Handle is a plain handler-table dispatch, and CompareAndFlush
-// already holds this lock across the worker.GetAll RPC (a strictly wider
-// footprint), so no new lock-ordering surface is introduced.
+// The snapshot read and source-state decision run under the provider lock;
+// worker.Handle runs after that lock is released. This lock order is required
+// because ordered sinks hold their full-operation gate while Revalidate reads
+// this provider snapshot.
 func (c *consul) emitSyncAll() {
 	all, generation, valid, emptyConfirmed := c.snapshotForFullPush()
 	if !valid {
 		return
+	}
+	scope := c.sourceCluster
+	if scope == "" {
+		scope = providers.ProviderEcs
 	}
 	// Tick-time origin + ns unit (dsca-2 §3 Option (b), §6 origin semantics).
 	c.worker.Handle(&worker.Event{
 		Trigger:        time.Now().UnixNano(),
 		Data:           all,
 		Operate:        worker.OperateTypeSyncAll,
-		Scope:          "ecs",
-		BatchID:        worker.FullBatchID("ecs", all),
+		Scope:          scope,
+		BatchID:        worker.FullBatchID(scope, all),
 		Sequence:       generation,
 		EmptyConfirmed: emptyConfirmed,
 		Revalidate: func() ([]*v2.Instance, bool) {
@@ -836,14 +852,15 @@ func (c *consul) snapshotForFullPushMode(advanceEmptyConfirmation bool) ([]*v2.I
 // CompareAndFlush compare and find diff instances then flush
 func (c *consul) CompareAndFlush() {
 	c.Lock()
-	defer c.Unlock()
 	c.logger.Infof("%s: trying to compare and find diff instances then flush", c.providerName)
 	all := c.getAllLocked()
 	if all == nil {
+		c.Unlock()
 		return
 	}
 	if len(all) == 0 {
 		if c.snapshotState != consulSnapshotHealthyEmpty {
+			c.Unlock()
 			return
 		}
 		if !c.emptyConfirmationPending {
@@ -853,6 +870,7 @@ func (c *consul) CompareAndFlush() {
 		if c.emptyConfirmations < 3 {
 			c.scheduleEmptyRetryLocked()
 			c.logger.Warnf("%s: healthy empty catalog confirmation %d/3; retaining cache and remote state", c.providerName, c.emptyConfirmations)
+			c.Unlock()
 			return
 		}
 	} else {
@@ -871,6 +889,7 @@ func (c *consul) CompareAndFlush() {
 			}
 		}
 		c.generation++
+		c.Unlock()
 		// Compare diffs and sync incrementally. Atlas historically returned only
 		// online ECS entries; Nacos must also return unhealthy entries so the
 		// canonical comparator can prove their steady state and heal field or
@@ -885,6 +904,7 @@ func (c *consul) CompareAndFlush() {
 			c.logger.Errorf("%s", err.Error())
 			return
 		}
+		registryList = c.sourceScopedRemote(registryList)
 		if registryList == nil || registryList.Instance == nil || len(registryList.Instance) == 0 {
 			for _, ins := range all {
 				c.buildAndSendEvent(ins)
@@ -1011,6 +1031,29 @@ func (c *consul) CompareAndFlush() {
 	}
 }
 
+// sourceScopedRemote constrains reconciliation authority to this catalog.
+// Source-aware records from another catalog are never candidates for updates
+// or deletion. Legacy records are admitted only by the single-source adapter.
+func (c *consul) sourceScopedRemote(list *sv.InstanceList) *sv.InstanceList {
+	if list == nil || c.sourceCluster == "" {
+		return list
+	}
+	filtered := make([]*sv.Instance, 0, len(list.GetInstance()))
+	for _, item := range list.GetInstance() {
+		if item == nil {
+			continue
+		}
+		source := item.SourceCluster
+		if source == "" && item.Label != nil {
+			source = item.Label["sourceCluster"]
+		}
+		if source == c.sourceCluster || (source == "" && c.acceptLegacyRemote) {
+			filtered = append(filtered, item)
+		}
+	}
+	return &sv.InstanceList{Instance: filtered}
+}
+
 // consulClusterOf resolves the local side of the Cluster comparison:
 // the local instance's Cluster in Atlas-primary mode (the remote view
 // round-trips the model verbatim there), and the local instance's
@@ -1026,6 +1069,21 @@ func consulClusterOf(nacosReconcile bool, ins *sv.Instance) string {
 }
 
 func (c *consul) buildAndSendEvent(instance *sv.Instance) { // if instance status is 0 , don't send event
+	if instance == nil {
+		return
+	}
+	scope := c.sourceCluster
+	if scope == "" {
+		scope = instance.SourceCluster
+	}
+	if scope == "" {
+		scope = instance.Provider
+	}
+	sequence := uint64(0)
+	if instance.Reversion > 0 {
+		sequence = uint64(instance.Reversion)
+	}
+	identity := providers.IdentityKey(instance)
 	if err := c.pool.Submit(func() {
 		if instance.Status == 0 {
 			return
@@ -1036,9 +1094,13 @@ func (c *consul) buildAndSendEvent(instance *sv.Instance) { // if instance statu
 		// semantics): the reconcile push, not a watch event.
 		triggerTime := time.Now().UnixNano()
 		event := &worker.Event{
-			Trigger: triggerTime,
-			Data:    ins,
-			Operate: worker.OperateTypeSync,
+			Trigger:  triggerTime,
+			Data:     ins,
+			Operate:  worker.OperateTypeSync,
+			Scope:    scope,
+			Identity: identity,
+			Revision: instance.Reversion,
+			Sequence: sequence,
 		}
 		c.worker.Handle(event)
 	}); err != nil {
@@ -1050,9 +1112,13 @@ func (c *consul) buildAndSendEvent(instance *sv.Instance) { // if instance statu
 			ins := make([]*sv.Instance, 1)
 			ins[0] = instance
 			c.worker.Handle(&worker.Event{
-				Trigger: time.Now().UnixNano(),
-				Data:    ins,
-				Operate: worker.OperateTypeSync,
+				Trigger:  time.Now().UnixNano(),
+				Data:     ins,
+				Operate:  worker.OperateTypeSync,
+				Scope:    scope,
+				Identity: identity,
+				Revision: instance.Reversion,
+				Sequence: sequence,
 			})
 		})
 	}

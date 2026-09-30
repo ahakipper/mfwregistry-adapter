@@ -20,8 +20,8 @@ Healthy empty state requires three independent confirmations; a provider-owned
 or shutdown, and guarded by the provider lock plus lifecycle state.
 
 The remaining P1/P2 work is still open: Consul-to-Nacos watch latency
-percentiles, real Consul plus Nacos 3 qualification, multiple logical Consul
-sources, source metrics, and Consul connection security settings. Blocking
+percentiles, real Consul plus Nacos 3 qualification, source metrics, and
+Consul connection security settings. Blocking
 query edge handling is closed and pushed; this status is still an
 implementation checkpoint, not a production-readiness claim.
 
@@ -66,6 +66,16 @@ so the optional observe/debug endpoint cannot race source state. The worker's
 legacy plain-sink compatibility path rejects scoped unconfirmed empty full
 snapshots before `PushAll`; confirmed empty operations still retain their
 typed retry metadata and destructive authority.
+
+Stage 6 adds the multi-source model. `ConsulSource` descriptors normalize one
+logical catalog each, the legacy single-source fields adapt to one descriptor,
+and Server creates independent provider, monitor, cache, watch, and retry
+scopes per descriptor. Full and incremental events use the source scope;
+remote reconciliation filters other source records; Nacos HTTP compatibility
+uses remembered source scopes in-process. Explicit source IDs are restricted
+to Nacos-safe characters, and constructor rollback cleans providers already
+built when a later source fails. The command-line remains single-source, while
+embedded configuration can provide multiple descriptors.
 
 The repository release gate was rerun on 2026-10-01 after these changes:
 `go test ./... -count=1`, `go vet ./...`, and `make test-all` all passed. The

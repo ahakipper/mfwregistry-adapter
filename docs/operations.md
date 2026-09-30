@@ -118,6 +118,15 @@ process is normally started from the directory that contains `config/`.
 | `--reconcile-source` | empty | Resolves to `nacos` in the default Nacos-only graph. |
 | `--consul-cluster-id` | derived from address set | Logical Consul source ID used for source-qualified Nacos cluster names; Consul addresses remain HA endpoints for that one source. |
 
+The command-line configuration remains single-source: `--consul-addr` and
+`--consul-cluster-id` resolve to one logical Consul descriptor. Explicit source
+IDs must use only letters, digits, `-`, `_`, and `.` so the source scope is
+identical to its Nacos wire cluster name. Embedded callers
+can provide multiple `Config.ConsulSources` descriptors through the explicit
+configuration API; each descriptor creates an independent provider, watch, and
+cache scope. The CLI does not interpret one comma-separated address list as
+multiple independent catalogs.
+
 ### Nacos sink transport
 
 When enabled, production naming operations use the official

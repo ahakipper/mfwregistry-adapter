@@ -805,22 +805,29 @@ func initializeProvidersWithDeps(ctx context.Context, w worker.Worker, cfg infra
 			}
 			prs = append(prs, k8sProvider)
 		case providers.ProviderEcs:
-			var consulProvider providers.Provider
-			if len(cfg.ConsulAddress) == 0 {
-				err = errors.New("the consul server address is not configured")
-				return nil, err
-			}
-			consulProvider, err = consul2.NewConsulProviderWithSourceID(ctx, w, cfg.PushAllInterval, cfg.ConsulAddress, cfg.ConsulClusterID, logger, notifier)
-			if err != nil {
-				err = errors.WithMessagef(err, "new consul provider")
-				return nil, err
-			}
-			if reconcileNacos {
-				if sw, ok := consulProvider.(consul2.NacosReconcileSwitch); ok {
-					sw.SetNacosReconcileSource(true)
+			sources, sourceErr := cfg.ResolveConsulSources()
+			if sourceErr != nil {
+				if len(cfg.ConsulAddress) == 0 && len(cfg.ConsulSources) == 0 {
+					return nil, errors.New("the consul server address is not configured")
 				}
+				return nil, errors.WithMessage(sourceErr, "resolve consul sources")
 			}
-			prs = append(prs, consulProvider)
+			providerSources := make([]consul2.ConsulSource, 0, len(sources))
+			for _, source := range sources {
+				providerSources = append(providerSources, consul2.ConsulSource{ID: source.ID, Addresses: append([]string(nil), source.Addresses...)})
+			}
+			consulProviders, providerErr := consul2.NewConsulProvidersWithSources(ctx, w, cfg.PushAllInterval, providerSources, logger, notifier)
+			if providerErr != nil {
+				return nil, errors.WithMessage(providerErr, "new consul providers")
+			}
+			for _, consulProvider := range consulProviders {
+				if reconcileNacos {
+					if sw, ok := consulProvider.(consul2.NacosReconcileSwitch); ok {
+						sw.SetNacosReconcileSource(true)
+					}
+				}
+				prs = append(prs, consulProvider)
+			}
 		default:
 			err = errors.New(fmt.Sprintf("invalid provider name: %s", pname))
 			return nil, err

@@ -11,6 +11,7 @@ import (
 
 	"spotter/internal/domain/instance"
 	"spotter/internal/ports"
+	"spotter/pkg/providers"
 )
 
 // SinkName is the fanout sink name of the Nacos adapter: the value the
@@ -904,7 +905,20 @@ func (s *Sink) GetAll(statuses []int32, provider string) (*instance.InstanceList
 		if readClient.sdk != nil {
 			hosts, err = readClient.ListAllCatalogInstances(service)
 		} else {
-			hosts, err = readClient.ListCatalogInstances(service, provider)
+			scopes := []string{provider}
+			if provider == providers.ProviderEcs {
+				if remembered := s.rememberedClusterScopes(); len(remembered) > 0 {
+					scopes = remembered
+				}
+			}
+			for _, scope := range scopes {
+				var scoped []Host
+				scoped, err = readClient.ListCatalogInstances(service, scope)
+				if err != nil {
+					break
+				}
+				hosts = append(hosts, scoped...)
+			}
 		}
 		if err != nil {
 			if isCatalogNotFound(err) {
@@ -913,7 +927,7 @@ func (s *Sink) GetAll(statuses []int32, provider string) (*instance.InstanceList
 			return nil, err
 		}
 		for _, host := range hosts {
-			if readClient.sdk == nil && host.ClusterName != provider {
+			if readClient.sdk == nil && provider != providers.ProviderEcs && host.ClusterName != provider {
 				s.logger.Warnf("nacos: ignoring cross-cluster catalog instance %s returned for provider %s", host.InstanceID, provider)
 				continue
 			}
@@ -932,6 +946,22 @@ func (s *Sink) GetAll(statuses []int32, provider string) (*instance.InstanceList
 		}
 	}
 	return &instance.InstanceList{Instance: instances}, nil
+}
+
+func (s *Sink) rememberedClusterScopes() []string {
+	s.rememberedMu.Lock()
+	defer s.rememberedMu.Unlock()
+	seen := make(map[string]struct{}, len(s.remembered))
+	for key := range s.remembered {
+		if key.cluster != "" {
+			seen[key.cluster] = struct{}{}
+		}
+	}
+	scopes := make([]string, 0, len(seen))
+	for scope := range seen {
+		scopes = append(scopes, scope)
+	}
+	return scopes
 }
 
 // Close releases the sink's resources. The HTTP client is stateless, so
@@ -1226,17 +1256,7 @@ func WireClusterName(ins *instance.Instance) string { return clusterOf(ins) }
 // separators. Provider is deliberately absent: it is the Instance type, not
 // the source cluster name.
 func sanitizeWireClusterName(value string) string {
-	value = strings.TrimSpace(value)
-	var b strings.Builder
-	for _, r := range value {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('-')
-		}
-	}
-	return strings.Trim(b.String(), "-")
+	return instance.SanitizeWireScope(value)
 }
 
 // firstPort derives the wire port: Ports[0].Port, else 0 — the same rule
