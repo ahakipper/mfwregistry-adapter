@@ -7,7 +7,8 @@ Audited HEAD: `e1ae3b5`
 ## Current execution status — 2026-10-01
 
 The following implementation checkpoints are pushed on `refactor/all`:
-`a324be5`, `38e1108`, `0d60bd4`, `11289dc`, `7977780`, and `66f825f`.
+`a324be5`, `38e1108`, `0d60bd4`, `11289dc`, `7977780`, `66f825f`,
+`661fec4`, and `cab47b0`.
 
 Stage 1 correctness work is implemented and pushed, and has passed
 the independent code review and the Consul package race suite. The provider
