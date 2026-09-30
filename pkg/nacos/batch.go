@@ -190,9 +190,11 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 					}
 					if len(params) > 0 {
 						validIndexes := make([]int, 0, len(params))
+						validInstances := make([]*instance.Instance, 0, len(params))
 						for position, item := range batch.Items {
 							if item.Ip != "" && errs[batch.Indexes[position]] == nil {
 								validIndexes = append(validIndexes, batch.Indexes[position])
+								validInstances = append(validInstances, item)
 							}
 						}
 						var wg sync.WaitGroup
@@ -202,6 +204,16 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 							wg.Add(1)
 							go func() {
 								defer wg.Done()
+								ins := validInstances[pos]
+								releaseWireIdentity, claimErr := s.claimWireIdentity(ins)
+								if claimErr != nil {
+									mu.Lock()
+									errs[validIndexes[pos]] = claimErr
+									mu.Unlock()
+									return
+								}
+								writeSucceeded := false
+								defer func() { releaseWireIdentity(writeSucceeded) }()
 								err := s.withPushPermit(func() error {
 									if s.shouldApplyHealthPolicy() {
 										if err := s.ensureClusterHealthCheckDisabled(p.ServiceName, p.ClusterName); err != nil {
@@ -210,6 +222,7 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 									}
 									return s.client.sdk.RegisterPersistent(p)
 								})
+								writeSucceeded = err == nil
 								if err != nil {
 									mu.Lock()
 									errs[validIndexes[pos]] = err

@@ -2,6 +2,7 @@ package nacos_test
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -594,6 +595,46 @@ func TestBlackboxSinkPushAllUpsertsAllPushed(t *testing.T) {
 	}
 	if got := len(server.Instances("pay-user", "ecs")); got != 1 {
 		t.Fatalf("ecs instances = %d, want 1", got)
+	}
+}
+
+func TestBlackboxSinkRejectsSameWireIdentityFromDistinctSourceClusters(t *testing.T) {
+	sink, server := newSinkAt(t)
+	first := domainInstance("pod-a-hash", "pay-user", "10.0.0.1", 8080, "k8s", 1)
+	first.SourceCluster = "cluster-a"
+	first.SourceKey = "cluster-a/uid-a"
+	second := domainInstance("pod-b-hash", "pay-user", "10.0.0.1", 8080, "k8s", 1)
+	second.SourceCluster = "cluster-b"
+	second.SourceKey = "cluster-b/uid-b"
+
+	err := sink.PushAll(7, []*instance.Instance{first, second})
+	var collision *nacos.WireIdentityCollisionError
+	if !errors.As(err, &collision) {
+		t.Fatalf("PushAll() error = %v, want WireIdentityCollisionError", err)
+	}
+	if len(server.Requests()) != 0 {
+		t.Fatalf("collision snapshot issued Nacos requests = %v, want fail-closed before mutation", server.Requests())
+	}
+}
+
+func TestBlackboxSinkRejectsIncrementalWireIdentityReuse(t *testing.T) {
+	sink, server := newSinkAt(t)
+	first := domainInstance("pod-a-hash", "pay-user", "10.0.0.1", 8080, "k8s", 1)
+	first.SourceCluster = "cluster-a"
+	first.SourceKey = "cluster-a/uid-a"
+	second := domainInstance("pod-b-hash", "pay-user", "10.0.0.1", 8080, "k8s", 1)
+	second.SourceCluster = "cluster-b"
+	second.SourceKey = "cluster-b/uid-b"
+	if err := sink.Push(1, []*instance.Instance{first}); err != nil {
+		t.Fatalf("first Push() error = %v", err)
+	}
+	err := sink.Push(2, []*instance.Instance{second})
+	var collision *nacos.WireIdentityCollisionError
+	if !errors.As(err, &collision) {
+		t.Fatalf("second Push() error = %v, want WireIdentityCollisionError", err)
+	}
+	if got := len(server.Instances("pay-user", "k8s")); got != 1 {
+		t.Fatalf("Nacos instances after rejected collision = %d, want 1", got)
 	}
 }
 

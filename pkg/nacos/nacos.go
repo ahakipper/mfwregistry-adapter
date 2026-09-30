@@ -200,6 +200,11 @@ type Sink struct {
 	// first time any instance of the pair re-registers, or stays until a
 	// manual clean (documented residual, plan §7.4 language).
 	remembered map[clusterKeyOf]bool
+	// wireOwners and wireClaims guard the current Nacos composite identity
+	// contract. They deliberately fail closed when two source identities would
+	// map to one wire ID instead of allowing a last-write-wins overwrite.
+	wireOwners map[string]string
+	wireClaims map[string]string
 	// healthCheckDone records every (service, cluster) pair whose cluster
 	// configuration the sink has successfully applied — the UpdateCluster
 	// PUT that switches Nacos's own server-side health check off (see
@@ -266,6 +271,20 @@ type clusterKeyOf struct {
 	cluster string
 }
 
+// WireIdentityCollisionError reports a source-identity collision after the
+// current Nacos wire mapping has been applied.
+type WireIdentityCollisionError struct {
+	CompositeID string
+	Existing    string
+	Incoming    string
+}
+
+func (e *WireIdentityCollisionError) Error() string {
+	return fmt.Sprintf("nacos: composite identity %q is already owned by %q; incoming source identity is %q", e.CompositeID, e.Existing, e.Incoming)
+}
+
+func (*WireIdentityCollisionError) Permanent() bool { return true }
+
 type healthCheckAttempt struct {
 	done chan struct{}
 	err  error
@@ -331,6 +350,8 @@ func NewSinkWithConfig(config ClientConfig, logger ports.Logger) (*Sink, error) 
 		logger:            client.logger,
 		groupName:         effectiveGroup(config.GroupName),
 		remembered:        map[clusterKeyOf]bool{},
+		wireOwners:        map[string]string{},
+		wireClaims:        map[string]string{},
 		healthCheckDone:   map[clusterKeyOf]bool{},
 		healthCheckClaims: map[clusterKeyOf]bool{},
 		healthCheckWait:   map[clusterKeyOf]*healthCheckAttempt{},
@@ -358,6 +379,79 @@ func (s *Sink) Push(triggerTime int64, instances []*instance.Instance) error {
 	return s.pushInstances(instances)
 }
 
+// validateWireIdentitySet rejects a complete snapshot whose source-aware
+// identities collapse to one Nacos composite ID. Nacos derives identity from
+// IP, port, cluster, group, and service; InstanceId/UID is metadata only.
+// Applying such a snapshot would silently overwrite one source with another.
+func (s *Sink) validateWireIdentitySet(instances []*instance.Instance) error {
+	seen := make(map[string]string)
+	for _, ins := range instances {
+		if ins == nil {
+			continue
+		}
+		if _, ok := persistentBatchOperation(ins.Status); !ok {
+			continue
+		}
+		wireID := s.compositeID(ins)
+		sourceID := instance.IdentityKey(ins)
+		if previous, ok := seen[wireID]; ok && previous != sourceID {
+			return &WireIdentityCollisionError{CompositeID: wireID, Existing: previous, Incoming: sourceID}
+		}
+		seen[wireID] = sourceID
+		s.rememberedMu.Lock()
+		owner := ""
+		if s.wireOwners != nil {
+			owner = s.wireOwners[wireID]
+		}
+		if owner == "" && s.wireClaims != nil {
+			owner = s.wireClaims[wireID]
+		}
+		s.rememberedMu.Unlock()
+		if owner != "" && owner != sourceID {
+			return &WireIdentityCollisionError{CompositeID: wireID, Existing: owner, Incoming: sourceID}
+		}
+	}
+	return nil
+}
+
+// claimWireIdentity reserves a composite ID before a mutating write. Same
+// source identities may repeat; a different source is rejected before Nacos
+// can perform a last-write-wins overwrite.
+func (s *Sink) claimWireIdentity(ins *instance.Instance) (func(bool), error) {
+	wireID := s.compositeID(ins)
+	sourceID := instance.IdentityKey(ins)
+	s.rememberedMu.Lock()
+	if s.wireOwners == nil {
+		s.wireOwners = map[string]string{}
+	}
+	if s.wireClaims == nil {
+		s.wireClaims = map[string]string{}
+	}
+	if owner := s.wireOwners[wireID]; owner != "" && owner != sourceID {
+		s.rememberedMu.Unlock()
+		return nil, &WireIdentityCollisionError{CompositeID: wireID, Existing: owner, Incoming: sourceID}
+	}
+	if owner := s.wireClaims[wireID]; owner != "" && owner != sourceID {
+		s.rememberedMu.Unlock()
+		return nil, &WireIdentityCollisionError{CompositeID: wireID, Existing: owner, Incoming: sourceID}
+	}
+	claimed := s.wireClaims[wireID] == ""
+	if claimed {
+		s.wireClaims[wireID] = sourceID
+	}
+	s.rememberedMu.Unlock()
+	return func(success bool) {
+		s.rememberedMu.Lock()
+		defer s.rememberedMu.Unlock()
+		if success {
+			s.wireOwners[wireID] = sourceID
+		}
+		if s.wireClaims[wireID] == sourceID && (claimed || success) {
+			delete(s.wireClaims, wireID)
+		}
+	}, nil
+}
+
 // PushAll executes a bounded, application-scoped persistent batch for every
 // pushed instance and then prunes: for every
 // (serviceName, clusterName) pair present in the pushed set it lists
@@ -377,6 +471,9 @@ func (s *Sink) Push(triggerTime int64, instances []*instance.Instance) error {
 // provider identity, so the prune sweeps nothing remembered (see the
 // remembered field for why the empty door must not wipe).
 func (s *Sink) PushAll(triggerTime int64, instances []*instance.Instance) error {
+	if err := s.validateWireIdentitySet(instances); err != nil {
+		return err
+	}
 	// Full snapshots use the application batch executor; incremental watch
 	// events intentionally remain on Push/pushInstances so a burst cannot
 	// reorder individual event semantics.
@@ -700,7 +797,7 @@ func (s *Sink) pushOne(ins *instance.Instance) error {
 			s.logger.Warnf("nacos: skipping deregister of instance %s with empty ip, the PushAll prune owns the remote cleanup", ins.InstanceId)
 			return nil
 		}
-		return s.deregister(ins.AppCode, ins.Ip, firstPort(ins), clusterOf(ins))
+		return s.deregisterInstance(ins)
 	case instance.InstanceStatusOnline, instance.InstanceStatusUnhealthy:
 		// An online/unhealthy instance without an ip cannot be registered: the
 		// v1 POST derives its composite id from the ip parameter, and Nacos
@@ -727,6 +824,12 @@ func (s *Sink) pushOne(ins *instance.Instance) error {
 // transport-enabled but marks them unhealthy so official query/Subscribe can
 // still observe and reconcile them.
 func (s *Sink) register(ins *instance.Instance) error {
+	releaseWireIdentity, err := s.claimWireIdentity(ins)
+	if err != nil {
+		return err
+	}
+	writeSucceeded := false
+	defer func() { releaseWireIdentity(writeSucceeded) }()
 	// The sink's persistent-instance contract requires Nacos's server-side
 	// health checker to be disabled before any business registration is
 	// accepted. ensureClusterHealthCheckDisabled performs that control-plane
@@ -738,7 +841,7 @@ func (s *Sink) register(ins *instance.Instance) error {
 			return fmt.Errorf("nacos: register %s blocked by cluster health-check setup: %w", ins.InstanceId, err)
 		}
 	}
-	err := s.client.RegisterInstance(InstanceParams{
+	err = s.client.RegisterInstance(InstanceParams{
 		ServiceName: ins.AppCode,
 		IP:          ins.Ip,
 		Port:        firstPort(ins),
@@ -751,6 +854,7 @@ func (s *Sink) register(ins *instance.Instance) error {
 	if err != nil {
 		return fmt.Errorf("nacos: register %s: %w", ins.InstanceId, err)
 	}
+	writeSucceeded = true
 	s.logger.Infof("nacos: registered instance %s as %s", ins.InstanceId, s.compositeID(ins))
 	if s.shouldApplyHealthPolicy() && s.client.sdk == nil {
 		if err := s.ensureClusterHealthCheckDisabled(ins.AppCode, clusterOf(ins)); err != nil {
@@ -896,8 +1000,31 @@ func (s *Sink) deregister(service, ip string, port int, cluster string) error {
 	if err != nil {
 		return fmt.Errorf("nacos: deregister %s#%d/%s: %w", ip, port, cluster, err)
 	}
+	wireID := fmt.Sprintf("%s#%d#%s#%s@@%s", ip, port, cluster, s.groupName, service)
+	s.rememberedMu.Lock()
+	delete(s.wireOwners, wireID)
+	delete(s.wireClaims, wireID)
+	s.rememberedMu.Unlock()
 	s.logger.Infof("nacos: deregistered instance %s#%d/%s", ip, port, cluster)
 	return nil
+}
+
+func (s *Sink) deregisterInstance(ins *instance.Instance) error {
+	wireID := s.compositeID(ins)
+	sourceID := instance.IdentityKey(ins)
+	s.rememberedMu.Lock()
+	owner := ""
+	if s.wireOwners != nil {
+		owner = s.wireOwners[wireID]
+	}
+	if owner == "" && s.wireClaims != nil {
+		owner = s.wireClaims[wireID]
+	}
+	s.rememberedMu.Unlock()
+	if owner != "" && owner != sourceID {
+		return &WireIdentityCollisionError{CompositeID: wireID, Existing: owner, Incoming: sourceID}
+	}
+	return s.deregister(ins.AppCode, ins.Ip, firstPort(ins), clusterOf(ins))
 }
 
 // clusterOf maps the provider to the Nacos clusterName: the collision
