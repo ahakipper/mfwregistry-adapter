@@ -67,6 +67,12 @@ legacy plain-sink compatibility path rejects scoped unconfirmed empty full
 snapshots before `PushAll`; confirmed empty operations still retain their
 typed retry metadata and destructive authority.
 
+The repository release gate was rerun on 2026-10-01 after these changes:
+`go test ./... -count=1`, `go vet ./...`, and `make test-all` all passed. The
+last command covered race tests, blackbox tests, the smoke binary, and tagged
+local E2E tests. These are local correctness gates; they do not replace the
+open real-Consul/Nacos3 percentile and deployment qualification evidence.
+
 ## Executive assessment
 
 The refactor branch already contains a real Consul provider and a DDD-style
