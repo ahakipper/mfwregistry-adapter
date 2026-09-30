@@ -4,6 +4,25 @@ Date: 2026-09-30
 Branch: `refactor/all`  
 Audited HEAD: `e1ae3b5`
 
+## Current execution status — 2026-09-30
+
+Stage 1 correctness work is implemented in the working tree and has passed
+the independent code review and the Consul package race suite. The provider
+now distinguishes source errors, partial catalog reads, healthy empty
+catalogs, and healthy non-empty catalogs. Source errors and partial reads
+retain the previous cache and cannot authorize a destructive Nacos operation.
+Healthy empty state requires three independent confirmations; a provider-owned
+5-second retry timer bounds the cleanup attempt without changing the global
+6-hour full-push interval. The timer is single-instance, stopped on recovery
+or shutdown, and guarded by the provider lock plus lifecycle state.
+
+The remaining P1/P2 work is still open: the explicit health-state contract,
+equal-`ModifyIndex` field fingerprinting, Consul-to-Nacos watch latency
+percentiles, real Consul plus Nacos 3 qualification, multiple logical Consul
+sources, blocking-query edge handling, source metrics, and Consul connection
+security settings. This status is an implementation checkpoint, not a
+production-readiness claim.
+
 ## Executive assessment
 
 The refactor branch already contains a real Consul provider and a DDD-style
@@ -225,4 +244,3 @@ Consul health API documentation](https://developer.hashicorp.com/consul/api-docs
 The current evidence proves local provider mechanics and one loopback fan-out
 path. It does not yet prove production Consul credentials/TLS, a multiple-source
 process, or Consul-specific end-to-end latency percentiles.
-

@@ -37,17 +37,23 @@ type consul struct {
 	cache              providers.CacheIterface    // consul endpoint cache
 	generation         uint64
 	emptyConfirmations uint32
-	pool               *ants.Pool // goroutine pool
-	overflowMu         sync.Mutex
-	overflow           *providers.OverflowQueue
-	runWG              sync.WaitGroup
-	done               chan struct{}
-	stopOnce           sync.Once
-	depsOnce           sync.Once
-	initDone           bool
-	logger             ports.Logger
-	notifier           ports.Notifier
-	metricsRecorder    ports.MetricsRecorder
+	// A full-push tick reads the source in CompareAndFlush and again in
+	// emitSyncAll. This marker lets the second read consume the confirmation
+	// already counted by the first read instead of counting it twice.
+	emptyConfirmationPending bool
+	emptyRetryInterval       time.Duration
+	emptyRetryTimer          *time.Timer
+	pool                     *ants.Pool // goroutine pool
+	overflowMu               sync.Mutex
+	overflow                 *providers.OverflowQueue
+	runWG                    sync.WaitGroup
+	done                     chan struct{}
+	stopOnce                 sync.Once
+	depsOnce                 sync.Once
+	initDone                 bool
+	logger                   ports.Logger
+	notifier                 ports.Notifier
+	metricsRecorder          ports.MetricsRecorder
 
 	// sourceErr records the error of the last GetAll when the consul source
 	// could not be read (nil after a successful read, empty or not): the
@@ -58,6 +64,11 @@ type consul struct {
 	// must lock just like the handler paths (syncInstance, CompareAndFlush)
 	// already do. See GetAll's comment for the caller contract.
 	sourceErr error
+	// snapshotState records the outcome of the most recent catalog read. A
+	// nil GetAll result is intentionally not the only signal: a failed or
+	// partially converted catalog must never be treated as a legitimate empty
+	// desired state by a reconcile caller.
+	snapshotState consulSnapshotState
 
 	// nacosReconcile records that the periodic CompareAndFlush's remote view
 	// is the nacos sink (dsca-3 §3.1, --reconcile-source nacos). It switches
@@ -82,6 +93,25 @@ type consul struct {
 	// both are REQUIRED invariants in their own right (pinned by tests), and
 	// the wire projection makes the compare correct regardless of them.
 	nacosReconcile bool
+}
+
+// consulSnapshotState is the closed set of outcomes from one Consul catalog
+// read. Healthy empty is a valid source state, while partial/unstable means
+// that the read cannot safely replace the previous cache.
+type consulSnapshotState uint8
+
+const (
+	consulSnapshotUnknown consulSnapshotState = iota
+	consulSnapshotSourceError
+	consulSnapshotHealthyEmpty
+	consulSnapshotHealthyNonEmpty
+	consulSnapshotPartial
+)
+
+type consulSnapshot struct {
+	instances []*sv.Instance
+	state     consulSnapshotState
+	err       error
 }
 
 func (c *consul) ensureDeps() {
@@ -170,11 +200,12 @@ func NewConsulProviderWithSourceID(ctx context.Context, worker worker.Worker, pu
 		// bounds the periodic CompareAndFlush + SyncAll cadence. The field
 		// was declared but never assigned here, so the periodic path fell
 		// back to the 21600s default and ignored the flag.
-		interval: pushInterval,
-		cache:    providers.NewCache(8),
-		done:     make(chan struct{}),
-		logger:   logger,
-		notifier: notifier,
+		interval:           pushInterval,
+		emptyRetryInterval: 5 * time.Second,
+		cache:              providers.NewCache(8),
+		done:               make(chan struct{}),
+		logger:             logger,
+		notifier:           notifier,
 	}
 	// Create pool for sending instance events to the discovery center
 	p, poolErr := ants.NewPool(providers.PoolBenchSize, withExpiryDuration(time.Second*providers.PoolExpireTime), ants.WithNonblocking(true))
@@ -257,6 +288,10 @@ func (c *consul) shutdown() {
 	})
 	c.Lock()
 	c.stopped = true
+	if c.emptyRetryTimer != nil {
+		c.emptyRetryTimer.Stop()
+		c.emptyRetryTimer = nil
+	}
 	c.Unlock()
 	c.overflowMu.Lock()
 	q := c.overflow
@@ -302,6 +337,31 @@ func (c *consul) Run() (err error) {
 	return err
 }
 
+// scheduleEmptyRetryLocked schedules at most one bounded retry for a healthy
+// empty snapshot. The caller holds the provider lock; the callback releases
+// that lock before performing the remote Consul read via syncInstance.
+func (c *consul) scheduleEmptyRetryLocked() {
+	if c.emptyRetryTimer != nil || c.stopped || c.emptyRetryInterval <= 0 {
+		return
+	}
+	interval := c.emptyRetryInterval
+	c.emptyRetryTimer = time.AfterFunc(interval, func() {
+		c.Lock()
+		c.emptyRetryTimer = nil
+		stopped := c.stopped
+		c.Unlock()
+		if stopped {
+			return
+		}
+		select {
+		case <-c.done:
+			return
+		default:
+		}
+		_ = c.syncInstance()
+	})
+}
+
 // syncInstance will sync consul endpoints to the discovery center.
 // It will get all the services tagged as "microservice", and convert consul endpoint model to the discovery center Model.
 // Then compare the new instances list with the instances we cached before so that we can generate the instances which are
@@ -309,16 +369,57 @@ func (c *consul) Run() (err error) {
 func (c *consul) syncInstance() (err error) {
 	c.Lock()
 	defer c.Unlock()
+	if c.stopped {
+		return errors.New("consul provider stopped")
+	}
 	oldCache := c.cache
 	newCache := providers.NewCache(8)
 	// Get all services from consul
 	currentInss := c.GetAll()
-	// Here, we assume that the consul data is impossible to be empty. Once it is empty,
-	// no operation is performed except for return an error.
-	if currentInss == nil || len(currentInss) == 0 {
-		err = errors.New("get empty consul endpoints")
+	if currentInss == nil {
+		c.emptyConfirmations = 0
+		c.emptyConfirmationPending = false
+		if c.emptyRetryTimer != nil {
+			c.emptyRetryTimer.Stop()
+			c.emptyRetryTimer = nil
+		}
+		err = errors.New("get consul endpoints snapshot failed")
 		c.logger.Warnf("%s", err.Error())
 		return err
+	}
+	if len(currentInss) == 0 {
+		if c.snapshotState != consulSnapshotHealthyEmpty {
+			err = errors.New("get empty consul endpoints without healthy empty snapshot")
+			c.logger.Warnf("%s", err.Error())
+			return err
+		}
+		// A watch callback may be the first independent empty observation.
+		// Mark it pending so the following full-push compare consumes the
+		// observation instead of counting the same source state twice.
+		c.emptyConfirmations++
+		c.emptyConfirmationPending = true
+		err = fmt.Errorf("get empty consul endpoints; waiting for confirmation %d/3", c.emptyConfirmations)
+		c.logger.Warnf("%s", err.Error())
+		if c.emptyConfirmations < 3 {
+			c.scheduleEmptyRetryLocked()
+			return err
+		}
+		// Three independent healthy-empty reads now authorize the empty
+		// snapshot to replace the cache and emit deletions. The pending marker
+		// belongs to this completed confirmation window and must not leak into
+		// the next full-push tick.
+		c.emptyConfirmationPending = false
+		if c.emptyRetryTimer != nil {
+			c.emptyRetryTimer.Stop()
+			c.emptyRetryTimer = nil
+		}
+	} else {
+		c.emptyConfirmations = 0
+		c.emptyConfirmationPending = false
+		if c.emptyRetryTimer != nil {
+			c.emptyRetryTimer.Stop()
+			c.emptyRetryTimer = nil
+		}
 	}
 	for _, ins := range currentInss {
 		newCache.ReplaceOrInsert(ins)
@@ -336,12 +437,21 @@ func (c *consul) syncInstance() (err error) {
 }
 
 func (c *consul) toInstance(endpoints []*api.ServiceEntry) (inss []*sv.Instance) {
+	inss, _ = c.toInstanceWithSkipped(endpoints)
+	return inss
+}
+
+// toInstanceWithSkipped keeps conversion failures visible to the snapshot
+// reader. Silently dropping one malformed endpoint would otherwise turn a
+// partial catalog into a smaller, apparently authoritative full state.
+func (c *consul) toInstanceWithSkipped(endpoints []*api.ServiceEntry) (inss []*sv.Instance, skipped int) {
 	// get pod info from k8s robot
 	inss = []*sv.Instance{}
 	if len(endpoints) > 0 {
 		for _, ep := range endpoints {
 			if ins, err := convertInstanceForSource(ep, c.sourceCluster); err != nil {
 				c.logger.Errorf("%s", err.Error())
+				skipped++
 				continue
 			} else {
 				inss = append(inss, ins)
@@ -349,7 +459,7 @@ func (c *consul) toInstance(endpoints []*api.ServiceEntry) (inss []*sv.Instance)
 		}
 	}
 
-	return inss
+	return inss, skipped
 }
 
 // GetAll returns the full consul instance list. A nil result is ambiguous
@@ -365,40 +475,53 @@ func (c *consul) toInstance(endpoints []*api.ServiceEntry) (inss []*sv.Instance)
 // writes was the round-2 review's data race). Callers outside this file
 // must not call GetAll without the lock.
 func (c *consul) GetAll() (result []*v2.Instance) {
-	// Get all services from consul
-	var err error
-	var consulServices map[string][]string
-	consulServices, err = c.monitor.GetServices()
-	if err != nil {
-		err = errors.WithMessage(err, "get services from consul")
-		c.logger.Errorf("%s", err.Error())
-		c.sourceErr = err
+	snapshot := c.readSnapshot()
+	c.snapshotState = snapshot.state
+	c.sourceErr = snapshot.err
+	if snapshot.err != nil {
+		c.emptyConfirmations = 0
+		c.emptyConfirmationPending = false
+		if c.emptyRetryTimer != nil {
+			c.emptyRetryTimer.Stop()
+			c.emptyRetryTimer = nil
+		}
+		c.logger.Errorf("consul catalog snapshot rejected: %s", snapshot.err.Error())
 		return nil
 	}
-	// Process new cache
-	if len(consulServices) > 0 {
-		result = []*sv.Instance{}
-		for serviceName := range consulServices {
-			// get endpoints of a service from consul
-			var endpoints []*api.ServiceEntry
-			endpoints, err = c.monitor.GetServiceEntries(serviceName, nil)
-			if err != nil {
-				err = errors.WithMessage(err, "get service endpoints from consul")
-				c.logger.Errorf("%s", err.Error())
-				c.sourceErr = err
-				return nil
-			}
-			if instances := c.toInstance(endpoints); instances != nil {
-				for _, ins := range instances {
-					result = append(result, ins)
-				}
-			}
-		}
-	}
-	c.sourceErr = nil
-	c.logger.Infof("consul getall size: %d", len(result))
+	c.logger.Infof("consul getall size: %d", len(snapshot.instances))
+	return snapshot.instances
+}
 
-	return result
+// readSnapshot reads a complete catalog while retaining enough provenance to
+// distinguish a valid empty catalog from an unsafe partial result. It assumes
+// the caller holds the provider lock, just like GetAll did historically.
+func (c *consul) readSnapshot() consulSnapshot {
+	services, err := c.monitor.GetServices()
+	if err != nil {
+		return consulSnapshot{state: consulSnapshotSourceError, err: errors.WithMessage(err, "get services from consul")}
+	}
+	result := make([]*sv.Instance, 0)
+	serviceNames := make([]string, 0, len(services))
+	for serviceName := range services {
+		serviceNames = append(serviceNames, serviceName)
+	}
+	sort.Strings(serviceNames)
+	for _, serviceName := range serviceNames {
+		endpoints, readErr := c.monitor.GetServiceEntries(serviceName, nil)
+		if readErr != nil {
+			return consulSnapshot{state: consulSnapshotPartial, err: errors.WithMessagef(readErr, "get service endpoints from consul: %s", serviceName)}
+		}
+		instances, skipped := c.toInstanceWithSkipped(endpoints)
+		if skipped > 0 {
+			return consulSnapshot{state: consulSnapshotPartial, err: fmt.Errorf("convert consul service %s: skipped %d malformed endpoint(s)", serviceName, skipped)}
+		}
+		result = append(result, instances...)
+	}
+	state := consulSnapshotHealthyNonEmpty
+	if len(result) == 0 {
+		state = consulSnapshotHealthyEmpty
+	}
+	return consulSnapshot{instances: result, state: state}
 }
 
 // sourceError returns the error of the last GetAll, if any. Test-only
@@ -656,9 +779,14 @@ func (c *consul) snapshotForFullPushMode(advanceEmptyConfirmation bool) ([]*v2.I
 		all = []*v2.Instance{}
 	}
 	if len(all) == 0 && advanceEmptyConfirmation {
-		c.emptyConfirmations++
+		if c.emptyConfirmationPending {
+			c.emptyConfirmationPending = false
+		} else {
+			c.emptyConfirmations++
+		}
 	} else if len(all) > 0 {
 		c.emptyConfirmations = 0
+		c.emptyConfirmationPending = false
 	}
 	return all, c.generation, true, c.emptyConfirmations >= 3
 }
@@ -668,9 +796,28 @@ func (c *consul) CompareAndFlush() {
 	c.Lock()
 	defer c.Unlock()
 	c.logger.Infof("%s: trying to compare and find diff instances then flush", c.providerName)
-	// Here, we assume that the consul data is impossible to be empty. Once it is empty,
-	// no operation is performed.
-	if all := c.GetAll(); all != nil && len(all) > 0 {
+	all := c.GetAll()
+	if all == nil {
+		return
+	}
+	if len(all) == 0 {
+		if c.snapshotState != consulSnapshotHealthyEmpty {
+			return
+		}
+		if !c.emptyConfirmationPending {
+			c.emptyConfirmations++
+			c.emptyConfirmationPending = true
+		}
+		if c.emptyConfirmations < 3 {
+			c.scheduleEmptyRetryLocked()
+			c.logger.Warnf("%s: healthy empty catalog confirmation %d/3; retaining cache and remote state", c.providerName, c.emptyConfirmations)
+			return
+		}
+	} else {
+		c.emptyConfirmations = 0
+		c.emptyConfirmationPending = false
+	}
+	{
 		// process the cache
 		c.cache.Clear()
 		onlineCount := 0

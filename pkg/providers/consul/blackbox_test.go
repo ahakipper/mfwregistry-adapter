@@ -675,6 +675,128 @@ func TestBlackboxConsulSyncInstanceSourceErrorRetainsOldCache(t *testing.T) {
 	}
 }
 
+func TestBlackboxConsulPartialConversionFailsClosed(t *testing.T) {
+	server := consulmock.Start()
+	defer server.Close()
+	server.SetServices(map[string][]string{"pay-user": {"microservice"}})
+	server.SetEntries("pay-user", []*api.ServiceEntry{{
+		Node:    &api.Node{Node: "node-bad", Address: "10.0.0.9"},
+		Service: &api.AgentService{ID: "srv-bad", Service: "pay-user", Port: 8081, Tags: []string{"microservice"}, Meta: map[string]string{"app-code": "pay-user"}},
+	}})
+	c := newBlackboxConsulProvider(t, server, &fakeWorker{}, 0, context.Background())
+	old := &sv.Instance{InstanceId: "old", Provider: providers.ProviderEcs, Reversion: 7, Status: providers.InstanceStatusOnline}
+	c.cache.ReplaceOrInsert(old)
+
+	if got := c.GetAll(); got != nil {
+		t.Fatalf("GetAll() = %#v, want nil for partial conversion", got)
+	}
+	if c.snapshotState != consulSnapshotPartial || c.sourceError() == nil {
+		t.Fatalf("snapshot state/error = %v/%v, want partial/non-nil", c.snapshotState, c.sourceError())
+	}
+	if err := c.syncInstance(); err == nil {
+		t.Fatal("syncInstance() error = nil, want partial snapshot rejection")
+	}
+	if got := c.cache.Get("old"); got == nil || got.Reversion != old.Reversion {
+		t.Fatalf("cache after partial snapshot = %#v, want old cache retained", got)
+	}
+}
+
+func TestBlackboxConsulCompareRetainsRemoteDuringEmptyConfirmation(t *testing.T) {
+	server := consulmock.Start()
+	defer server.Close()
+	w := &scriptableWorker{getAllResponse: &sv.InstanceList{Instance: []*sv.Instance{{
+		InstanceId: "remote", Provider: providers.ProviderEcs, Status: providers.InstanceStatusOnline,
+	}}}}
+	c := newBlackboxConsulProvider(t, server, w, 0, context.Background())
+	c.monitor = &flippingMonitor{fails: false}
+	c.cache.ReplaceOrInsert(&sv.Instance{InstanceId: "remote", Provider: providers.ProviderEcs, Status: providers.InstanceStatusOnline})
+
+	for i := 0; i < 2; i++ {
+		c.CompareAndFlush()
+		if got := len(w.handleSnapshot()); got != 0 {
+			t.Fatalf("CompareAndFlush() %d emitted %d events before empty confirmation", i+1, got)
+		}
+		if c.cache.Get("remote") == nil {
+			t.Fatalf("CompareAndFlush() %d cleared cache before empty confirmation", i+1)
+		}
+	}
+}
+
+func TestBlackboxConsulCompareAndEmitCountOneEmptyConfirmationPerTick(t *testing.T) {
+	server := consulmock.Start()
+	defer server.Close()
+	c := newBlackboxConsulProvider(t, server, &fakeWorker{}, 0, context.Background())
+	c.monitor = &flippingMonitor{fails: false}
+	c.CompareAndFlush()
+	c.emitSyncAll()
+	if got := c.emptyConfirmations; got != 1 {
+		t.Fatalf("same-tick CompareAndFlush plus emitSyncAll confirmations = %d, want 1", got)
+	}
+}
+
+func TestBlackboxConsulSyncEmptyThenCompareConsumesOneConfirmation(t *testing.T) {
+	server := consulmock.Start()
+	defer server.Close()
+	c := newBlackboxConsulProvider(t, server, &fakeWorker{}, 0, context.Background())
+	c.monitor = &flippingMonitor{fails: false}
+	c.cache.ReplaceOrInsert(&sv.Instance{InstanceId: "old", Provider: providers.ProviderEcs, Status: providers.InstanceStatusOnline})
+	if err := c.syncInstance(); err == nil {
+		t.Fatal("syncInstance() error = nil, want unconfirmed healthy-empty retention")
+	}
+	c.CompareAndFlush()
+	if got := c.emptyConfirmations; got != 1 {
+		t.Fatalf("syncInstance plus CompareAndFlush confirmations = %d, want 1", got)
+	}
+	if c.cache.Get("old") == nil {
+		t.Fatal("syncInstance plus CompareAndFlush cleared old cache before confirmation")
+	}
+}
+
+func TestBlackboxConsulEmptyRetryFromCompareEventuallyDeletes(t *testing.T) {
+	server := consulmock.Start()
+	defer server.Close()
+	w := &fakeWorker{}
+	c := newBlackboxConsulProvider(t, server, w, 0, context.Background())
+	c.monitor = &flippingMonitor{fails: false}
+	c.emptyRetryInterval = time.Millisecond
+	c.cache.ReplaceOrInsert(&sv.Instance{InstanceId: "old", Provider: providers.ProviderEcs, Status: providers.InstanceStatusOnline})
+
+	c.CompareAndFlush()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		c.Lock()
+		removed := c.cache.Get("old") == nil
+		c.Unlock()
+		if removed {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	c.Lock()
+	confirmations := c.emptyConfirmations
+	c.Unlock()
+	t.Fatalf("healthy-empty retry did not clear old cache within bounded interval; confirmations=%d", confirmations)
+}
+
+func TestBlackboxConsulSourceErrorResetsEmptyConfirmation(t *testing.T) {
+	server := consulmock.Start()
+	defer server.Close()
+	c := newBlackboxConsulProvider(t, server, &fakeWorker{}, 0, context.Background())
+	monitor := &flippingMonitor{fails: false}
+	c.monitor = monitor
+	c.CompareAndFlush()
+	if c.emptyConfirmations != 1 || !c.emptyConfirmationPending {
+		t.Fatalf("healthy-empty baseline = confirmations:%d pending:%t, want 1/true", c.emptyConfirmations, c.emptyConfirmationPending)
+	}
+	monitor.mu.Lock()
+	monitor.fails = true
+	monitor.mu.Unlock()
+	c.CompareAndFlush()
+	if c.emptyConfirmations != 0 || c.emptyConfirmationPending {
+		t.Fatalf("source error state = confirmations:%d pending:%t, want 0/false", c.emptyConfirmations, c.emptyConfirmationPending)
+	}
+}
+
 func TestBlackboxConsulEmitSyncAllSourceErrorSafeFail(t *testing.T) {
 	c := &consul{cache: providers.NewCache(8), worker: &fakeWorker{}, ctx: context.Background()}
 	c.cache.ReplaceOrInsert(&sv.Instance{InstanceId: "old", Provider: "ecs", Reversion: 1})
