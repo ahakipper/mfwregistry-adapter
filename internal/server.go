@@ -43,12 +43,13 @@ type Server struct {
 	stopped           bool
 
 	// injected dependencies
-	logger            ports.Logger
-	notifier          ports.Notifier
-	metrics           ports.MetricsRecorder
-	nacosAdminFactory func() (nacos.NacosClusterAdmin, error)
-	cfg               infraconfig.Config
-	localIP           func() (string, error)
+	logger                           ports.Logger
+	notifier                         ports.Notifier
+	metrics                          ports.MetricsRecorder
+	nacosAdminFactory                func() (nacos.NacosClusterAdmin, error)
+	nacosHealthPolicyVerifierFactory func() (nacos.NacosHealthPolicyVerifier, error)
+	cfg                              infraconfig.Config
+	localIP                          func() (string, error)
 
 	dialDiscovery       func(context.Context) (*discoverycenter.Client, error)
 	waitRetry           func(context.Context, time.Duration) error
@@ -115,19 +116,20 @@ func NewServerFromDeps(rt *composition.Runtime) (*Server, error) {
 	}
 	// init Server
 	srv := &Server{
-		stopElectorFunc:   ecancel,
-		stopProviderFunc:  nil,
-		Providers:         nil,
-		elector:           elector,
-		leaderChCh:        leaderChanges,
-		stop:              make(chan struct{}),
-		logger:            rt.Logger,
-		notifier:          rt.Notifier,
-		metrics:           rt.Metrics,
-		nacosAdminFactory: rt.NacosClusterAdminFactory,
-		cfg:               rt.Config,
-		localIP:           rt.LocalIP,
-		waitRetry:         waitForRetry,
+		stopElectorFunc:                  ecancel,
+		stopProviderFunc:                 nil,
+		Providers:                        nil,
+		elector:                          elector,
+		leaderChCh:                       leaderChanges,
+		stop:                             make(chan struct{}),
+		logger:                           rt.Logger,
+		notifier:                         rt.Notifier,
+		metrics:                          rt.Metrics,
+		nacosAdminFactory:                rt.NacosClusterAdminFactory,
+		nacosHealthPolicyVerifierFactory: rt.NacosHealthPolicyVerifierFactory,
+		cfg:                              rt.Config,
+		localIP:                          rt.LocalIP,
+		waitRetry:                        waitForRetry,
 	}
 	// Resolve provider reconcile mode from the same effective config used by
 	// sink construction. Capturing the server (rather than the original
@@ -469,8 +471,23 @@ func (s *Server) startProviders() error {
 				return errors.New("new nacos cluster-admin facade: factory returned nil admin")
 			}
 		}
+		var healthPolicyVerifier nacos.NacosHealthPolicyVerifier
+		if transportMode == string(nacos.TransportSDK) && effectiveHealthPolicy == nacos.HealthPolicyVerified && s.nacosHealthPolicyVerifierFactory != nil {
+			healthPolicyVerifier, err = s.nacosHealthPolicyVerifierFactory()
+			if err != nil {
+				cleanup()
+				s.clearStartup(generation, nil)
+				return errors.WithMessage(err, "new nacos health-policy verifier")
+			}
+			if healthPolicyVerifier == nil {
+				cleanup()
+				s.clearStartup(generation, nil)
+				return errors.New("new nacos health-policy verifier: factory returned nil verifier")
+			}
+		}
 		nacosCfg := nacos.ClientConfig{TransportMode: nacos.TransportMode(transportMode), HealthPolicy: effectiveHealthPolicy, ServerURL: s.cfg.NacosAddr, ServerURLs: s.cfg.NacosServerList, NamespaceID: s.cfg.NacosNamespace, GroupName: s.cfg.NacosGroup, Username: s.cfg.NacosUsername, Password: s.cfg.NacosPassword, AccessToken: s.cfg.NacosAccessToken, CAFile: s.cfg.NacosCAFile, ServerName: s.cfg.NacosServerName, InsecureSkipVerify: s.cfg.NacosInsecureSkipVerify}
 		nacosCfg.ClusterAdmin = clusterAdmin
+		nacosCfg.HealthPolicyVerifier = healthPolicyVerifier
 		if s.cfg.NacosTimeout > 0 {
 			nacosCfg.Timeout = time.Duration(s.cfg.NacosTimeout) * time.Second
 		}

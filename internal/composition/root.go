@@ -39,6 +39,9 @@ type Deps struct {
 	// sink lifecycle when the optional admin-managed policy is selected. The
 	// deployment-owned default never requires this facade.
 	NacosClusterAdminFactory func() (nacos.NacosClusterAdmin, error)
+	// NacosHealthPolicyVerifierFactory creates the approved control-plane
+	// verifier required by the explicit verified health policy.
+	NacosHealthPolicyVerifierFactory func() (nacos.NacosHealthPolicyVerifier, error)
 	// NacosHealthPolicy controls cluster-health-check ownership.
 	// Empty (zero value) defaults to deployment-owned, so no admin facade
 	// is required for naming operations.
@@ -62,9 +65,10 @@ type Runtime struct {
 	// Notifier sends operational notices.
 	Notifier ports.Notifier
 	// Metrics records synchronization metrics.
-	Metrics                  ports.MetricsRecorder
-	NacosClusterAdminFactory func() (nacos.NacosClusterAdmin, error)
-	NacosHealthPolicy        nacos.HealthPolicy
+	Metrics                          ports.MetricsRecorder
+	NacosClusterAdminFactory         func() (nacos.NacosClusterAdmin, error)
+	NacosHealthPolicyVerifierFactory func() (nacos.NacosHealthPolicyVerifier, error)
+	NacosHealthPolicy                nacos.HealthPolicy
 	// Config is the resolved runtime configuration.
 	Config infraconfig.Config
 	// LocalIP resolves the current node IP (never nil).
@@ -131,6 +135,7 @@ func Build(cfg infraconfig.Config, deps Deps) (*Runtime, error) {
 		runtime.Metrics = inframetrics.New()
 	}
 	runtime.NacosClusterAdminFactory = deps.NacosClusterAdminFactory
+	runtime.NacosHealthPolicyVerifierFactory = deps.NacosHealthPolicyVerifierFactory
 	runtime.NacosHealthPolicy = deps.NacosHealthPolicy
 	if runtime.NacosHealthPolicy == "" {
 		runtime.NacosHealthPolicy = cfg.NacosHealthPolicy

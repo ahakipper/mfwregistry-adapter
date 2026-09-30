@@ -26,6 +26,24 @@ type fakeClusterAdmin struct {
 	closes   int
 }
 
+type fakeHealthPolicyVerifier struct {
+	mu        sync.Mutex
+	calls     int
+	namespace string
+	group     string
+	err       error
+}
+
+func (v *fakeHealthPolicyVerifier) VerifyHealthCheckDisabled(_ context.Context, namespace, group string) error {
+	v.mu.Lock()
+	v.calls++
+	v.namespace = namespace
+	v.group = group
+	err := v.err
+	v.mu.Unlock()
+	return err
+}
+
 func (a *fakeClusterAdmin) UpdateHealthChecker(ctx context.Context, namespace, group, service, cluster string) error {
 	a.mu.Lock()
 	a.calls++
@@ -336,6 +354,28 @@ func TestSDKSinkConstructionNeedsAdminWhenHealthPolicyIsAdminManaged(t *testing.
 	}
 	if !strings.Contains(err.Error(), "cluster-health-check-update requires") {
 		t.Fatalf("NewSinkWithConfig(admin-managed) error = %q, want preflight reason", err)
+	}
+}
+
+func TestSDKVerifiedHealthPolicyRequiresVerifier(t *testing.T) {
+	_, err := NewSinkWithConfig(ClientConfig{ServerURL: "127.0.0.1:8848", TransportMode: TransportSDK, HealthPolicy: HealthPolicyVerified}, ports.NopLogger{})
+	if err == nil || !strings.Contains(err.Error(), "requires an injected health-policy verifier") {
+		t.Fatalf("verified policy construction error = %v, want missing-verifier fail-closed error", err)
+	}
+}
+
+func TestSDKVerifiedHealthPolicyRunsBeforeNamingReadiness(t *testing.T) {
+	want := errors.New("health switch is not disabled")
+	verifier := &fakeHealthPolicyVerifier{err: want}
+	err := CheckReadinessWithConfig(ClientConfig{ServerURL: "127.0.0.1:1", TransportMode: TransportSDK, HealthPolicy: HealthPolicyVerified, HealthPolicyVerifier: verifier}, ports.NopLogger{})
+	if !errors.Is(err, want) {
+		t.Fatalf("readiness error = %v, want verifier error %v", err, want)
+	}
+	verifier.mu.Lock()
+	calls, namespace, group := verifier.calls, verifier.namespace, verifier.group
+	verifier.mu.Unlock()
+	if calls != 1 || namespace != DefaultNamespaceID || group != DefaultGroup {
+		t.Fatalf("verifier call = %d namespace=%q group=%q, want 1/%q/%q", calls, namespace, group, DefaultNamespaceID, DefaultGroup)
 	}
 }
 

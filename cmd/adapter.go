@@ -24,6 +24,7 @@ import (
 	"spotter/internal"
 	"spotter/internal/composition"
 	infraconfig "spotter/internal/infra/config"
+	"spotter/pkg/nacos"
 	"spotter/pkg/providers"
 )
 
@@ -158,6 +159,7 @@ func init() {
 	adapterCmd.Flags().Bool("nacos-insecure-skip-verify", false, "skip Nacos TLS verification")
 	adapterCmd.Flags().Int("nacos-timeout", 0, "Nacos request timeout seconds")
 	adapterCmd.Flags().String("nacos-transport", "sdk", "Nacos transport: sdk (required in product) or http-compat (test/approved migration rollback only)")
+	adapterCmd.Flags().String("nacos-health-policy", string(nacos.HealthPolicyDeploymentOwned), "Nacos health policy: deployment-owned, admin-managed, or verified")
 	// --reconcile-source designates the fanout sink whose view the periodic
 	// compare reads. Empty resolves to Nacos in the active Nacos-only graph;
 	// only explicit --atlas-compat retains the historical Atlas primary.
@@ -200,7 +202,7 @@ func adapterFlags(cmd *cobra.Command) infraconfig.Flags {
 		NacosUsername: flagString(cmd, "nacos-username"), NacosPassword: flagString(cmd, "nacos-password"),
 		NacosAccessToken: flagString(cmd, "nacos-access-token"), NacosCAFile: flagString(cmd, "nacos-ca-file"),
 		NacosServerName: flagString(cmd, "nacos-server-name"), NacosInsecureSkipVerify: flagBool(cmd, "nacos-insecure-skip-verify"),
-		NacosTimeout: flagInt(cmd, "nacos-timeout"), NacosTransport: flagString(cmd, "nacos-transport"),
+		NacosTimeout: flagInt(cmd, "nacos-timeout"), NacosTransport: flagString(cmd, "nacos-transport"), NacosHealthPolicy: nacos.HealthPolicy(flagString(cmd, "nacos-health-policy")),
 		ReconcileSource:    flagString(cmd, "reconcile-source"),
 		KubeConfigPathFlag: flagStringSlice(cmd, "kubeconfig"),
 		ConsulAddrFlag:     flagStringSlice(cmd, "consul-addr"),

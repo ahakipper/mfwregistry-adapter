@@ -136,6 +136,10 @@ const (
 	// HealthPolicyAdminManaged requires an injected admin facade and an
 	// explicit preflight before health-check configuration operations.
 	HealthPolicyAdminManaged HealthPolicy = "admin-managed"
+	// HealthPolicyVerified requires an injected control-plane verifier to
+	// prove that Nacos server-side health checking is disabled before naming
+	// readiness or business writes are allowed.
+	HealthPolicyVerified HealthPolicy = "verified"
 )
 
 func effectiveHealthPolicy(policy HealthPolicy) HealthPolicy {
@@ -147,7 +151,7 @@ func effectiveHealthPolicy(policy HealthPolicy) HealthPolicy {
 
 func (policy HealthPolicy) valid() bool {
 	switch effectiveHealthPolicy(policy) {
-	case HealthPolicyDeploymentOwned, HealthPolicyAdminManaged:
+	case HealthPolicyDeploymentOwned, HealthPolicyAdminManaged, HealthPolicyVerified:
 		return true
 	default:
 		return false
@@ -159,16 +163,17 @@ func (policy HealthPolicy) valid() bool {
 // through sdkNamingFacade; otherwise the explicitly opt-in HTTP compatibility
 // adapter below is used for migration/test-only callers.
 type Client struct {
-	baseURL      *url.URL
-	baseURLs     []*url.URL
-	http         *http.Client
-	logger       ports.Logger
-	config       ClientConfig
-	clusterAdmin NacosClusterAdmin
-	sdk          *sdkNamingFacade
-	sdkFactory   func(ClientConfig) (*sdkNamingFacade, error)
-	closeOnce    sync.Once
-	closeErr     error
+	baseURL        *url.URL
+	baseURLs       []*url.URL
+	http           *http.Client
+	logger         ports.Logger
+	config         ClientConfig
+	clusterAdmin   NacosClusterAdmin
+	healthVerifier NacosHealthPolicyVerifier
+	sdk            *sdkNamingFacade
+	sdkFactory     func(ClientConfig) (*sdkNamingFacade, error)
+	closeOnce      sync.Once
+	closeErr       error
 }
 
 // ClientConfig controls the official SDK transport and the isolated HTTP
@@ -208,12 +213,22 @@ type ClientConfig struct {
 	MaxConnsPerHost      int
 	ClusterAdmin         NacosClusterAdmin
 	ClusterAdminFactory  func() (NacosClusterAdmin, error)
+	HealthPolicyVerifier NacosHealthPolicyVerifier
 }
 
 // NacosClusterAdmin is an injected official or approved admin facade.
 type NacosClusterAdmin interface {
 	UpdateHealthChecker(ctx context.Context, namespace, group, service, cluster string) error
 	Close(ctx context.Context) error
+}
+
+// NacosHealthPolicyVerifier is an approved control-plane seam for a verified
+// deployment-owned health policy. It is intentionally separate from the
+// naming SDK because the official Go SDK does not expose the Nacos admin
+// switch. Implementations must perform their own authenticated/readback
+// verification; the product path never falls back to raw HTTP.
+type NacosHealthPolicyVerifier interface {
+	VerifyHealthCheckDisabled(ctx context.Context, namespace, group string) error
 }
 
 // ClusterAdminError keeps admin failures visible to retry policy. Facades may
@@ -299,7 +314,10 @@ func NewClientWithConfig(cfg ClientConfig, logger ports.Logger) (*Client, error)
 		return nil, fmt.Errorf("nacos: unsupported transport mode %q (want %q or %q)", cfg.TransportMode, TransportSDK, TransportHTTPCompat)
 	}
 	if !cfg.HealthPolicy.valid() {
-		return nil, fmt.Errorf("nacos: unsupported health policy %q (want %q or %q)", cfg.HealthPolicy, HealthPolicyDeploymentOwned, HealthPolicyAdminManaged)
+		return nil, fmt.Errorf("nacos: unsupported health policy %q (want %q, %q, or %q)", cfg.HealthPolicy, HealthPolicyDeploymentOwned, HealthPolicyAdminManaged, HealthPolicyVerified)
+	}
+	if cfg.TransportMode == TransportSDK && cfg.HealthPolicy == HealthPolicyVerified && cfg.HealthPolicyVerifier == nil {
+		return nil, fmt.Errorf("nacos: verified health policy requires an injected health-policy verifier")
 	}
 	addresses := append([]string(nil), cfg.ServerURLs...)
 	if len(addresses) == 0 && cfg.ServerURL != "" {
@@ -377,12 +395,13 @@ func NewClientWithConfig(cfg ClientConfig, logger ports.Logger) (*Client, error)
 		httpClient = &http.Client{Timeout: timeout, Transport: transport}
 	}
 	client := &Client{
-		baseURL:      parsedURLs[0],
-		baseURLs:     parsedURLs,
-		http:         httpClient,
-		logger:       logger,
-		config:       cfg,
-		clusterAdmin: cfg.ClusterAdmin,
+		baseURL:        parsedURLs[0],
+		baseURLs:       parsedURLs,
+		http:           httpClient,
+		logger:         logger,
+		config:         cfg,
+		clusterAdmin:   cfg.ClusterAdmin,
+		healthVerifier: cfg.HealthPolicyVerifier,
 	}
 	if cfg.TransportMode == TransportSDK {
 		facade, err := newSDKNamingFacade(cfg)
@@ -473,6 +492,9 @@ func CheckReadinessWithConfig(cfg ClientConfig, logger ports.Logger) (retErr err
 			}
 		}
 	}()
+	if err := c.verifyHealthPolicy(context.Background()); err != nil {
+		return err
+	}
 	if cfg.TransportMode == TransportSDK {
 		retErr = checkReadinessSDK(c)
 		return retErr
@@ -563,6 +585,30 @@ func CheckReadinessWithConfig(cfg ClientConfig, logger ports.Logger) (retErr err
 		return lastErr
 	}
 	return errors.New("nacos: no configured server addresses")
+}
+
+func (c *Client) verifyHealthPolicy(parent context.Context) error {
+	if c == nil || c.config.HealthPolicy != HealthPolicyVerified {
+		return nil
+	}
+	if c.healthVerifier == nil {
+		return fmt.Errorf("nacos: verified health policy has no verifier")
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	timeout := c.config.Timeout
+	if timeout <= 0 {
+		timeout = RequestTimeout
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	namespace := effectiveNamespace(c.config.NamespaceID)
+	group := effectiveGroup(c.config.GroupName)
+	if err := c.healthVerifier.VerifyHealthCheckDisabled(ctx, namespace, group); err != nil {
+		return fmt.Errorf("nacos: health-policy preflight failed: %w", err)
+	}
+	return nil
 }
 
 // checkReadinessSDK performs both sides of the startup gate using the
