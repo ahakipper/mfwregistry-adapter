@@ -81,7 +81,14 @@ That fixture has since been provisioned for a bounded smoke. The
 records a real Nacos 3 ARM64 + KWOK run with 7/7 exact ticks, 2/2 mutation
 correlations, zero drops/errors, Crash/Recovery samples, exact final snapshot,
 and successful cleanup. It is a smoke PASS only; the 1,000-Pod sustained gate
-remains open.
+was subsequently executed and passed in the one-hour qualification below.
+
+The [one-hour qualification report](evidence/nacos3-kwok-p1-remediation-1h-2026-09-30.md)
+records 320/320 exact full-Instance ticks at 1,000 Pods across 20 services,
+7,268/7,268 mutation correlations, zero divergent ticks, zero observation
+errors, zero dropped events, Burst/Crash/Recovery coverage, and clean teardown.
+The runtime gate is therefore PASS locally; source-qualified wire migration and
+deployment-owned health-policy verification remain bounded follow-ups.
 
 ## 3. End-to-end chain review
 
