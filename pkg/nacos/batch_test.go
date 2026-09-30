@@ -139,6 +139,11 @@ func instanceIDs(items []*instance.Instance) []string {
 	return ids
 }
 
+type batchPermanentError struct{ message string }
+
+func (e *batchPermanentError) Error() string { return e.message }
+func (*batchPermanentError) Permanent() bool { return true }
+
 type batchRecorder struct {
 	mu           sync.Mutex
 	active       int
@@ -729,6 +734,30 @@ func TestPushPersistentBatchesCountsFailedExecutionForWorkerRetry(t *testing.T) 
 	}
 }
 
+func TestPushPersistentBatchesClassifiesFailureMetrics(t *testing.T) {
+	permanent := &batchPermanentError{message: "metadata rejected"}
+	recorder := &batchRecorder{errByIP: map[string]error{
+		"10.22.0.2": errors.New("temporary timeout"),
+		"10.22.0.3": permanent,
+	}}
+	sink := newBatchTestSink(recorder)
+	items := []*instance.Instance{
+		{InstanceId: "ok", AppCode: "metrics-ok", Provider: "k8s", Ip: "10.22.0.1", Status: instance.InstanceStatusOnline, Enabled: true},
+		{InstanceId: "transient", AppCode: "metrics-transient", Provider: "k8s", Ip: "10.22.0.2", Status: instance.InstanceStatusOnline, Enabled: true},
+		{InstanceId: "permanent", AppCode: "metrics-permanent", Provider: "k8s", Ip: "10.22.0.3", Status: instance.InstanceStatusOnline, Enabled: true},
+	}
+	if err := sink.pushPersistentBatches(items); err == nil {
+		t.Fatal("pushPersistentBatches() error = nil, want mixed failure")
+	}
+	got := sink.BatchMetrics()
+	if got.AttemptedItems != 3 || got.SucceededItems != 1 || got.TransientFailedItems != 1 || got.PermanentFailedItems != 1 {
+		t.Fatalf("failure metrics = %+v, want attempted=3 succeeded=1 transient=1 permanent=1", got)
+	}
+	if got.RetryCount != 1 {
+		t.Fatalf("failed execution metric = %d, want one retryable execution", got.RetryCount)
+	}
+}
+
 func TestPushAllSkipsPruneWhenPersistentBatchFails(t *testing.T) {
 	recorder := &batchRecorder{errByIP: map[string]error{"10.0.0.1": errors.New("registration failed")}}
 	sink := newBatchTestSink(recorder)
@@ -741,6 +770,9 @@ func TestPushAllSkipsPruneWhenPersistentBatchFails(t *testing.T) {
 	recorder.mu.Unlock()
 	if listCalls != 0 {
 		t.Fatalf("prune list calls = %d, want zero after batch failure", listCalls)
+	}
+	if got := sink.BatchMetrics(); got.PruneSkippedScopes != 1 {
+		t.Fatalf("prune skipped scopes = %d, want 1", got.PruneSkippedScopes)
 	}
 }
 
@@ -776,6 +808,9 @@ func TestPushAllPrunesSuccessfulScopesButPreservesFailedScope(t *testing.T) {
 	}
 	if !badPresent {
 		t.Fatalf("failed bad-app scope disappeared from Nacos: remaining=%+v", remaining)
+	}
+	if got := sink.BatchMetrics(); got.PruneSkippedScopes != 1 {
+		t.Fatalf("prune skipped scopes = %d, want 1 failed scope", got.PruneSkippedScopes)
 	}
 }
 

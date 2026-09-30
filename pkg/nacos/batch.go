@@ -39,14 +39,22 @@ type persistentBatch struct {
 
 // BatchMetricsSnapshot is the sink-local accounting exported for Observe and
 // test harnesses. LogicalBatches and Items are cumulative full-sync work;
-// RetryCount counts cumulative failed executions that the worker retry queue
-// may replay. ConcurrencyCap is the configured global item-call limit observed
-// by the latest execution.
+// AttemptedItems counts items admitted to an application batch, while the
+// success/failure fields classify the resulting item outcomes. RetryCount
+// counts failed executions that the worker retry queue may replay, and
+// PruneSkippedScopes counts application scopes deliberately protected from
+// prune after an incomplete batch. ConcurrencyCap is the configured global
+// item-call limit observed by the latest execution.
 type BatchMetricsSnapshot struct {
-	LogicalBatches uint64
-	Items          uint64
-	RetryCount     uint64
-	ConcurrencyCap uint64
+	LogicalBatches       uint64
+	Items                uint64
+	AttemptedItems       uint64
+	SucceededItems       uint64
+	TransientFailedItems uint64
+	PermanentFailedItems uint64
+	RetryCount           uint64
+	PruneSkippedScopes   uint64
+	ConcurrencyCap       uint64
 }
 
 // BatchMetrics returns cumulative logical batch accounting for this sink.
@@ -56,10 +64,15 @@ func (s *Sink) BatchMetrics() BatchMetricsSnapshot {
 		return BatchMetricsSnapshot{}
 	}
 	return BatchMetricsSnapshot{
-		LogicalBatches: s.batchLogicalCount.Load(),
-		Items:          s.batchItemCount.Load(),
-		RetryCount:     s.batchFailedCount.Load(),
-		ConcurrencyCap: s.batchConcurrencyCap.Load(),
+		LogicalBatches:       s.batchLogicalCount.Load(),
+		Items:                s.batchItemCount.Load(),
+		AttemptedItems:       s.batchAttemptedCount.Load(),
+		SucceededItems:       s.batchSucceededCount.Load(),
+		TransientFailedItems: s.batchTransientCount.Load(),
+		PermanentFailedItems: s.batchPermanentCount.Load(),
+		RetryCount:           s.batchFailedCount.Load(),
+		PruneSkippedScopes:   s.batchPruneSkipped.Load(),
+		ConcurrencyCap:       s.batchConcurrencyCap.Load(),
 	}
 }
 
@@ -199,9 +212,11 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 		return nil
 	}
 	s.batchConcurrencyCap.Store(uint64(currentPushConcurrency()))
+	admittedItems := 0
 	for _, batch := range batches {
 		s.batchLogicalCount.Add(1)
 		s.batchItemCount.Add(uint64(len(batch.Items)))
+		admittedItems += len(batch.Items)
 	}
 
 	// Keep scope order separate from the map used to append batches. This lets
@@ -329,15 +344,36 @@ func (s *Sink) pushPersistentBatches(instances []*instance.Instance) error {
 		}()
 	}
 	scopes.Wait()
+	var succeeded, transientFailed, permanentFailed uint64
 	var failures []batchApplyFailure
 	for index, err := range errs {
 		if err != nil {
+			if isPermanentBatchError(err) {
+				permanentFailed++
+			} else {
+				transientFailed++
+			}
 			failures = append(failures, batchApplyFailure{scope: scopesByIndex[index], err: err})
+		} else {
+			succeeded++
 		}
 	}
+	// Every item represented by a persistent batch is counted as an admitted
+	// application attempt. This includes a permanent pre-write validation
+	// error: it was intentionally evaluated by the executor and must remain
+	// visible in the item outcome accounting.
+	s.batchAttemptedCount.Add(uint64(admittedItems))
+	s.batchSucceededCount.Add(succeeded)
+	s.batchTransientCount.Add(transientFailed)
+	s.batchPermanentCount.Add(permanentFailed)
 	if len(failures) > 0 {
 		s.batchFailedCount.Add(1)
 		return &batchApplyError{failures: failures}
 	}
 	return nil
+}
+
+func isPermanentBatchError(err error) bool {
+	var permanent interface{ Permanent() bool }
+	return errors.As(err, &permanent) && permanent.Permanent()
 }

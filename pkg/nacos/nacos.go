@@ -151,7 +151,12 @@ type Sink struct {
 	// typed retry queue replays that complete operation.
 	batchLogicalCount   atomic.Uint64
 	batchItemCount      atomic.Uint64
+	batchAttemptedCount atomic.Uint64
+	batchSucceededCount atomic.Uint64
+	batchTransientCount atomic.Uint64
+	batchPermanentCount atomic.Uint64
 	batchFailedCount    atomic.Uint64
+	batchPruneSkipped   atomic.Uint64
 	batchConcurrencyCap atomic.Uint64
 
 	// remembered (AUDIT-B-4) records every (service, cluster) pair the sink
@@ -588,7 +593,9 @@ func (s *Sink) PushAll(triggerTime int64, instances []*instance.Instance) error 
 			// A failed application scope is not a complete desired snapshot and
 			// must not be pruned. Other scopes that fully acknowledged their
 			// writes remain eligible for cleanup.
-			pruneErr := s.pruneWithSkippedScopes(instances, batchErr.failedScopes())
+			skipped := batchErr.failedScopes()
+			s.batchPruneSkipped.Add(uint64(len(skipped)))
+			pruneErr := s.pruneWithSkippedScopes(instances, skipped)
 			if pruneErr != nil {
 				return errors.Join(err, pruneErr)
 			}
