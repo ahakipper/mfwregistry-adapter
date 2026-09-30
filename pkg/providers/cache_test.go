@@ -61,3 +61,24 @@ func TestCacheDeleteLegacyWireIDFallbackRequiresUniqueMatch(t *testing.T) {
 		t.Fatal("ambiguous legacy Delete removed one of the source-scoped entries")
 	}
 }
+
+func TestCacheStoresSamePodNameSeparatelyBySourceIdentity(t *testing.T) {
+	cache := NewCache(2)
+	a := &sv.Instance{InstanceId: "pod-shared", SourceKey: "cluster-a/uid-a", SourceCluster: "cluster-a", Ip: "10.0.0.1"}
+	b := &sv.Instance{InstanceId: "pod-shared", SourceKey: "cluster-b/uid-b", SourceCluster: "cluster-b", Ip: "10.0.0.2"}
+	cache.ReplaceOrInsert(a)
+	cache.ReplaceOrInsert(b)
+
+	if got := cache.List(); len(got) != 2 {
+		t.Fatalf("cache.List() length = %d, want 2 same-name source instances", len(got))
+	}
+	if got := cache.Get(IdentityKey(a)); got == nil || got.Ip != a.Ip || got.SourceCluster != a.SourceCluster {
+		t.Fatalf("cache.Get(%q) = %#v, want cluster-a instance", IdentityKey(a), got)
+	}
+	if got := cache.Get(IdentityKey(b)); got == nil || got.Ip != b.Ip || got.SourceCluster != b.SourceCluster {
+		t.Fatalf("cache.Get(%q) = %#v, want cluster-b instance", IdentityKey(b), got)
+	}
+	if got := cache.Get("pod-shared"); got != nil {
+		t.Fatalf("ambiguous legacy cache.Get(pod-shared) = %#v, want nil", got)
+	}
+}
