@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"spotter/internal/domain/instance"
 )
@@ -57,6 +59,45 @@ func TestNacosMetadataRejectsHighEntropyPayloadBeforeWrite(t *testing.T) {
 	if tooLarge.Length <= MaxNacosMetadataLength || tooLarge.Limit != MaxNacosMetadataLength {
 		t.Fatalf("metadata size error = %+v, want length > %d", tooLarge, MaxNacosMetadataLength)
 	}
+}
+
+func TestNacosMetadataLimitUsesExactUTF16Boundary(t *testing.T) {
+	accepted := map[string]string{"k": strings.Repeat("a", MaxNacosMetadataLength-1)}
+	if err := validateMetadataSize(accepted); err != nil {
+		t.Fatalf("ASCII metadata at exact limit rejected: %v", err)
+	}
+	rejected := map[string]string{"k": strings.Repeat("a", MaxNacosMetadataLength)}
+	var tooLarge *MetadataTooLargeError
+	if err := validateMetadataSize(rejected); !errors.As(err, &tooLarge) {
+		t.Fatalf("ASCII metadata over exact limit error = %v, want MetadataTooLargeError", err)
+	}
+	if tooLarge.Length != MaxNacosMetadataLength+1 {
+		t.Fatalf("ASCII over-limit length = %d, want %d", tooLarge.Length, MaxNacosMetadataLength+1)
+	}
+
+	// Nacos validates Java String.length, so one supplementary Unicode code
+	// point consumes two UTF-16 code units rather than one Go rune.
+	unicodeValue := strings.Repeat("🙂", (MaxNacosMetadataLength-2)/2) + "a"
+	if got := len(utf16.Encode([]rune(unicodeValue))); got != MaxNacosMetadataLength-1 {
+		t.Fatalf("test Unicode UTF-16 length = %d, want %d", got, MaxNacosMetadataLength-1)
+	}
+	if err := validateMetadataSize(map[string]string{"k": unicodeValue}); err != nil {
+		t.Fatalf("Unicode metadata at exact UTF-16 limit rejected: %v", err)
+	}
+	if err := validateMetadataSize(map[string]string{"k": unicodeValue + "🙂"}); !errors.As(err, &tooLarge) {
+		t.Fatalf("Unicode metadata over UTF-16 limit error = %v, want MetadataTooLargeError", err)
+	}
+}
+
+func FuzzNacosMetadataSizeValidationNeverPanics(f *testing.F) {
+	f.Add("sourceKey", "cluster-a/uid-1")
+	f.Add("🙂", strings.Repeat("x", 1024))
+	f.Fuzz(func(t *testing.T, key, value string) {
+		if key == "" {
+			key = "k"
+		}
+		_ = validateMetadataSize(map[string]string{key: value})
+	})
 }
 
 func TestReconstructForSDKSurfacesDisabledUnhealthyWireDriftWithoutSteadyLoop(t *testing.T) {
