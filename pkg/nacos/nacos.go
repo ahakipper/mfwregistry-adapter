@@ -1,8 +1,6 @@
 package nacos
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -426,11 +424,11 @@ func (s *Sink) validateWireIdentitySet(instances []*instance.Instance) error {
 			continue
 		}
 		wireID := s.compositeID(ins)
-		sourceID := instance.IdentityKey(ins)
-		if previous, ok := seen[wireID]; ok && previous != sourceID {
-			return &WireIdentityCollisionError{CompositeID: wireID, Existing: previous, Incoming: sourceID}
+		ownerScope := wireOwnerScope(ins)
+		if previous, ok := seen[wireID]; ok && previous != ownerScope {
+			return &WireIdentityCollisionError{CompositeID: wireID, Existing: previous, Incoming: ownerScope}
 		}
-		seen[wireID] = sourceID
+		seen[wireID] = ownerScope
 		s.rememberedMu.Lock()
 		owner := ""
 		if s.wireOwners != nil {
@@ -440,8 +438,8 @@ func (s *Sink) validateWireIdentitySet(instances []*instance.Instance) error {
 			owner = s.wireClaims[wireID]
 		}
 		s.rememberedMu.Unlock()
-		if owner != "" && owner != sourceID {
-			return &WireIdentityCollisionError{CompositeID: wireID, Existing: owner, Incoming: sourceID}
+		if owner != "" && owner != ownerScope {
+			return &WireIdentityCollisionError{CompositeID: wireID, Existing: owner, Incoming: ownerScope}
 		}
 	}
 	return nil
@@ -486,29 +484,29 @@ func (s *Sink) recoverWireOwnership(ins *instance.Instance) error {
 			continue
 		}
 		wireID := hostCompositeID(scope.service, s.groupName, host)
-		sourceID := sourceIdentityFromHost(scope.service, host)
-		if sourceID == "" {
+		ownerScope := sourceOwnerScopeFromHost(scope.service, host)
+		if ownerScope == "" {
 			// A Spotter-owned record with no recoverable source identity is
 			// unsafe to overwrite. Preserve the fail-closed behavior instead
 			// of guessing from a mutable Pod name.
-			sourceID = "<unknown-spotter-source>"
+			ownerScope = "<unknown-spotter-source>"
 		}
-		if previous := owners[wireID]; previous != "" && previous != sourceID {
-			return &WireIdentityCollisionError{CompositeID: wireID, Existing: previous, Incoming: sourceID}
+		if previous := owners[wireID]; previous != "" && previous != ownerScope {
+			return &WireIdentityCollisionError{CompositeID: wireID, Existing: previous, Incoming: ownerScope}
 		}
-		owners[wireID] = sourceID
+		owners[wireID] = ownerScope
 	}
 
 	s.rememberedMu.Lock()
 	if s.wireOwners == nil {
 		s.wireOwners = map[string]string{}
 	}
-	for wireID, sourceID := range owners {
-		if previous := s.wireOwners[wireID]; previous != "" && previous != sourceID {
+	for wireID, ownerScope := range owners {
+		if previous := s.wireOwners[wireID]; previous != "" && previous != ownerScope {
 			s.rememberedMu.Unlock()
-			return &WireIdentityCollisionError{CompositeID: wireID, Existing: previous, Incoming: sourceID}
+			return &WireIdentityCollisionError{CompositeID: wireID, Existing: previous, Incoming: ownerScope}
 		}
-		s.wireOwners[wireID] = sourceID
+		s.wireOwners[wireID] = ownerScope
 	}
 	s.wireScanned[scope] = true
 	s.rememberedMu.Unlock()
@@ -523,6 +521,24 @@ func sourceIdentityFromHost(service string, host Host) string {
 	return instance.IdentityKey(decoded)
 }
 
+func sourceOwnerScopeFromHost(service string, host Host) string {
+	decoded := reconstruct(service, host)
+	if decoded == nil {
+		return ""
+	}
+	return wireOwnerScope(decoded)
+}
+
+func wireOwnerScope(ins *instance.Instance) string {
+	if ins == nil {
+		return ""
+	}
+	if ins.SourceCluster != "" {
+		return "source-cluster:" + ins.SourceCluster
+	}
+	return "source-identity:" + instance.IdentityKey(ins)
+}
+
 func hostCompositeID(service, group string, host Host) string {
 	return fmt.Sprintf("%s#%d#%s#%s@@%s", host.IP, host.Port, host.ClusterName, effectiveGroup(group), service)
 }
@@ -532,7 +548,7 @@ func hostCompositeID(service, group string, host Host) string {
 // can perform a last-write-wins overwrite.
 func (s *Sink) claimWireIdentity(ins *instance.Instance) (func(bool), error) {
 	wireID := s.compositeID(ins)
-	sourceID := instance.IdentityKey(ins)
+	ownerScope := wireOwnerScope(ins)
 	s.rememberedMu.Lock()
 	if s.wireOwners == nil {
 		s.wireOwners = map[string]string{}
@@ -540,26 +556,26 @@ func (s *Sink) claimWireIdentity(ins *instance.Instance) (func(bool), error) {
 	if s.wireClaims == nil {
 		s.wireClaims = map[string]string{}
 	}
-	if owner := s.wireOwners[wireID]; owner != "" && owner != sourceID {
+	if owner := s.wireOwners[wireID]; owner != "" && owner != ownerScope {
 		s.rememberedMu.Unlock()
-		return nil, &WireIdentityCollisionError{CompositeID: wireID, Existing: owner, Incoming: sourceID}
+		return nil, &WireIdentityCollisionError{CompositeID: wireID, Existing: owner, Incoming: ownerScope}
 	}
-	if owner := s.wireClaims[wireID]; owner != "" && owner != sourceID {
+	if owner := s.wireClaims[wireID]; owner != "" && owner != ownerScope {
 		s.rememberedMu.Unlock()
-		return nil, &WireIdentityCollisionError{CompositeID: wireID, Existing: owner, Incoming: sourceID}
+		return nil, &WireIdentityCollisionError{CompositeID: wireID, Existing: owner, Incoming: ownerScope}
 	}
 	claimed := s.wireClaims[wireID] == ""
 	if claimed {
-		s.wireClaims[wireID] = sourceID
+		s.wireClaims[wireID] = ownerScope
 	}
 	s.rememberedMu.Unlock()
 	return func(success bool) {
 		s.rememberedMu.Lock()
 		defer s.rememberedMu.Unlock()
 		if success {
-			s.wireOwners[wireID] = sourceID
+			s.wireOwners[wireID] = ownerScope
 		}
-		if s.wireClaims[wireID] == sourceID && (claimed || success) {
+		if s.wireClaims[wireID] == ownerScope && (claimed || success) {
 			delete(s.wireClaims, wireID)
 		}
 	}, nil
@@ -1168,7 +1184,7 @@ func (s *Sink) deregisterInstance(ins *instance.Instance) error {
 		return err
 	}
 	wireID := s.compositeID(ins)
-	sourceID := instance.IdentityKey(ins)
+	ownerScope := wireOwnerScope(ins)
 	s.rememberedMu.Lock()
 	owner := ""
 	if s.wireOwners != nil {
@@ -1178,8 +1194,8 @@ func (s *Sink) deregisterInstance(ins *instance.Instance) error {
 		owner = s.wireClaims[wireID]
 	}
 	s.rememberedMu.Unlock()
-	if owner != "" && owner != sourceID {
-		return &WireIdentityCollisionError{CompositeID: wireID, Existing: owner, Incoming: sourceID}
+	if owner != "" && owner != ownerScope {
+		return &WireIdentityCollisionError{CompositeID: wireID, Existing: owner, Incoming: ownerScope}
 	}
 	return s.deregister(ins.AppCode, ins.Ip, firstPort(ins), clusterOf(ins))
 }
@@ -1189,8 +1205,11 @@ func (s *Sink) deregisterInstance(ins *instance.Instance) error {
 // SourceCluster retain the historical provider-shaped wire name until they
 // are migrated.
 func clusterOf(ins *instance.Instance) string {
+	if ins.Cluster != "" && (ins.SourceCluster == "" || ins.Cluster != ins.Provider) {
+		return sanitizeWireClusterName(ins.Cluster)
+	}
 	if ins.SourceCluster != "" {
-		return sourceQualifiedClusterName(ins.Provider, ins.SourceCluster)
+		return sanitizeWireClusterName(ins.SourceCluster)
 	}
 	if ins.Provider != "" {
 		return ins.Provider
@@ -1202,33 +1221,16 @@ func clusterOf(ins *instance.Instance) string {
 // fixtures and migration tooling without exposing the sink's internal ledger.
 func WireClusterName(ins *instance.Instance) string { return clusterOf(ins) }
 
-// sourceQualifiedClusterName is the stable Nacos wire projection of a logical
-// source cluster. Provider remains the instance type; SourceCluster carries
-// the actual K8s/Consul source identity. A short digest prevents two distinct
-// source IDs that normalize to the same human-readable component from
-// collapsing, while the bounded ASCII form is safe for Nacos composite IDs.
-func sourceQualifiedClusterName(provider, source string) string {
-	provider = sanitizeWireComponent(provider)
-	if provider == "" {
-		provider = "source"
-	}
-	readable := sanitizeWireComponent(source)
-	if readable == "" {
-		readable = "source"
-	}
-	if len(readable) > 32 {
-		readable = readable[:32]
-	}
-	digest := sha256.Sum256([]byte(source))
-	return fmt.Sprintf("%s-%s-%s", provider, readable, hex.EncodeToString(digest[:4]))
-}
-
-func sanitizeWireComponent(value string) string {
-	value = strings.ToLower(value)
+// sanitizeWireClusterName preserves the configured cluster name while
+// removing characters that would interfere with Nacos's composite ID
+// separators. Provider is deliberately absent: it is the Instance type, not
+// the source cluster name.
+func sanitizeWireClusterName(value string) string {
+	value = strings.TrimSpace(value)
 	var b strings.Builder
 	for _, r := range value {
 		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
 			b.WriteRune(r)
 		default:
 			b.WriteByte('-')
@@ -1353,7 +1355,7 @@ func reconstruct(service string, host Host) *instance.Instance {
 				decoded.Ports[0].Port = int32(host.Port)
 			}
 			// The canonical payload owns the provider type. The wire cluster
-			// may now be source-qualified (for example k8s-cluster-a-<hash>),
+			// may now be source-qualified (for example cluster-a),
 			// so assigning host.ClusterName here would turn a source identity
 			// back into a fake provider and break multi-source reconciliation.
 			if decoded.Provider == "" {

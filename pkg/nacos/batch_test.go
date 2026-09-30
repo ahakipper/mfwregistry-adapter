@@ -57,8 +57,11 @@ func TestClusterOfUsesSourceQualifiedWireNameWhenSourceIdentityExists(t *testing
 	k8sA := clusterOf(&instance.Instance{Provider: "k8s", SourceCluster: "cluster-a"})
 	k8sB := clusterOf(&instance.Instance{Provider: "k8s", SourceCluster: "cluster-b"})
 	consulA := clusterOf(&instance.Instance{Provider: "ecs", SourceCluster: "consul-a"})
-	if k8sA == k8sB || k8sA == "k8s" || consulA == "ecs" {
+	if k8sA != "cluster-a" || k8sB != "cluster-b" || consulA != "consul-a" {
 		t.Fatalf("source-qualified clusters = k8sA=%q k8sB=%q consulA=%q, want distinct qualified names", k8sA, k8sB, consulA)
+	}
+	if got := clusterOf(&instance.Instance{Provider: "k8s", Cluster: "business-blue", SourceCluster: "source-a"}); got != "business-blue" {
+		t.Fatalf("business cluster = %q, want business-blue", got)
 	}
 	if got := clusterOf(&instance.Instance{Provider: "k8s"}); got != "k8s" {
 		t.Fatalf("legacy cluster name = %q, want k8s fallback", got)

@@ -12,7 +12,7 @@ passed the complete three-plane equality checks.
 Command: OBS_DURATION=1m OBS_SCALE=10 OBS_SERVICES=2 \
          OBS_BURSTS=false OBS_CRASH_CYCLES=true OBS_TIMEOUT=10m \
          make test-observe
-Source wire cluster: k8s-config-4b84851f95f43917-7f9843c8
+Source wire cluster: the configured source cluster name (`config-<stable-source-id>` in this KWOK run)
 Target: nacos/nacos-server:v3.2.4-slim, linux/arm64
 ```
 
@@ -45,7 +45,7 @@ K8s Watch → Nacos Watch:
 
 ## Artifacts and hashes
 
-- [Summary Markdown](../../tests/observe/results/20260930-1737-summary.md) — SHA256 `b0731e81c735626b94b69bf49d23b753f886258a8761f3f62d4f89c3bbfd734f`
-- [Summary JSON](../../tests/observe/results/20260930-1737-summary.json) — SHA256 `f9fe511f058c782cb7f3cd1176428af1df6bcf443cc83afe18633a31e0b03b7e`
-- [Watch events](../../tests/observe/results/20260930-1737-events.jsonl) — SHA256 `1fe83546505c823076448246d6b4f6fb6ed91dacca22fdcc5bd82ebd688f80e7`
-- [Tick records](../../tests/observe/results/20260930-1737-ticks.jsonl) — SHA256 `025c299009a8d38609c398270a728281cb080008ff9c1cd19d93c6a4fcce38ad`
+- [Summary Markdown](../../tests/observe/results/20260930-1858-summary.md) — SHA256 `5ddcaef4f57ab5df86635e15a471af6b733858dc1367e7bb1396624e6590d1ed`
+- [Summary JSON](../../tests/observe/results/20260930-1858-summary.json) — SHA256 `3cda329e2bdc3754807594f7d0389febfd565eedbef4a7b9d9ba7b1361219803`
+- [Watch events](../../tests/observe/results/20260930-1858-events.jsonl) — SHA256 `4c409736ec2ee1e837b43db1e33a04756b2b6d56639afa91482d17dde591602b`
+- [Tick records](../../tests/observe/results/20260930-1858-ticks.jsonl) — SHA256 `131832e4ab171d6c500fe5f48dc9ccffbdc1672d55615f9eb1f621823170dfd3`

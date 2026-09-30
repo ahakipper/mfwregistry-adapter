@@ -8,7 +8,8 @@ source-qualified mapping while preserving the domain distinction:
 - `Provider` is the source type (`k8s` or the legacy Consul value `ecs`);
 - `Cluster` is the workload/business cluster carried by a Pod/service;
 - `SourceCluster` is the stable logical source-cluster identity;
-- Nacos `clusterName` is a safe wire projection of `Provider + SourceCluster`.
+- Nacos `clusterName` is the configured cluster name (`Cluster`) with
+  `SourceCluster` as the source-identity fallback; `Provider` is not prefixed.
 
 This is required for multiple K8s clusters and multiple logical Consul
 clusters. A same-name Pod is not the source identity; a Kubernetes UID/source
@@ -16,9 +17,9 @@ cluster pair is.
 
 ## Compatibility rules
 
-- Source-aware instances use source-qualified Nacos cluster names such as
-  `k8s-<source>` or `ecs-<source>`; legacy instances without `SourceCluster`
-  retain `k8s`/`ecs` until migrated.
+- Source-aware instances use their cluster name directly as the Nacos wire
+  cluster; `SourceCluster` is the fallback when no business cluster label is
+  available. Legacy instances without source metadata retain `k8s`/`ecs`.
 - The raw Pod `cluster`/`cluster-name` label is retained in `Instance.Cluster`
   and canonical metadata; it is not silently repurposed as source identity.
 - Consul server addresses remain HA endpoints for one logical source. A

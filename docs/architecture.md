@@ -35,10 +35,10 @@ container/machine instances exist and what state they are in".
 
 Source identity is separate from provider type: `Provider` identifies K8s or
 Consul/ECS, `Cluster` carries workload/business cluster metadata, and
-`SourceCluster` identifies the logical Kubernetes/Consul source. Nacos uses a
-source-qualified projection of `Provider + SourceCluster` for `clusterName`;
-it does not merge every K8s source into one wire cluster merely because the
-provider type is `k8s`.
+`SourceCluster` identifies the logical Kubernetes/Consul source. Nacos uses the
+configured `Cluster` name for `clusterName`, falling back to `SourceCluster`
+when the business cluster name is absent; it does not prefix that name with
+the provider type.
 
 ## System Context
 

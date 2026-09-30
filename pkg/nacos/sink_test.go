@@ -622,6 +622,19 @@ func TestBlackboxSinkAllowsSameAddressAcrossSourceQualifiedClusters(t *testing.T
 	}
 }
 
+func TestBlackboxSinkAllowsIPReuseWithinOneSourceCluster(t *testing.T) {
+	sink, _ := newSinkAt(t)
+	first := domainInstance("pod-a-hash", "pay-user", "10.0.0.1", 8080, "k8s", 1)
+	first.SourceCluster = "cluster-a"
+	first.SourceKey = "cluster-a/uid-a"
+	second := domainInstance("pod-b-hash", "pay-user", "10.0.0.1", 8080, "k8s", 1)
+	second.SourceCluster = "cluster-a"
+	second.SourceKey = "cluster-a/uid-b"
+	if err := sink.PushAll(7, []*instance.Instance{first, second}); err != nil {
+		t.Fatalf("same-source IP reuse error = %v, want new Pod generation to take over wire identity", err)
+	}
+}
+
 func TestBlackboxSinkLegacyProviderMappingStillFailsClosedOnCollision(t *testing.T) {
 	sink, server := newSinkAt(t)
 	first := domainInstance("pod-a-hash", "pay-user", "10.0.0.1", 8080, "k8s", 1)
