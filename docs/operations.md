@@ -4,7 +4,7 @@ Operational reference for building, running, monitoring and troubleshooting
 spotter. See [architecture.md](architecture.md) for design background and
 [data-model.md](data-model.md) for the pushed data model.
 
-## Current release status (2026-09-20, implementation baseline `bb59885`)
+## Current release status (2026-09-30, P1 remediation in progress)
 
 - The supported Nacos target is `nacos/nacos-server:v3.2.4-slim` on
   `linux/arm64`. The historical Nacos 2.1.0 scratch records below are
@@ -25,6 +25,11 @@ spotter. See [architecture.md](architecture.md) for design background and
   the Nacos deployment. It is not a prerequisite for the SDK's register,
   deregister, query, or subscribe calls. Spotter does not silently fall back to
   raw HTTP when an Admin/Maintainer SDK is unavailable.
+- `--nacos-health-policy=deployment-owned` is the compatibility default and
+  means the deployment owner attests the global switch. Use
+  `--nacos-health-policy=verified` only when composition injects an approved
+  verifier; without one, startup fails before naming readiness and business
+  writes. `admin-managed` remains a separate injected-facade mode.
 - Real Nacos deployment HA, multi-node failover, TLS/auth policy, namespace
   authorization, and leaderless recovery remain outside this Spotter release
   scope.
@@ -47,7 +52,9 @@ are SDK-default; raw HTTP is available only through the explicitly named
 `NewHTTPCompat*` and `CheckReadinessHTTPCompat` rollback/test helpers.
 The default health policy is `deployment-owned`; ordinary naming startup never
 requires `NacosClusterAdmin`. Explicit `admin-managed` mode is optional and
-fails closed when no facade is injected. It never falls back to raw HTTP.
+fails closed when no facade is injected. `verified` mode requires the
+composition-level `NacosHealthPolicyVerifier` and runs it before SDK readiness
+and the persistent canary. Neither mode falls back to raw HTTP.
 SDK provenance and the pin review date are recorded in
 [nacos-sdk-provenance.md](nacos-sdk-provenance.md).
 
@@ -99,6 +106,7 @@ process is normally started from the directory that contains `config/`.
 | `-g, --grpc-addr` | `172.16.130.71:50051` | Legacy Atlas compatibility address; not used by the current Nacos-only release. |
 | `--atlas-compat` | `false` | Explicitly add the legacy Atlas Sink; never enabled implicitly. |
 | `--nacos-addr` | empty | Nacos server address; required unless explicit Atlas compatibility is selected. |
+| `--nacos-health-policy` | `deployment-owned` | `deployment-owned`, `admin-managed`, or `verified`; verified requires an injected health-policy verifier. |
 | `--reconcile-source` | empty | Resolves to `nacos` in the default Nacos-only graph. |
 
 ### Nacos sink transport
@@ -206,9 +214,11 @@ register/deregister, complete reads, retry, cleanup, and 201-instance
 application batching. The remaining reliability evidence gate is the fresh
 two-hour/1000-Pod corrected three-watch run on the final code.
 
-Missing Admin/Maintainer support does not disable ordinary naming operations.
-Spotter assumes cluster health policy is deployment-owned and does not attempt
-to configure it unless the optional `admin-managed` mode is explicitly chosen.
+Missing Admin/Maintainer support does not disable ordinary naming operations in
+the default deployment-owned mode. For a release that needs runtime proof of
+the no-probe policy, choose verified mode and provide the approved verifier;
+otherwise the health setting remains a deployment-owned attestation, not a
+Spotter evidence claim.
 
 ### Final-code two-hour gate
 

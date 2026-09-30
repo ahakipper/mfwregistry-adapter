@@ -70,6 +70,12 @@ themselves prove a source-qualified wire migration, provide a deployment's
 health-policy verifier, or replace the required post-remediation Nacos 3 +
 KWOK runtime evidence. Those are the remaining Stage 5 gates.
 
+The post-remediation static gate is green, including `make test-all` (race
+packages, black-box tests, smoke tests, and tagged E2E). The current host check
+found Docker and kwokctl binaries on arm64 but no local Nacos image and no
+active KWOK cluster, so the real Stage 5 run is recorded as NOT VERIFIED rather
+than started with an incomplete fixture.
+
 ## 3. End-to-end chain review
 
 ```text

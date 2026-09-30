@@ -188,4 +188,4 @@ rolled back by deleting tests or historical evidence.
 | Stage 2 metadata capacity | **CODE COMPLETE** | `429fe9f`, Nacos 1024 UTF-16 code-unit guard and high-entropy negative tests, pushed. |
 | Stage 3 health-policy preflight | **CODE COMPLETE / VERIFIER DEPLOYMENT OPEN** | `20ec2d2`, explicit `verified` policy and injected verifier gate, pushed. Default deployment-owned mode remains an operator attestation until a verifier is supplied. |
 | Stage 4 partial batch/prune | **CODE COMPLETE** | `6a0035a`, failed-scope isolation and structured retry error, pushed. Full repository requalification remains required. |
-| Stage 5 runtime qualification/docs | **PENDING** | Must run post-remediation Nacos 3 + KWOK evidence and update the final matrix. |
+| Stage 5 runtime qualification/docs | **NOT VERIFIED / ENVIRONMENT MISSING** | Current host is arm64 with Docker/kwokctl binaries but no local Nacos image or active KWOK cluster. `make test-all` passes; real Nacos 3 + KWOK evidence must run when the target fixture is provisioned. |
