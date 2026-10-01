@@ -2,6 +2,7 @@ package consul
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -117,5 +118,33 @@ func TestConsulWatchOriginConcurrentEventsRemainExact(t *testing.T) {
 		if event.Trigger != want {
 			t.Fatalf("instance %q trigger = %d, want %d", event.Data[0].InstanceId, event.Trigger, want)
 		}
+	}
+}
+
+func TestConsulInitialLargeSnapshotUsesOneFullBatchEvent(t *testing.T) {
+	worker := &fakeWorker{}
+	entries := make([]*api.ServiceEntry, 100)
+	for i := range entries {
+		entry := healthyEntry(fmt.Sprintf("scale-%03d", i), fmt.Sprintf("10.0.1.%d", i%250+1), uint64(i+1))
+		entry.Checks = api.HealthChecks{{CheckID: "service:" + entry.Service.ID, Status: api.HealthPassing}}
+		entries[i] = entry
+	}
+	provider := newStaticConsulProvider(t, worker, map[string][]*api.ServiceEntry{"scale-app": entries})
+	defer provider.shutdown()
+	origin := time.Unix(1_700_000_001, 99)
+	if err := provider.syncInstanceAt(origin); err != nil {
+		t.Fatalf("large initial sync error = %v", err)
+	}
+	events := worker.handleSnapshot()
+	full := worker.syncAllEvents()
+	if len(events) != 1 || len(full) != 1 || events[0].Operate != workerpkg.OperateTypeSyncAll {
+		op := workerpkg.OperateType("")
+		if len(events) > 0 {
+			op = events[0].Operate
+		}
+		t.Fatalf("large initial events=%d full=%d op=%s, want one full event", len(events), len(full), op)
+	}
+	if len(full[0].Data) != len(entries) || full[0].Trigger != origin.UnixNano() {
+		t.Fatalf("large full event size/trigger = %d/%d, want %d/%d", len(full[0].Data), full[0].Trigger, len(entries), origin.UnixNano())
 	}
 }

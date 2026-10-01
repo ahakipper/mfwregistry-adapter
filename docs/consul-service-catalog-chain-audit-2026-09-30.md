@@ -248,8 +248,11 @@ single-source while embedded configuration supports multiple descriptors.
   required metadata; the skip is fail-closed and exposed through the bounded
   source-scoped conversion-skip metric.
 - The current Consul evidence does not include a scale run comparable to the
-  K8s KWOK run. This remains an accepted scope boundary until Consul scale is
-  required.
+  K8s KWOK run. The Makefile scale gate now covers 100 and 1,000 instances
+  with instance-level P80/P90/P99 for catalog and Subscribe visibility; the
+  10,000 attempt is currently NOT QUALIFIED because the local environment did
+  not converge before the bounded deadline. This is an explicit capacity/
+  throughput result, not a fabricated percentile.
 - Client leader probing and repeated catalog reads now expose optional
   source-scoped request/latency metrics for `leader_probe`, `catalog_services`,
   `health_service`, and blocking `health_state` calls. Endpoint addresses,

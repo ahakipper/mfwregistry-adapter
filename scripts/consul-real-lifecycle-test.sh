@@ -48,6 +48,7 @@ run_case() {
 }
 
 run_case pass 0
+run_case scale_pass 0 CONSUL_REAL_LOCAL_TEST_TAGS=consul_real,consul_scale_real CONSUL_REAL_LOCAL_RUN='^TestConsulRealScaleQualification$' CONSUL_REAL_LOCAL_REPORT_MARKER=CONSUL_REAL_SCALE CONSUL_REAL_LOCAL_REPORT_MODE=scale CONSUL_REAL_LOCAL_SCALE_LIST=100,1000,10000
 run_case gotestfail 17
 run_case startfail 9
 for mode in skip missingreport incompletesample reportcleanupfail duplicatereport cleanupfail cleanupcheckfail lostownership; do run_case "$mode" 1; done

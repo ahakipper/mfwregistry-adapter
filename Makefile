@@ -180,6 +180,29 @@ test-observe-ladder:
 test-consul-real-local:
 	./scripts/consul-real-local.sh
 
+# Consul scale-ladder E2E: one shared application with 100, 1,000 and 10,000
+# instances. Each instance contributes a mutation-start -> catalog and
+# mutation-start -> official SDK Subscribe sample; the report contains P80,
+# P90 and P99 per scale. This is a real-write, potentially long-running gate
+# and is deliberately excluded from test-all.
+CONSUL_SCALE_TIMEOUT ?= 30m
+CONSUL_SCALE_LIST ?= 100,1000,10000
+CONSUL_SCALE_RUNS ?= 1
+CONSUL_SCALE_OBSERVE_TIMEOUT ?= 5m
+CONSUL_SCALE_RPC_TIMEOUT ?= 30s
+
+test-consul-real-scale:
+	CONSUL_REAL_LOCAL_TEST_TAGS='consul_real,consul_scale_real' \
+	CONSUL_REAL_LOCAL_RUN='^TestConsulRealScaleQualification$$' \
+	CONSUL_REAL_LOCAL_REPORT_MARKER='CONSUL_REAL_SCALE' \
+	CONSUL_REAL_LOCAL_REPORT_MODE=scale \
+	CONSUL_REAL_LOCAL_SCALE_LIST=$(CONSUL_SCALE_LIST) \
+	CONSUL_REAL_LOCAL_SCALE_RUNS=$(CONSUL_SCALE_RUNS) \
+	CONSUL_REAL_LOCAL_SCALE_OBSERVE_TIMEOUT=$(CONSUL_SCALE_OBSERVE_TIMEOUT) \
+	CONSUL_REAL_LOCAL_RPC_TIMEOUT=$(CONSUL_SCALE_RPC_TIMEOUT) \
+	CONSUL_REAL_LOCAL_TIMEOUT=$(CONSUL_SCALE_TIMEOUT) \
+	./scripts/consul-real-local.sh
+
 # Offline parser/percentile and lifecycle-contract checks. No Docker daemon,
 # Consul, Nacos, or network write is contacted by this target.
 test-consul-real-config:
@@ -187,7 +210,7 @@ test-consul-real-config:
 	bash -n scripts/consul-real-local.sh scripts/consul-real-fake.sh scripts/consul-real-lifecycle-test.sh
 	bash scripts/consul-real-lifecycle-test.sh
 
-.PHONY: test-consul-real-local test-consul-real-config
+.PHONY: test-consul-real-local test-consul-real-scale test-consul-real-config
 
 # Aggregate: everything, in tier order. Budget ~3 min on a dev machine.
 test-all: test-unit test-blackbox test-smoke test-e2e

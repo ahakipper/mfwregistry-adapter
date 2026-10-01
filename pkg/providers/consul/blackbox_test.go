@@ -1090,6 +1090,18 @@ func healthyEntry(id, ip string, modifyIndex uint64) *api.ServiceEntry {
 	}
 }
 
+func TestConvertInstanceAcceptsPerInstanceConsulCheckIDForSharedApplication(t *testing.T) {
+	entry := healthyEntry("srv-per-instance-check", "10.0.0.30", 12)
+	entry.Checks = api.HealthChecks{{CheckID: "service:" + entry.Service.ID, Status: api.HealthPassing}}
+	got, err := convertInstanceForSource(entry, "consul-scale")
+	if err != nil {
+		t.Fatalf("convertInstanceForSource() error = %v", err)
+	}
+	if got.Status != providers.InstanceStatusOnline || got.State != providers.InstanceStateRunning {
+		t.Fatalf("per-instance check conversion = status:%d state:%q, want online/running", got.Status, got.State)
+	}
+}
+
 func TestConvertInstanceForSourceCarriesLogicalConsulIdentity(t *testing.T) {
 	entry := healthyEntry("srv-a", "10.0.0.10", 7)
 	got, err := convertInstanceForSource(entry, "consul-blue")

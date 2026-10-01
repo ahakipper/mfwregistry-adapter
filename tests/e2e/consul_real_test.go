@@ -581,6 +581,7 @@ func newConsulRealClient(cfg consulRealConfig) (*api.Client, error) {
 		TLSKeyFile:            cfg.source.TLSKeyFile,
 		TLSServerName:         cfg.source.TLSServerName,
 		TLSInsecureSkipVerify: cfg.source.TLSInsecureSkipVerify,
+		HTTPTimeout:           cfg.timeout,
 		Datacenter:            cfg.source.Datacenter,
 		Namespace:             cfg.source.Namespace,
 	}

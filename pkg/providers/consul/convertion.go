@@ -268,8 +268,12 @@ func convertState(endpoint *api.ServiceEntry) (state string, err error) {
 				state = providers.InstanceStateUnknown
 			} else {
 				serviceCheckId := "service:" + appcode
+				if endpoint.Service != nil && endpoint.Service.ID != "" {
+					serviceCheckId = "service:" + endpoint.Service.ID
+				}
+				legacyServiceCheckID := "service:" + appcode
 				for _, ck := range endpoint.Checks {
-					if ck.CheckID == serviceCheckId {
+					if ck.CheckID == serviceCheckId || ck.CheckID == legacyServiceCheckID {
 						if ck.Status == ConsulHealthCheckPassing {
 							state = providers.InstanceStateRunning
 							break
@@ -293,8 +297,12 @@ func convertSatus(endpoint *api.ServiceEntry) (status int32, err error) {
 			var appcode string
 			if appcode, err = convertAppcode(endpoint); err == nil {
 				serviceCheckId := "service:" + appcode
+				if endpoint.Service != nil && endpoint.Service.ID != "" {
+					serviceCheckId = "service:" + endpoint.Service.ID
+				}
+				legacyServiceCheckID := "service:" + appcode
 				for _, ck := range endpoint.Checks {
-					if ck.CheckID == serviceCheckId {
+					if ck.CheckID == serviceCheckId || ck.CheckID == legacyServiceCheckID {
 						if ck.Status == ConsulHealthCheckPassing {
 							status = providers.InstanceStatusOnline
 							break

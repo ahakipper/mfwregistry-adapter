@@ -3,6 +3,7 @@ package consul
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,9 @@ type ConsulClientOptions struct {
 	TLSKeyFile            string
 	TLSServerName         string
 	TLSInsecureSkipVerify bool
+	// HTTPTimeout bounds one Consul API request when set. Zero retains the
+	// Consul SDK default and is kept for existing production callers.
+	HTTPTimeout time.Duration
 
 	Datacenter string
 	Namespace  string
@@ -262,6 +266,9 @@ func (cfs *ClientFactorySimple) apiConfig(addr string) *api.Config {
 	config.Datacenter = cfs.options.Datacenter
 	config.Namespace = cfs.options.Namespace
 	config.TLSConfig = cfs.options.TLSConfig
+	if cfs.options.HTTPTimeout > 0 {
+		config.HttpClient = &http.Client{Timeout: cfs.options.HTTPTimeout}
+	}
 	if cfs.options.TLSCAFile != "" {
 		config.TLSConfig.CAFile = cfs.options.TLSCAFile
 	}

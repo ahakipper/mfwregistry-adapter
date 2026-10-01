@@ -119,6 +119,12 @@ const (
 	consulMetricOutcomePartial         = "partial"
 	consulMetricOutcomePending         = "pending"
 	consulMetricOutcomeConfirmed       = "confirmed"
+	// A large first snapshot is already a complete desired state. Sending it
+	// as individual Sync events would serialize thousands of Nacos Push calls
+	// and defeat the application-scoped batch executor. Route only the initial
+	// add-only burst above this threshold through SyncAll; ordinary incremental
+	// changes retain their per-identity ordering semantics.
+	consulInitialFullPushThreshold = 100
 )
 
 type consulSnapshot struct {
@@ -597,7 +603,11 @@ func (c *consul) syncInstanceAt(origin time.Time) (err error) {
 	// their full-operation gate and invoke Revalidate, which reads this
 	// provider snapshot and therefore needs c.Lock; dispatching under the lock
 	// would invert that order during an incremental/full-push race.
-	c.eventsSyncAt(addEvents, updateEvents, deleteEvents, origin)
+	if len(addEvents) >= consulInitialFullPushThreshold && len(updateEvents) == 0 && len(deleteEvents) == 0 {
+		c.emitSyncAllAt(origin)
+	} else {
+		c.eventsSyncAt(addEvents, updateEvents, deleteEvents, origin)
+	}
 	if recovered {
 		// An incremental recovery with the same revision can be rejected by
 		// the sink's delete tombstone. Emit a trusted complete snapshot after
