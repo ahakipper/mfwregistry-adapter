@@ -27,6 +27,7 @@ run_rc=2
 cleanup_status=passed
 residual_unknown=false
 qualification_status=failed
+finished=false
 
 die() {
   if [[ $# -gt 1 && "$1" =~ ^[0-9]+$ ]]; then
@@ -86,6 +87,9 @@ remove_owned() {
 
 finish() {
   local trap_rc=$?
+  [[ "$finished" == false ]] || exit "$run_rc"
+  finished=true
+  trap - EXIT INT TERM
   [[ "$run_rc" != 2 || "$trap_rc" == 2 ]] || run_rc=$trap_rc
   remove_owned "$consul_id" io.spotter.consul-real.run "$consul_name" || true
   remove_owned "$nacos_id" io.spotter.nacos-real.run "$nacos_name" || true
@@ -110,7 +114,13 @@ finish() {
   echo "CONSUL_REAL_LOCAL_ARTIFACTS=$artifact"
   exit "$run_rc"
 }
-trap finish EXIT INT TERM
+on_signal() {
+  run_rc=$1
+  exit "$run_rc"
+}
+trap finish EXIT
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
 
 [[ -z "${CONSUL_SERVER:-}" && -z "${NACOS_SERVER:-}" ]] || die "external CONSUL_SERVER/NACOS_SERVER is forbidden"
 [[ -z "${DOCKER_HOST:-}" ]] || die "DOCKER_HOST is forbidden for the local target"
