@@ -243,11 +243,14 @@ func TestConsulRealToNacos3Qualification(t *testing.T) {
 		active[serviceName] = map[string]bool{firstID: false, recoveryID: false}
 
 		registration := realConsulRegistration(serviceName, firstID, 19000+i)
+		// Register can succeed even when the following PassTTL fails or its
+		// response is lost. All generated IDs are ours, so cleanup must cover
+		// every write attempt rather than only fully acknowledged helpers.
+		active[serviceName][firstID] = true
 		registerAck, err := registerConsulService(consulClient.Agent(), registration)
 		if err != nil {
 			t.Fatalf("Consul ServiceRegister create %s: %v", serviceName, err)
 		}
-		active[serviceName][firstID] = true
 		_, hosts, err := waitForNacosCatalog(verifyClient, serviceName, normalizedSource.ID, 1, registration.ID, nacosCfg.timeout)
 		if err != nil {
 			t.Fatalf("create catalog convergence %s: %v", serviceName, err)
@@ -312,11 +315,11 @@ func TestConsulRealToNacos3Qualification(t *testing.T) {
 		deleteSamples = append(deleteSamples, time.Since(deleteStarted))
 
 		recoveryRegistration := realConsulRegistration(serviceName, recoveryID, 19100+i)
+		active[serviceName][recoveryID] = true
 		recoveryAck, err := registerConsulService(consulClient.Agent(), recoveryRegistration)
 		if err != nil {
 			t.Fatalf("Consul ServiceRegister recovery %s: %v", serviceName, err)
 		}
-		active[serviceName][recoveryID] = true
 		_, hosts, err = waitForNacosCatalog(verifyClient, serviceName, normalizedSource.ID, 1, recoveryRegistration.ID, nacosCfg.timeout)
 		if err != nil {
 			t.Fatalf("recovery catalog convergence %s: %v", serviceName, err)

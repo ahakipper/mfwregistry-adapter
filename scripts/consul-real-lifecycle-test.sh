@@ -26,7 +26,10 @@ run_case() {
   if [[ "$expected" == 0 ]]; then
     grep -qx 'qualification_status=passed' "$out/exit-metadata"
     grep -qx 'cleanup_status=passed' "$out/exit-metadata"
-    [[ -s "$out/report.json" && -s "$out/consul-container.log" && -s "$out/nacos-container.log" ]]
+    [[ -s "$out/report.json" ]] || { echo 'FAIL: missing JSON report'; exit 1; }
+    local artifact_run
+    artifact_run=$(sed -n 's/^run_id=//p' "$out/exit-metadata")
+    [[ -s "$out/spotter-consul-real-$artifact_run.log" && -s "$out/spotter-nacos-real-$artifact_run.log" ]] || { echo 'FAIL: missing container logs'; exit 1; }
     grep -q -- '-p 127.0.0.1:18500:8500' "$state/commands"
     grep -q -- '-p 127.0.0.1:28848:8848 -p 127.0.0.1:29848:9848 -p 127.0.0.1:29849:9849' "$state/commands"
   else
@@ -57,4 +60,30 @@ run_case badport 2 CONSUL_REAL_LOCAL_NACOS_PORT=65000
 run_case badportzero 2 CONSUL_REAL_LOCAL_NACOS_PORT=0 CONSUL_REAL_LOCAL_NACOS_GRPC_PORT=1000 CONSUL_REAL_LOCAL_NACOS_RAFT_PORT=1001
 run_case badmapping 2 CONSUL_REAL_LOCAL_NACOS_GRPC_PORT=29847
 run_case badsample 2 CONSUL_REAL_LOCAL_SAMPLES=0
+
+# A signal must reach exactly one EXIT cleanup, preserving its exit code and
+# not relabelling already deleted containers as residuals.
+signal_state="$tmp/sigterm"
+mkdir "$signal_state"
+env PATH="$tmp/bin:$PATH" FAKE_STATE="$signal_state" FAKE_MODE=readinessfail \
+  CONSUL_REAL_LOCAL_STARTUP_ATTEMPTS=90 CONSUL_REAL_LOCAL_ARTIFACT_ROOT="$tmp/artifacts" \
+  /bin/bash "$root/scripts/consul-real-local.sh" >"$signal_state/output" 2>&1 &
+signal_pid=$!
+for ((attempt=0; attempt<100; attempt++)); do
+  if [[ -f "$signal_state/commands" ]] && grep -q '^docker start ' "$signal_state/commands"; then break; fi
+  sleep 0.05
+done
+kill -TERM "$signal_pid"
+set +e
+wait "$signal_pid"
+signal_rc=$?
+set -e
+[[ "$signal_rc" == 143 ]] || { echo "FAIL SIGTERM: exit=$signal_rc want=143"; exit 1; }
+[[ $(grep -c '^CONSUL_REAL_LOCAL_ARTIFACTS=' "$signal_state/output") == 1 ]] || { echo 'FAIL SIGTERM: duplicate artifact markers'; exit 1; }
+signal_out=$(sed -n 's/^CONSUL_REAL_LOCAL_ARTIFACTS=//p' "$signal_state/output")
+grep -qx 'final_exit_code=143' "$signal_out/exit-metadata"
+grep -qx 'cleanup_status=passed' "$signal_out/exit-metadata"
+grep -qx 'residual_unknown=false' "$signal_out/exit-metadata"
+[[ ! -f "$signal_state/$(printf '%064d' 1)" && ! -f "$signal_state/$(printf '%064d' 2)" ]] || { echo 'FAIL SIGTERM: residual fixture containers'; exit 1; }
+echo 'consul-real lifecycle: sigterm PASS'
 echo 'consul-real offline lifecycle shell tests: PASS'
