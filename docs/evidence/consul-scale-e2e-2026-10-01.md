@@ -14,7 +14,11 @@ Nacos acknowledgement → Catalog observation, and Nacos acknowledgement →
 official SDK Subscribe observation. The existing Catalog and Subscribe columns
 remain the complete mutation-start → observation measurements.
 
-## Completed scales
+## Historical pre-freshness-remediation run
+
+The table below is retained as historical evidence from the implementation
+that still contained the burst-two/15-second Watch limiter. It must not be
+used as the current latency baseline.
 
 | Instances | Catalog samples | Catalog P80 | Catalog P90 | Catalog P99 | Subscribe samples | Subscribe P80 | Subscribe P90 | Subscribe P99 | SyncAll |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -22,6 +26,34 @@ remain the complete mutation-start → observation measurements.
 | 1,000 | 1,000 | 6,763.00 ms | 13,654.70 ms | 14,684.52 ms | 1,000 | 4,724.31 ms | 13,622.43 ms | 14,652.25 ms | 3 |
 
 Each completed scale reported `ledger_complete=true`, `canonical_equality=wire_predicate_passed`, and cleanup passed.
+
+## Freshness-remediation run
+
+The current Watch implementation removes the seconds-scale limiter, uses
+capacity-one non-blocking coalescing, and keeps the scale source TTL valid for
+the complete observation window. The ARM64 local run used:
+
+```bash
+DOCKER_CONTEXT=colima make test-consul-real-scale CONSUL_SCALE_LIST=1,100,1000,10000
+```
+
+The completed scales were:
+
+| Instances | Catalog P80/P90/P99 | Subscribe P80/P90/P99 | Watch→Provider P99 | Provider→Nacos ack P99 | Nacos ack→Catalog P99 | Nacos ack→Subscribe P99 | Result |
+| ---: | --- | --- | ---: | ---: | ---: | ---: | --- |
+| 1 | 169.41 / 169.41 / 169.41 ms | 580.04 / 580.04 / 580.04 ms | 72.02 ms | 37.43 ms | 31.94 ms | 442.57 ms | PASS |
+| 100 | 528.53 / 671.57 / 690.03 ms | 540.68 / 664.93 / 683.40 ms | 189.53 ms | 65.46 ms | 516.88 ms | 510.24 ms | PASS |
+
+The 1000-instance freshness rerun was **NOT QUALIFIED**: Consul reported
+`source_count=1000`, while Nacos Catalog reached 961/1000 before the 5-minute
+observation deadline. The run emitted Nacos `429 Too Many Requests` responses
+with the message `too many concurrent connections`. It is evidence of the
+local Nacos write/connection capacity limit, not a Watch delay. No percentile
+is claimed for 1000 or 10000 in this current run. An A/B rerun with the Nacos
+Sink write concurrency reduced from 8 to 2 still produced the same 429 and
+reached 948/1000, so lowering Spotter write concurrency alone is insufficient.
+The 10000 gate was not started after the 1000 gate failed; it remains
+NOT QUALIFIED rather than receiving an inferred percentile.
 
 ## 10,000-instance result
 

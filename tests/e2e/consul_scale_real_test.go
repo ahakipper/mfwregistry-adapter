@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/consul/api"
+
 	"spotter/internal/domain/instance"
 	"spotter/pkg/nacos"
 	"spotter/pkg/providers/consul"
@@ -43,6 +45,7 @@ type consulScaleResult struct {
 
 type consulScaleReport struct {
 	Boundary          string              `json:"latency_boundary"`
+	PushConcurrency   int                 `json:"push_concurrency"`
 	Scales            []consulScaleResult `json:"scales"`
 	LedgerComplete    bool                `json:"ledger_complete"`
 	CanonicalEquality string              `json:"canonical_equality"`
@@ -176,6 +179,9 @@ func TestConsulRealScaleQualification(t *testing.T) {
 	scales := parseScaleList(t, os.Getenv("CONSUL_REAL_SCALE_LIST"))
 	runs := parseScaleRuns(t, os.Getenv("CONSUL_REAL_SCALE_RUNS"))
 	observeTimeout := parseScaleObserveTimeout(t, os.Getenv("CONSUL_REAL_SCALE_OBSERVE_TIMEOUT"))
+	pushConcurrency := parseScalePushConcurrency(t, os.Getenv("CONSUL_REAL_SCALE_PUSH_CONCURRENCY"))
+	nacos.SetPushConcurrency(pushConcurrency)
+	defer nacos.SetPushConcurrency(nacos.DefaultPushConcurrency)
 	if err := nacos.CheckReadinessWithConfig(nacosCfg.client, nil); err != nil {
 		t.Fatalf("Nacos readiness: %v", err)
 	}
@@ -246,6 +252,7 @@ func TestConsulRealScaleQualification(t *testing.T) {
 
 	report := consulScaleReport{
 		Boundary:          "Consul instance mutation start to Nacos catalog/official SDK Subscribe visibility",
+		PushConcurrency:   pushConcurrency,
 		LedgerComplete:    true,
 		CanonicalEquality: "wire_predicate_passed",
 		CleanupStatus:     "not_needed",
@@ -319,6 +326,7 @@ func TestConsulRealScaleQualification(t *testing.T) {
 			}
 			checkpoint := oracle.checkpoint()
 			fullBefore := recordingWorker.fullEvents()
+			batchBefore := sink.BatchMetrics()
 			var wg sync.WaitGroup
 			sem := make(chan struct{}, 16)
 			var startMu sync.Mutex
@@ -334,6 +342,11 @@ func TestConsulRealScaleQualification(t *testing.T) {
 					started[id] = time.Now()
 					startMu.Unlock()
 					registration := realConsulRegistration(service, id, 19000+(i%30000))
+					// The scale gate can spend several minutes waiting for a
+					// large Nacos catalog to converge. Keep the source health
+					// check valid for the whole observation window so Consul TTL
+					// expiry cannot turn a slow sink into a false source deletion.
+					registration.Check.TTL = "1h"
 					registration.Check.CheckID = "service:" + id
 					registration.Meta["version"] = "consul-scale"
 					if err := consulClient.Agent().ServiceRegister(registration); err != nil {
@@ -352,6 +365,7 @@ func TestConsulRealScaleQualification(t *testing.T) {
 			}
 			catalogVisibility, err := collectScaleCatalogLatencies(service, source.ID, size, started, expectedPorts, verifyClient, observeTimeout)
 			if err != nil {
+				logScaleFailureDiagnostics(t, consulClient, sink, service, source.ID, ids, catalogVisibility, batchBefore)
 				report.LedgerComplete = false
 				report.CanonicalEquality = "not_verified"
 				report.FailedScale = size
@@ -361,6 +375,7 @@ func TestConsulRealScaleQualification(t *testing.T) {
 			}
 			subscribeVisibility, err := collectScaleSubscribeLatencies(oracle, checkpoint, size, started, expectedPorts, observeTimeout)
 			if err != nil {
+				logScaleFailureDiagnostics(t, consulClient, sink, service, source.ID, ids, subscribeVisibility, batchBefore)
 				report.LedgerComplete = false
 				report.CanonicalEquality = "not_verified"
 				report.FailedScale = size
@@ -454,6 +469,18 @@ func parseScaleObserveTimeout(t *testing.T, raw string) time.Duration {
 	return d
 }
 
+func parseScalePushConcurrency(t *testing.T, raw string) int {
+	t.Helper()
+	if strings.TrimSpace(raw) == "" {
+		return nacos.DefaultPushConcurrency
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n < 1 || n > 64 {
+		t.Fatalf("invalid CONSUL_REAL_SCALE_PUSH_CONCURRENCY value %q", raw)
+	}
+	return n
+}
+
 func summarizeConsulScale(samples []time.Duration) consulScaleLatencySummary {
 	return consulScaleLatencySummary{
 		Samples: len(samples),
@@ -466,6 +493,34 @@ func summarizeConsulScale(samples []time.Duration) consulScaleLatencySummary {
 type consulScaleVisibilitySamples struct {
 	Samples    []time.Duration
 	ObservedAt map[string]time.Time
+}
+
+func logScaleFailureDiagnostics(t *testing.T, consulClient *api.Client, sink *nacos.Sink, service, cluster string, ids []string, visibility consulScaleVisibilitySamples, batchBefore nacos.BatchMetricsSnapshot) {
+	t.Helper()
+	sourceEntries, _, sourceErr := consulClient.Health().Service(service, "microservice", true, nil)
+	batchAfter := sink.BatchMetrics()
+	observed := make(map[string]struct{}, len(visibility.ObservedAt))
+	for id := range visibility.ObservedAt {
+		observed[id] = struct{}{}
+	}
+	missing := 0
+	for _, id := range ids {
+		if _, ok := observed[id]; !ok {
+			missing++
+		}
+	}
+	t.Logf("CONSUL_REAL_SCALE diagnostics service=%s cluster=%s source_count=%d source_error=%v observed_count=%d missing_count=%d batch_logical_delta=%d batch_items_delta=%d batch_attempted_delta=%d batch_succeeded_delta=%d batch_transient_delta=%d batch_permanent_delta=%d batch_retry_delta=%d batch_prune_skipped_delta=%d batch_concurrency=%d",
+		service, cluster, len(sourceEntries), sourceErr, len(observed), missing,
+		batchAfter.LogicalBatches-batchBefore.LogicalBatches,
+		batchAfter.Items-batchBefore.Items,
+		batchAfter.AttemptedItems-batchBefore.AttemptedItems,
+		batchAfter.SucceededItems-batchBefore.SucceededItems,
+		batchAfter.TransientFailedItems-batchBefore.TransientFailedItems,
+		batchAfter.PermanentFailedItems-batchBefore.PermanentFailedItems,
+		batchAfter.RetryCount-batchBefore.RetryCount,
+		batchAfter.PruneSkippedScopes-batchBefore.PruneSkippedScopes,
+		batchAfter.ConcurrencyCap,
+	)
 }
 
 func collectScaleCatalogLatencies(service, cluster string, want int, origins map[string]time.Time, expectedPorts map[string]int, client *nacos.Client, timeout time.Duration) (consulScaleVisibilitySamples, error) {
@@ -499,7 +554,7 @@ func collectScaleCatalogLatencies(service, cluster string, want int, origins map
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return consulScaleVisibilitySamples{}, fmt.Errorf("catalog visibility timeout: observed=%d want=%d last=%v", len(seen), want, lastErr)
+	return consulScaleVisibilitySamples{Samples: samples, ObservedAt: observedAtByID}, fmt.Errorf("catalog visibility timeout: observed=%d want=%d last=%v", len(seen), want, lastErr)
 }
 
 func collectScaleSubscribeLatencies(oracle *consulRealSubscribeOracle, checkpoint, want int, origins map[string]time.Time, expectedPorts map[string]int, timeout time.Duration) (consulScaleVisibilitySamples, error) {
@@ -546,5 +601,5 @@ func collectScaleSubscribeLatencies(oracle *consulRealSubscribeOracle, checkpoin
 		case <-timer.C:
 		}
 	}
-	return consulScaleVisibilitySamples{}, fmt.Errorf("Subscribe visibility timeout: observed=%d want=%d", len(seen), want)
+	return consulScaleVisibilitySamples{Samples: samples, ObservedAt: observedAtByID}, fmt.Errorf("Subscribe visibility timeout: observed=%d want=%d", len(seen), want)
 }

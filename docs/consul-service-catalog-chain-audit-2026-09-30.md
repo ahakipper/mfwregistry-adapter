@@ -61,6 +61,22 @@ observation. The existing end-to-end mutation → Nacos observations remain the
 acceptance percentiles. This separates source-watch delay from Nacos visibility
 delay instead of attributing the entire tail to one component.
 
+The first freshness-remediation scale run confirms the 15-second tail was
+removed: one instance reached Catalog in about 169ms and Subscribe in about
+580ms; 100 instances reached Catalog P99 in about 690ms and Subscribe P99 in
+about 683ms. The 1000-instance gate did not qualify because the local Nacos 3
+scratch server returned `429 Too Many Requests` under the concurrent write
+wave; Consul still reported all 1000 source instances. This is now a Nacos
+write-rate/connection-capacity finding, separate from the Watch freshness
+path. The scale fixture also extends Consul TTL to one hour so source health
+expiry cannot contaminate a long Nacos observation.
+
+An A/B rerun with Nacos Sink write concurrency reduced from 8 to 2 still
+returned the same local `429 Too Many Requests` response and observed only
+948/1000 instances. Lowering the Spotter worker concurrency alone therefore
+does not remove this local Nacos/Colima connection-rate limit; it needs a
+separate Nacos transport/server-capacity investigation.
+
 Consul does have a server-side streaming backend for some blocking-query
 endpoints, including selected `/health/service/:service` queries, but the
 current provider watches the broad `/health/state/any` endpoint and the pinned
