@@ -23,3 +23,22 @@ Use test-first development for behavior changes. A task is complete only after
 focused tests, race tests for concurrent code, and repository quality gates
 pass. Keep historical audit evidence intact and add a current-status addendum
 for scope changes.
+
+## Consul watch latency contract
+
+Consul watch freshness is a correctness requirement. The watch path must
+
+- deliver a detected source change without any seconds-scale blocking limiter;
+- preserve index de-duplication and coalesce bursts through a bounded,
+  non-blocking signal/debounce path;
+- keep load protection separate from the source-to-provider notification
+  path, so request-rate control never delays the newest source state;
+- record the four latency stages independently: watch return to provider sync
+  completion, provider sync to Nacos write acknowledgement, Nacos write
+  acknowledgement to Nacos observation, and the complete source mutation to
+  Nacos observation path;
+- qualify single-instance and 100/1000/10000-instance changes with P80, P90,
+  and P99 evidence before claiming a latency improvement.
+
+An implementation that waits a fixed seconds-scale interval after a changed
+Consul index is a release-blocking defect, even if it reduces request volume.
