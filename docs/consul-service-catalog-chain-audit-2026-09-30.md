@@ -94,6 +94,18 @@ consistency/performance defect. The overall scale gate stays failed until the
 Catalog requirement is explicitly closed; 10000 is not started under a failed
 1000 Catalog gate.
 
+The final three-plane diagnostic confirms the boundary. In the same 1000/5s
+run, Provider and write acknowledgement were 1000/1000, Subscribe was
+1000/1000, gRPC `QueryInstancesOfService` was partial (the run observed
+956/1000), and the Nacos 3 Client OpenAPI returned HTTP success with
+`data:[]` for the same service. The OpenAPI result is not treated as a
+Spotter write failure: it shows that the Nacos query surfaces do not expose
+the same immediate persistent-registration view as the Subscribe path. The
+remaining root cause is therefore the Nacos persistent-instance query plane
+(gRPC query/OpenAPI visibility semantics), not Consul, Provider, or Nacos
+write acknowledgement. The exact internal Nacos server component still needs
+server-side logs/source tracing if a server bug fix is required.
+
 Consul does have a server-side streaming backend for some blocking-query
 endpoints, including selected `/health/service/:service` queries, but the
 current provider watches the broad `/health/state/any` endpoint and the pinned

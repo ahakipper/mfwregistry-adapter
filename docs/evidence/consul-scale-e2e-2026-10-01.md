@@ -77,6 +77,22 @@ remaining failure to the Nacos Catalog query/visibility plane. The overall
 1000 gate remains failed under the strict all-plane policy, so 10000 is not
 started and receives no inferred percentile.
 
+The final three-plane diagnostic added Nacos 3 Client OpenAPI readback. For the
+same persistent service, the observed result was:
+
+```text
+Provider:             1000/1000
+Nacos write ack:      1000/1000
+SDK Subscribe:        1000/1000
+SDK gRPC query:       partial (956/1000 in this run)
+Nacos 3 OpenAPI:      HTTP 200, code=0, data=[]
+```
+
+This closes the Spotter-side investigation: the missing records are not lost
+between Consul, Provider, or Nacos write acknowledgement. They belong to the
+Nacos persistent-instance query visibility plane. The OpenAPI read is retained
+as a read-only diagnostic oracle; it is not used for Spotter writes.
+
 ## 10,000-instance result
 
 The 10,000-instance run was attempted with a bounded test deadline. Consul accepted the registration wave, but the complete Spotter → Nacos visibility ledger did not converge before the test deadline. The run ended as a test timeout, not a PASS, and no P80/P90/P99 values were emitted for 10,000.

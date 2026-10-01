@@ -7,6 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -408,7 +411,7 @@ func TestConsulRealScaleQualification(t *testing.T) {
 			catalogComplete := catalogErr == nil && len(catalogVisibility.Samples) == size
 			subscribeComplete := subscribeErr == nil && len(subscribeVisibility.Samples) == size
 			if !catalogComplete || !subscribeComplete {
-				logScaleFailureDiagnostics(t, consulClient, sink, recordingWorker, service, source.ID, ids, catalogVisibility, subscribeVisibility, batchBefore, fullBefore)
+				logScaleFailureDiagnostics(t, consulClient, sink, recordingWorker, verifyConfig.ServerURLs[0], verifyConfig.NamespaceID, group, service, source.ID, ids, catalogVisibility, subscribeVisibility, batchBefore, fullBefore)
 				report.Scales = append(report.Scales, consulScaleResult{
 					Instances:         size,
 					Runs:              runs,
@@ -550,11 +553,12 @@ type consulScaleVisibilitySamples struct {
 	ObservedAt map[string]time.Time
 }
 
-func logScaleFailureDiagnostics(t *testing.T, consulClient *api.Client, sink *nacos.Sink, recordingWorker *scaleRecordingWorker, service, cluster string, ids []string, catalog, subscribe consulScaleVisibilitySamples, batchBefore nacos.BatchMetricsSnapshot, fullBefore int) {
+func logScaleFailureDiagnostics(t *testing.T, consulClient *api.Client, sink *nacos.Sink, recordingWorker *scaleRecordingWorker, nacosServer, namespace, group, service, cluster string, ids []string, catalog, subscribe consulScaleVisibilitySamples, batchBefore nacos.BatchMetricsSnapshot, fullBefore int) {
 	t.Helper()
 	sourceEntries, _, sourceErr := consulClient.Health().Service(service, "microservice", true, nil)
 	batchAfter := sink.BatchMetrics()
 	providerSeen, ackSeen, missingProvider, missingAck := recordingWorker.stagePresence(ids)
+	openAPIHosts, openAPIRaw, openAPIErr := queryNacosV3ClientList(nacosServer, namespace, group, service, cluster)
 	observed := make(map[string]struct{}, len(catalog.ObservedAt))
 	for id := range catalog.ObservedAt {
 		observed[id] = struct{}{}
@@ -569,8 +573,8 @@ func logScaleFailureDiagnostics(t *testing.T, consulClient *api.Client, sink *na
 			}
 		}
 	}
-	t.Logf("CONSUL_REAL_SCALE diagnostics service=%s cluster=%s source_count=%d source_error=%v provider_seen=%d provider_missing=%v ack_seen=%d ack_missing=%v catalog_observed=%d catalog_missing_count=%d catalog_missing_sample=%v subscribe_observed=%d subscribe_missing_count=%d sync_all_delta=%d batch_logical_delta=%d batch_items_delta=%d batch_attempted_delta=%d batch_succeeded_delta=%d batch_transient_delta=%d batch_permanent_delta=%d batch_retry_delta=%d batch_prune_skipped_delta=%d batch_concurrency=%d",
-		service, cluster, len(sourceEntries), sourceErr, providerSeen, missingProvider, ackSeen, missingAck, len(observed), missing, missingIDs, len(subscribe.ObservedAt), len(ids)-len(subscribe.ObservedAt), recordingWorker.fullEvents()-fullBefore,
+	t.Logf("CONSUL_REAL_SCALE diagnostics service=%s cluster=%s source_count=%d source_error=%v provider_seen=%d provider_missing=%v ack_seen=%d ack_missing=%v catalog_observed=%d catalog_missing_count=%d catalog_missing_sample=%v subscribe_observed=%d subscribe_missing_count=%d openapi_observed=%d openapi_error=%v openapi_raw=%q sync_all_delta=%d batch_logical_delta=%d batch_items_delta=%d batch_attempted_delta=%d batch_succeeded_delta=%d batch_transient_delta=%d batch_permanent_delta=%d batch_retry_delta=%d batch_prune_skipped_delta=%d batch_concurrency=%d",
+		service, cluster, len(sourceEntries), sourceErr, providerSeen, missingProvider, ackSeen, missingAck, len(observed), missing, missingIDs, len(subscribe.ObservedAt), len(ids)-len(subscribe.ObservedAt), len(openAPIHosts), openAPIErr, openAPIRaw, recordingWorker.fullEvents()-fullBefore,
 		batchAfter.LogicalBatches-batchBefore.LogicalBatches,
 		batchAfter.Items-batchBefore.Items,
 		batchAfter.AttemptedItems-batchBefore.AttemptedItems,
@@ -581,6 +585,54 @@ func logScaleFailureDiagnostics(t *testing.T, consulClient *api.Client, sink *na
 		batchAfter.PruneSkippedScopes-batchBefore.PruneSkippedScopes,
 		batchAfter.ConcurrencyCap,
 	)
+}
+
+// queryNacosV3ClientList is a read-only diagnostic oracle. Spotter writes and
+// normal SDK operations remain official-SDK-only; this endpoint is used only
+// to distinguish the Nacos 3 client OpenAPI query plane from the gRPC query
+// and Subscribe planes after a scale gate fails.
+func queryNacosV3ClientList(server, namespace, group, service, cluster string) ([]nacos.Host, string, error) {
+	base, err := url.Parse(strings.TrimRight(server, "/"))
+	if err != nil {
+		return nil, "", err
+	}
+	base.Path = strings.TrimRight(base.Path, "/") + "/nacos/v3/client/ns/instance/list"
+	query := base.Query()
+	if namespace != "" {
+		query.Set("namespaceId", namespace)
+	}
+	query.Set("serviceName", service)
+	query.Set("groupName", group)
+	query.Set("clusterName", cluster)
+	base.RawQuery = query.Encode()
+	request, err := http.NewRequest(http.MethodGet, base.String(), nil)
+	if err != nil {
+		return nil, "", err
+	}
+	response, err := (&http.Client{Timeout: 5 * time.Second}).Do(request)
+	if err != nil {
+		return nil, "", err
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, string(body), err
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, string(body), fmt.Errorf("Nacos v3 client list status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var payload struct {
+		Code    int          `json:"code"`
+		Message string       `json:"message"`
+		Data    []nacos.Host `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, string(body), err
+	}
+	if payload.Code != 0 {
+		return nil, string(body), fmt.Errorf("Nacos v3 client list code=%d message=%s", payload.Code, payload.Message)
+	}
+	return payload.Data, string(body), nil
 }
 
 func snapshotScaleSubscribeVisibility(oracle *consulRealSubscribeOracle, checkpoint int, origins map[string]time.Time, expectedPorts map[string]int) consulScaleVisibilitySamples {
