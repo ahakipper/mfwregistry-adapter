@@ -3,10 +3,16 @@
 Command:
 
 ```bash
-make test-consul-real-scale CONSUL_SCALE_LIST=100,1000,10000
+make test-consul-real-scale CONSUL_SCALE_LIST=1,100,1000,10000
 ```
 
 The Makefile target used the pinned ARM64 Consul 1.22.0 and Nacos 3.2.4-slim scratch containers. Each scale used a unique application service, a Consul mutation ledger, the real Spotter provider/worker/Nacos SDK path, Nacos catalog polling, and the official Nacos SDK Subscribe callback. The scale path requires one `SyncAll` batch event and validates application-bounded batch behavior.
+
+The scale harness now also emits four stage summaries for each completed scale:
+watch return → provider handoff, provider handoff → Nacos write acknowledgement,
+Nacos acknowledgement → Catalog observation, and Nacos acknowledgement →
+official SDK Subscribe observation. The existing Catalog and Subscribe columns
+remain the complete mutation-start → observation measurements.
 
 ## Completed scales
 

@@ -180,13 +180,13 @@ test-observe-ladder:
 test-consul-real-local:
 	./scripts/consul-real-local.sh
 
-# Consul scale-ladder E2E: one shared application with 100, 1,000 and 10,000
+# Consul scale-ladder E2E: one shared application with 1, 100, 1,000 and 10,000
 # instances. Each instance contributes a mutation-start -> catalog and
 # mutation-start -> official SDK Subscribe sample; the report contains P80,
 # P90 and P99 per scale. This is a real-write, potentially long-running gate
 # and is deliberately excluded from test-all.
 CONSUL_SCALE_TIMEOUT ?= 30m
-CONSUL_SCALE_LIST ?= 100,1000,10000
+CONSUL_SCALE_LIST ?= 1,100,1000,10000
 CONSUL_SCALE_RUNS ?= 1
 CONSUL_SCALE_OBSERVE_TIMEOUT ?= 5m
 CONSUL_SCALE_RPC_TIMEOUT ?= 30s

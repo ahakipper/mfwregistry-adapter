@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode/utf16"
 
 	"spotter/internal/domain/instance"
@@ -46,6 +47,13 @@ const SinkName = "nacos"
 // and the FIRST error in INSTANCE ORDER is returned (deterministic despite
 // nondeterministic completion).
 var DefaultPushConcurrency = 8
+
+// WriteAckObserver receives the instances whose Nacos write operation was
+// acknowledged by the sink and the acknowledgement timestamp. It is an
+// optional observability seam used by the real-source latency harness; the
+// observer is called after all SDK calls in the operation succeed and before
+// full-snapshot pruning begins.
+type WriteAckObserver func(instances []*instance.Instance, acknowledgedAt time.Time)
 
 // SetPushConcurrency overrides the bounded parallelism of the sink's
 // per-instance pushes. It exists for tests (the wall-clock bound tests
@@ -134,9 +142,11 @@ func (s *Sink) pushInstances(instances []*instance.Instance) error {
 // cost (drift persists if spotter dies) is bounded by the retry queue and
 // the full-push prune.
 type Sink struct {
-	client    *Client
-	logger    ports.Logger
-	groupName string
+	client           *Client
+	logger           ports.Logger
+	groupName        string
+	writeAckMu       sync.RWMutex
+	writeAckObserver WriteAckObserver
 
 	// pushLimiter bounds every mutating SDK/HTTP call issued by this sink,
 	// including calls from concurrent Push, PushAll, and prune executions. A
@@ -408,7 +418,44 @@ func NewSinkWithConfig(config ClientConfig, logger ports.Logger) (*Sink, error) 
 // crosses worker boundaries (each instance is pushed exactly once by
 // exactly one worker).
 func (s *Sink) Push(triggerTime int64, instances []*instance.Instance) error {
-	return s.pushInstances(instances)
+	err := s.pushInstances(instances)
+	if err == nil {
+		s.observeWriteAck(instances)
+	}
+	return err
+}
+
+// SetWriteAckObserver installs an optional test or telemetry callback. The
+// callback is intentionally outside the InstanceSink interface so existing
+// callers and production sink wiring remain source-compatible.
+func (s *Sink) SetWriteAckObserver(observer WriteAckObserver) {
+	if s == nil {
+		return
+	}
+	s.writeAckMu.Lock()
+	s.writeAckObserver = observer
+	s.writeAckMu.Unlock()
+}
+
+func (s *Sink) observeWriteAck(instances []*instance.Instance) {
+	if s == nil {
+		return
+	}
+	s.writeAckMu.RLock()
+	observer := s.writeAckObserver
+	s.writeAckMu.RUnlock()
+	if observer == nil {
+		return
+	}
+	items := make([]*instance.Instance, 0, len(instances))
+	for _, item := range instances {
+		if item != nil {
+			items = append(items, item)
+		}
+	}
+	if len(items) > 0 {
+		observer(items, time.Now())
+	}
 }
 
 // validateWireIdentitySet rejects a complete snapshot whose source-aware
@@ -622,6 +669,7 @@ func (s *Sink) PushAll(triggerTime int64, instances []*instance.Instance) error 
 		}
 		return err
 	}
+	s.observeWriteAck(instances)
 	return s.prune(instances)
 }
 

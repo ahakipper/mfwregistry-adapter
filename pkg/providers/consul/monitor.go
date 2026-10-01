@@ -67,8 +67,6 @@ const (
 	refreshIdleTime    time.Duration = 50 * time.Millisecond
 	periodicCheckTime  time.Duration = 50 * time.Millisecond
 	blockQueryWaitTime time.Duration = 5 * time.Second
-	watchChangeBurst                 = 2
-	watchChangeRefill                = 15 * time.Second
 
 	tagMicroservice string = "microservice"
 )
@@ -120,77 +118,6 @@ func (i *consulWatchIndex) observe(queryMeta *api.QueryMeta) (changed, retryImme
 	i.lastIndex = lastIndex
 	i.waitIndex = lastIndex
 	return changed, false
-}
-
-// consulChangeLimiter is a small token bucket for the blocking-query watch.
-// Two changes may be delivered back-to-back; once the burst is exhausted, a
-// token is replenished every watchChangeRefill. This keeps normal sparse
-// changes immediate while bounding load during an index-change storm.
-type consulChangeLimiter struct {
-	burst      int
-	refill     time.Duration
-	tokens     int
-	lastRefill time.Time
-}
-
-func newConsulChangeLimiter(burst int, refill time.Duration) *consulChangeLimiter {
-	return &consulChangeLimiter{
-		burst:  burst,
-		refill: refill,
-		tokens: burst,
-	}
-}
-
-// waitForChange waits until a token is available. It returns false only when
-// the monitor context is cancelled while rate-limited.
-func (l *consulChangeLimiter) waitForChange(ctx context.Context, clock ports.Clock) bool {
-	if l == nil || l.burst <= 0 || l.refill <= 0 {
-		return true
-	}
-
-	now := clock.Now()
-	if l.tokens > 0 {
-		l.tokens--
-		if l.tokens == 0 {
-			l.lastRefill = now
-		}
-		return true
-	}
-
-	if l.lastRefill.IsZero() {
-		l.lastRefill = now
-	}
-	if elapsed := now.Sub(l.lastRefill); elapsed >= l.refill {
-		refilled := int(elapsed / l.refill)
-		if refilled > l.burst {
-			refilled = l.burst
-		}
-		l.tokens = refilled
-		l.lastRefill = l.lastRefill.Add(time.Duration(refilled) * l.refill)
-		if l.tokens > 0 {
-			l.tokens--
-			if l.tokens == 0 {
-				l.lastRefill = now
-			}
-			return true
-		}
-	}
-
-	// Once the burst is exhausted, wait for one complete refill interval
-	// from this attempt. Keeping the interval discrete prevents a fractional
-	// token from shortening the promised rapid-change delay.
-	waitFor := l.refill
-	select {
-	case <-ctx.Done():
-		return false
-	case <-clock.After(waitFor):
-		// The newly replenished token is consumed by this change. Re-anchor
-		// the refill clock at the wake-up time so the next change cannot use
-		// the same token a second time.
-		l.tokens = 0
-		l.lastRefill = clock.Now()
-		return true
-	}
 }
 
 // NewConsulMonitor watches for changes in Consul services and catalog services.
@@ -274,7 +201,11 @@ func isNilInterface(value interface{}) bool {
 }
 
 func (m *consulMonitor) Start(ctx context.Context) error {
-	change := make(chan struct{}, 64)
+	// One pending signal is enough: updateRecord debounces it and the provider
+	// always reads a complete current snapshot. Keeping this channel bounded to
+	// one and sending non-blocking prevents a source churn storm from stalling
+	// the Consul watch goroutine.
+	change := make(chan struct{}, 1)
 	m.handlersMu.Lock()
 	m.watchTimestamps = make(chan time.Time, cap(change))
 	m.handlersMu.Unlock()
@@ -299,7 +230,6 @@ func (m *consulMonitor) Start(ctx context.Context) error {
 // watchConsul watches Consul service, node, and health changes.
 func (m *consulMonitor) watchConsul(ctx context.Context, change chan<- struct{}) error {
 	var consulIndex consulWatchIndex
-	changeLimiter := newConsulChangeLimiter(watchChangeBurst, watchChangeRefill)
 
 	for {
 		select {
@@ -335,21 +265,24 @@ func (m *consulMonitor) watchConsul(ctx context.Context, change chan<- struct{})
 			changed, retryImmediately := consulIndex.observe(queryMeta)
 			if changed {
 				watchAt := m.clock.Now()
-				// A rollback must re-establish the blocking baseline without
-				// delay; only ordinary rapid changes consume rate-limit tokens.
-				if !retryImmediately && !changeLimiter.waitForChange(ctx, m.clock) {
-					return nil
-				}
 				timestamps := m.watchTimestampChannel()
 				if timestamps != nil {
 					select {
 					case timestamps <- watchAt:
+					default:
+						// The pending signal already carries an earlier timestamp.
+						// Keep the watch goroutine non-blocking and let the
+						// debounce loop publish one fresh snapshot.
 					case <-ctx.Done():
 						return nil
 					}
 				}
 				select {
 				case change <- struct{}{}:
+				default:
+					// Coalesce an already-pending change. The provider reads a
+					// complete current snapshot, so one signal is sufficient for
+					// every index transition observed during the debounce window.
 				case <-ctx.Done():
 					return nil
 				}

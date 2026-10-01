@@ -599,6 +599,38 @@ func TestBlackboxSinkPushAllUpsertsAllPushed(t *testing.T) {
 	}
 }
 
+func TestBlackboxSinkWriteAckObserverRecordsPushAllAcknowledgement(t *testing.T) {
+	sink, _ := newSinkAt(t)
+	first := domainInstance("pod-a", "pay-user", "10.0.0.1", 8080, "k8s", 1)
+	second := domainInstance("pod-b", "pay-user", "10.0.0.2", 8080, "k8s", 1)
+	var mu sync.Mutex
+	var acknowledgedAt time.Time
+	var acknowledgedIDs []string
+	sink.SetWriteAckObserver(func(items []*instance.Instance, at time.Time) {
+		mu.Lock()
+		defer mu.Unlock()
+		acknowledgedAt = at
+		for _, item := range items {
+			acknowledgedIDs = append(acknowledgedIDs, item.InstanceId)
+		}
+	})
+
+	if err := sink.PushAll(7, []*instance.Instance{first, second}); err != nil {
+		t.Fatalf("PushAll() error = %v", err)
+	}
+
+	mu.Lock()
+	gotAt := acknowledgedAt
+	gotIDs := append([]string(nil), acknowledgedIDs...)
+	mu.Unlock()
+	if gotAt.IsZero() {
+		t.Fatal("write acknowledgement observer timestamp is zero")
+	}
+	if len(gotIDs) != 2 || gotIDs[0] != first.InstanceId || gotIDs[1] != second.InstanceId {
+		t.Fatalf("write acknowledgement observer IDs = %#v, want [%q %q]", gotIDs, first.InstanceId, second.InstanceId)
+	}
+}
+
 func TestBlackboxSinkAllowsSameAddressAcrossSourceQualifiedClusters(t *testing.T) {
 	sink, server := newSinkAt(t)
 	first := domainInstance("pod-a-hash", "pay-user", "10.0.0.1", 8080, "k8s", 1)

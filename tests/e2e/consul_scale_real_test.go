@@ -29,11 +29,16 @@ type consulScaleLatencySummary struct {
 }
 
 type consulScaleResult struct {
-	Instances  int                       `json:"instances"`
-	Runs       int                       `json:"runs"`
-	FullEvents int                       `json:"sync_all_events"`
-	Catalog    consulScaleLatencySummary `json:"catalog"`
-	Subscribe  consulScaleLatencySummary `json:"subscribe"`
+	Instances              int                       `json:"instances"`
+	Runs                   int                       `json:"runs"`
+	FullEvents             int                       `json:"sync_all_events"`
+	WatchToProviderSync    consulScaleLatencySummary `json:"watch_to_provider_sync"`
+	ProviderSyncToNacosAck consulScaleLatencySummary `json:"provider_sync_to_nacos_ack"`
+	NacosAckToCatalog      consulScaleLatencySummary `json:"nacos_ack_to_catalog"`
+	NacosAckToSubscribe    consulScaleLatencySummary `json:"nacos_ack_to_subscribe"`
+	Catalog                consulScaleLatencySummary `json:"catalog"`
+	Subscribe              consulScaleLatencySummary `json:"subscribe"`
+	StageSamplesComplete   bool                      `json:"stage_samples_complete"`
 }
 
 type consulScaleReport struct {
@@ -48,18 +53,43 @@ type consulScaleReport struct {
 }
 
 type scaleRecordingWorker struct {
-	inner worker.Worker
-	mu    sync.Mutex
-	full  int
+	inner      worker.Worker
+	mu         sync.Mutex
+	full       int
+	watchAt    map[string]time.Time
+	providerAt map[string]time.Time
+	writeAckAt map[string]time.Time
 }
 
 func (w *scaleRecordingWorker) AddEventHandler(op worker.OperateType, handler worker.EventResourceHandler) {
 	w.inner.AddEventHandler(op, handler)
 }
 func (w *scaleRecordingWorker) Handle(event *worker.Event) {
-	if event != nil && event.Operate == worker.OperateTypeSyncAll {
+	if event != nil {
+		now := time.Now()
 		w.mu.Lock()
-		w.full++
+		if event.Operate == worker.OperateTypeSyncAll {
+			w.full++
+		}
+		for _, item := range event.Data {
+			if item == nil || item.InstanceId == "" {
+				continue
+			}
+			if w.providerAt == nil {
+				w.providerAt = make(map[string]time.Time)
+			}
+			if _, exists := w.providerAt[item.InstanceId]; !exists {
+				w.providerAt[item.InstanceId] = now
+			}
+			if event.Trigger > 0 {
+				if w.watchAt == nil {
+					w.watchAt = make(map[string]time.Time)
+				}
+				if _, exists := w.watchAt[item.InstanceId]; !exists {
+					w.watchAt[item.InstanceId] = time.Unix(0, event.Trigger)
+				}
+			}
+		}
 		w.mu.Unlock()
 	}
 	w.inner.Handle(event)
@@ -72,6 +102,56 @@ func (w *scaleRecordingWorker) fullEvents() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.full
+}
+
+func (w *scaleRecordingWorker) recordWriteAck(items []*instance.Instance, acknowledgedAt time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.writeAckAt == nil {
+		w.writeAckAt = make(map[string]time.Time)
+	}
+	for _, item := range items {
+		if item != nil && item.InstanceId != "" {
+			if _, exists := w.writeAckAt[item.InstanceId]; !exists {
+				w.writeAckAt[item.InstanceId] = acknowledgedAt
+			}
+		}
+	}
+}
+
+type consulScaleStageSamples struct {
+	WatchToProviderSync    []time.Duration
+	ProviderSyncToNacosAck []time.Duration
+	NacosAckToCatalog      []time.Duration
+	NacosAckToSubscribe    []time.Duration
+}
+
+func (w *scaleRecordingWorker) stageSamples(ids []string, catalogAt, subscribeAt map[string]time.Time) (consulScaleStageSamples, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	result := consulScaleStageSamples{
+		WatchToProviderSync:    make([]time.Duration, 0, len(ids)),
+		ProviderSyncToNacosAck: make([]time.Duration, 0, len(ids)),
+		NacosAckToCatalog:      make([]time.Duration, 0, len(ids)),
+		NacosAckToSubscribe:    make([]time.Duration, 0, len(ids)),
+	}
+	complete := true
+	for _, id := range ids {
+		watch, watchOK := w.watchAt[id]
+		provider, providerOK := w.providerAt[id]
+		ack, ackOK := w.writeAckAt[id]
+		catalog, catalogOK := catalogAt[id]
+		subscribe, subscribeOK := subscribeAt[id]
+		if !watchOK || !providerOK || !ackOK || !catalogOK || !subscribeOK {
+			complete = false
+			continue
+		}
+		result.WatchToProviderSync = append(result.WatchToProviderSync, provider.Sub(watch))
+		result.ProviderSyncToNacosAck = append(result.ProviderSyncToNacosAck, ack.Sub(provider))
+		result.NacosAckToCatalog = append(result.NacosAckToCatalog, catalog.Sub(ack))
+		result.NacosAckToSubscribe = append(result.NacosAckToSubscribe, subscribe.Sub(ack))
+	}
+	return result, complete
 }
 
 func TestConsulRealScaleQualification(t *testing.T) {
@@ -151,6 +231,7 @@ func TestConsulRealScaleQualification(t *testing.T) {
 		t.Fatalf("worker: %v", err)
 	}
 	recordingWorker := &scaleRecordingWorker{inner: w}
+	sink.SetWriteAckObserver(recordingWorker.recordWriteAck)
 	// Disable the periodic full-push ticker for this event-driven scale gate;
 	// zero selects the production six-hour default and prevents reconcile
 	// traffic from contaminating mutation-to-visibility latency.
@@ -269,7 +350,7 @@ func TestConsulRealScaleQualification(t *testing.T) {
 			for i, id := range ids {
 				expectedPorts[id] = 19000 + (i % 30000)
 			}
-			catalogSamples, err := collectScaleCatalogLatencies(service, source.ID, size, started, expectedPorts, verifyClient, observeTimeout)
+			catalogVisibility, err := collectScaleCatalogLatencies(service, source.ID, size, started, expectedPorts, verifyClient, observeTimeout)
 			if err != nil {
 				report.LedgerComplete = false
 				report.CanonicalEquality = "not_verified"
@@ -278,7 +359,7 @@ func TestConsulRealScaleQualification(t *testing.T) {
 				t.Errorf("catalog scale=%d run=%d: %v", size, run, err)
 				return
 			}
-			subscribeSamples, err := collectScaleSubscribeLatencies(oracle, checkpoint, size, started, expectedPorts, observeTimeout)
+			subscribeVisibility, err := collectScaleSubscribeLatencies(oracle, checkpoint, size, started, expectedPorts, observeTimeout)
 			if err != nil {
 				report.LedgerComplete = false
 				report.CanonicalEquality = "not_verified"
@@ -287,13 +368,19 @@ func TestConsulRealScaleQualification(t *testing.T) {
 				t.Errorf("Subscribe scale=%d run=%d: %v", size, run, err)
 				return
 			}
+			stages, stageComplete := recordingWorker.stageSamples(ids, catalogVisibility.ObservedAt, subscribeVisibility.ObservedAt)
 			report.Scales = append(report.Scales, consulScaleResult{
-				Instances: size,
-				Runs:      runs,
-				Catalog:   summarizeConsulScale(catalogSamples),
-				Subscribe: summarizeConsulScale(subscribeSamples),
+				Instances:              size,
+				Runs:                   runs,
+				Catalog:                summarizeConsulScale(catalogVisibility.Samples),
+				Subscribe:              summarizeConsulScale(subscribeVisibility.Samples),
+				WatchToProviderSync:    summarizeConsulScale(stages.WatchToProviderSync),
+				ProviderSyncToNacosAck: summarizeConsulScale(stages.ProviderSyncToNacosAck),
+				NacosAckToCatalog:      summarizeConsulScale(stages.NacosAckToCatalog),
+				NacosAckToSubscribe:    summarizeConsulScale(stages.NacosAckToSubscribe),
+				StageSamplesComplete:   stageComplete,
 			})
-			if len(catalogSamples) != size || len(subscribeSamples) != size {
+			if len(catalogVisibility.Samples) != size || len(subscribeVisibility.Samples) != size || !stageComplete {
 				report.LedgerComplete = false
 			}
 			fullEvents := recordingWorker.fullEvents() - fullBefore
@@ -376,10 +463,16 @@ func summarizeConsulScale(samples []time.Duration) consulScaleLatencySummary {
 	}
 }
 
-func collectScaleCatalogLatencies(service, cluster string, want int, origins map[string]time.Time, expectedPorts map[string]int, client *nacos.Client, timeout time.Duration) ([]time.Duration, error) {
+type consulScaleVisibilitySamples struct {
+	Samples    []time.Duration
+	ObservedAt map[string]time.Time
+}
+
+func collectScaleCatalogLatencies(service, cluster string, want int, origins map[string]time.Time, expectedPorts map[string]int, client *nacos.Client, timeout time.Duration) (consulScaleVisibilitySamples, error) {
 	deadline := time.Now().Add(timeout)
 	seen := make(map[string]struct{}, want)
 	samples := make([]time.Duration, 0, want)
+	observedAtByID := make(map[string]time.Time, want)
 	var lastErr error
 	for time.Now().Before(deadline) {
 		hosts, err := client.ListCatalogInstances(service, cluster)
@@ -397,21 +490,23 @@ func collectScaleCatalogLatencies(service, cluster string, want int, origins map
 					continue
 				}
 				seen[id] = struct{}{}
+				observedAtByID[id] = observedAt
 				samples = append(samples, observedAt.Sub(origin))
 			}
 			if len(seen) == want {
-				return samples, nil
+				return consulScaleVisibilitySamples{Samples: samples, ObservedAt: observedAtByID}, nil
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return nil, fmt.Errorf("catalog visibility timeout: observed=%d want=%d last=%v", len(seen), want, lastErr)
+	return consulScaleVisibilitySamples{}, fmt.Errorf("catalog visibility timeout: observed=%d want=%d last=%v", len(seen), want, lastErr)
 }
 
-func collectScaleSubscribeLatencies(oracle *consulRealSubscribeOracle, checkpoint, want int, origins map[string]time.Time, expectedPorts map[string]int, timeout time.Duration) ([]time.Duration, error) {
+func collectScaleSubscribeLatencies(oracle *consulRealSubscribeOracle, checkpoint, want int, origins map[string]time.Time, expectedPorts map[string]int, timeout time.Duration) (consulScaleVisibilitySamples, error) {
 	deadline := time.Now().Add(timeout)
 	seen := make(map[string]struct{}, want)
 	samples := make([]time.Duration, 0, want)
+	observedAtByID := make(map[string]time.Time, want)
 	for time.Now().Before(deadline) {
 		oracle.mu.Lock()
 		for checkpoint < len(oracle.events) {
@@ -430,12 +525,13 @@ func collectScaleSubscribeLatencies(oracle *consulRealSubscribeOracle, checkpoin
 					continue
 				}
 				seen[id] = struct{}{}
+				observedAtByID[id] = event.ReceivedAt
 				samples = append(samples, event.ReceivedAt.Sub(origin))
 			}
 		}
 		oracle.mu.Unlock()
 		if len(seen) == want {
-			return samples, nil
+			return consulScaleVisibilitySamples{Samples: samples, ObservedAt: observedAtByID}, nil
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
@@ -450,5 +546,5 @@ func collectScaleSubscribeLatencies(oracle *consulRealSubscribeOracle, checkpoin
 		case <-timer.C:
 		}
 	}
-	return nil, fmt.Errorf("Subscribe visibility timeout: observed=%d want=%d", len(seen), want)
+	return consulScaleVisibilitySamples{}, fmt.Errorf("Subscribe visibility timeout: observed=%d want=%d", len(seen), want)
 }

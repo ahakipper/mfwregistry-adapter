@@ -436,7 +436,7 @@ func TestConsulMonitorIndexRollbackRetriesImmediatelyAndSignalsOnce(t *testing.T
 	}
 }
 
-func TestConsulMonitorUnchangedTimeoutAndErrorRetainIndexAndRateLimit(t *testing.T) {
+func TestConsulMonitorUnchangedTimeoutAndErrorRetainIndex(t *testing.T) {
 	client, requests, responses := newScriptedHealthStateClient(t)
 	clock := &observedClock{
 		FakeClock:  fakes.NewFakeClock(time.Unix(185, 0)),
@@ -493,83 +493,7 @@ func TestConsulMonitorUnchangedTimeoutAndErrorRetainIndexAndRateLimit(t *testing
 	}
 }
 
-func TestConsulChangeLimiterAllowsBurstThenRefills(t *testing.T) {
-	clock := &observedClock{
-		FakeClock:  fakes.NewFakeClock(time.Unix(190, 0)),
-		afterCalls: make(chan time.Duration, 8),
-	}
-	limiter := newConsulChangeLimiter(watchChangeBurst, watchChangeRefill)
-	ctx := context.Background()
-
-	if !limiter.waitForChange(ctx, clock) || !limiter.waitForChange(ctx, clock) {
-		t.Fatal("limiter rejected one of the configured burst tokens")
-	}
-
-	third := make(chan bool, 1)
-	go func() { third <- limiter.waitForChange(ctx, clock) }()
-	if got := awaitDuration(t, clock.afterCalls); got != watchChangeRefill {
-		t.Fatalf("third rapid change delay = %v, want %v", got, watchChangeRefill)
-	}
-	select {
-	case <-third:
-		t.Fatal("third rapid change bypassed the refill delay")
-	default:
-	}
-	clock.Advance(watchChangeRefill)
-	select {
-	case ok := <-third:
-		if !ok {
-			t.Fatal("third rapid change was cancelled")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for third change after refill")
-	}
-
-	fourth := make(chan bool, 1)
-	go func() { fourth <- limiter.waitForChange(ctx, clock) }()
-	if got := awaitDuration(t, clock.afterCalls); got != watchChangeRefill {
-		t.Fatalf("fourth rapid change delay = %v, want %v", got, watchChangeRefill)
-	}
-	select {
-	case <-fourth:
-		t.Fatal("fourth rapid change reused the consumed token")
-	default:
-	}
-	clock.Advance(watchChangeRefill)
-	select {
-	case ok := <-fourth:
-		if !ok {
-			t.Fatal("fourth rapid change was cancelled")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for fourth change after refill")
-	}
-
-	// A sparse change after one refill interval proceeds without another
-	// limiter sleep.
-	clock.Advance(watchChangeRefill)
-	if !limiter.waitForChange(ctx, clock) {
-		t.Fatal("sparse change was rejected after token refill")
-	}
-}
-
-func TestConsulChangeLimiterContextCancellation(t *testing.T) {
-	clock := &observedClock{
-		FakeClock:  fakes.NewFakeClock(time.Unix(195, 0)),
-		afterCalls: make(chan time.Duration, 4),
-	}
-	limiter := newConsulChangeLimiter(watchChangeBurst, watchChangeRefill)
-	if !limiter.waitForChange(context.Background(), clock) || !limiter.waitForChange(context.Background(), clock) {
-		t.Fatal("limiter failed to consume burst tokens")
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if limiter.waitForChange(ctx, clock) {
-		t.Fatal("rate-limited change succeeded after context cancellation")
-	}
-}
-
-func TestConsulMonitorRapidChangesAreRateLimitedAfterBurst(t *testing.T) {
+func TestConsulMonitorRapidChangesAreCoalescedWithoutBlocking(t *testing.T) {
 	client, requests, responses := newScriptedHealthStateClient(t)
 	clock := &observedClock{
 		FakeClock:  fakes.NewFakeClock(time.Unix(200, 0)),
@@ -579,30 +503,27 @@ func TestConsulMonitorRapidChangesAreRateLimitedAfterBurst(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	change := make(chan struct{}, 4)
+	change := make(chan struct{}, 1)
 	go func() { done <- monitor.watchConsul(ctx, change) }()
 
 	assertWatchRequest(t, requests, "")
 	responses <- healthStateResponse{index: 10}
-	awaitSignal(t, change, "first rapid change")
 	assertPeriodicWatchWait(t, clock)
+	if got := len(change); got != 1 {
+		t.Fatalf("pending change signal count = %d, want 1", got)
+	}
 
 	clock.Advance(periodicCheckTime)
 	assertWatchRequest(t, requests, "10")
 	responses <- healthStateResponse{index: 20}
-	awaitSignal(t, change, "second rapid change")
 	assertPeriodicWatchWait(t, clock)
 
 	clock.Advance(periodicCheckTime)
 	assertWatchRequest(t, requests, "20")
 	responses <- healthStateResponse{index: 30}
-	if got := awaitDuration(t, clock.afterCalls); got != watchChangeRefill {
-		t.Fatalf("third rapid change delay = %v, want %v", got, watchChangeRefill)
-	}
-	assertNoWatchChange(t, change)
-	clock.Advance(watchChangeRefill)
-	awaitSignal(t, change, "third change after rate limit")
 	assertPeriodicWatchWait(t, clock)
+	awaitSignal(t, change, "coalesced rapid change")
+	assertNoWatchChange(t, change)
 
 	cancel()
 	if err := awaitError(t, done); err != nil {

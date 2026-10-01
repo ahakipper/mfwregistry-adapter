@@ -44,11 +44,33 @@ next request at index `1`; a rollback emits exactly one change token, resets
 `WaitIndex` to `0`, and immediately re-establishes a fresh baseline. The
 baseline response is not emitted a second time, and unchanged responses,
 timeouts, and errors continue through the existing `periodicCheckTime` wait so
-rapid unchanged responses cannot form a tight loop. A clock-injected token
-bucket allows two rapid change deliveries, then requires a complete 15-second
-refill interval; rollback baseline retries bypass this delivery limiter so the
-reset remains immediate. Focused and race tests cover zero, rollback,
-unchanged timeout/error, burst refill, cancellation, and rapid changes.
+rapid unchanged responses cannot form a tight loop. The former burst-two,
+15-second token bucket has been removed because it blocked the source watch
+goroutine after a changed index and violated the freshness contract. The
+change channel is now capacity one with non-blocking signal coalescing; the
+provider still reads a complete current snapshot and the 50ms idle debounce
+limits downstream work without delaying source notification. Focused and race
+tests cover zero, rollback, unchanged timeout/error, cancellation, and rapid
+change coalescing.
+
+The 2026-10-01 latency remediation also adds per-instance stage timestamps to
+the real Consul scale harness: Consul watch return → provider handoff,
+provider handoff → Nacos write acknowledgement, Nacos acknowledgement →
+Catalog observation, and Nacos acknowledgement → official SDK Subscribe
+observation. The existing end-to-end mutation → Nacos observations remain the
+acceptance percentiles. This separates source-watch delay from Nacos visibility
+delay instead of attributing the entire tail to one component.
+
+Consul does have a server-side streaming backend for some blocking-query
+endpoints, including selected `/health/service/:service` queries, but the
+current provider watches the broad `/health/state/any` endpoint and the pinned
+Go API dependency is `github.com/hashicorp/consul/api v1.8.1`, which has no
+explicit streaming subscription option. Moving to one stream per service would
+change the source topology and requires bounded stream ownership, service-list
+churn handling, reconnect behavior, and a long-poll fallback. It is therefore
+not used as an unverified shortcut in this remediation. The immediate design
+uses the existing index watch with non-blocking coalescing, preserving
+freshness while avoiding a seconds-scale delivery gate.
 
 Stage 4 closes the provider identity and revision-ordering hazards found by
 the independent chain confirmation. The Consul cache and full-push snapshot
@@ -162,7 +184,7 @@ factory, cache diff, Nacos reconcile, source identity, and E2E changes.
 | --- | --- | --- |
 | Provider abstraction | `pkg/providers/iface.go` exposes `Run`, `CompareAndFlush`, `GetAll` | Reusable and already wired |
 | Consul client | `ClientFactorySimple` probes leader and fails over configured addresses | Good local failover coverage; ACL/TLS config is incomplete |
-| Watch | Blocking `/v1/health/state/any`, 5 s wait, 50 ms debounce, burst-2/15 s rapid-change limiter | Focused and race-tested; nil/zero metadata, rollback reset, timeout/error, and rapid-change behavior are pinned |
+| Watch | Blocking `/v1/health/state/any`, 5 s wait, 50 ms debounce, capacity-one non-blocking change coalescing | Focused and race-tested; nil/zero metadata, rollback reset, timeout/error, and rapid-change freshness are pinned |
 | Catalog read | `Catalog.Services` then `Health.Service(..., passingOnly=true)` | Healthy-only semantics need an explicit contract |
 | Conversion | Service metadata → `Instance`; `ModifyIndex` → `Reversion`; source ID propagation exists | Good shape; malformed metadata is skipped and needs metrics |
 | Cache/diff | Source-aware `IdentityKey`; add/update/delete event generation | Same-name source identities, health contract, equal revisions, stale revisions, and recovery are covered |
