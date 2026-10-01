@@ -209,12 +209,13 @@ latest local ARM64 run is preserved, but its two samples per operation are
 diagnostic evidence rather than a production percentile/SLO claim; larger
 sample sizes and deployment-level qualification remain open.
 
-#### P1-5 — Real Consul + Nacos 3 qualification is absent
+#### P1-5 — Real Consul + Nacos 3 qualification is locally qualified; deployment evidence remains open
 
 The repository contains a guarded real Consul plus Nacos3 SDK gate, and the
-local ARM64 scratch run passed with preserved report and cleanup evidence.
-External production deployment qualification (TLS/ACL/HA/namespace policy) is
-still outside this Spotter gate.
+local ARM64 scratch run now passes both catalog polling and official SDK
+Subscribe visibility with preserved report and cleanup evidence. External
+production deployment qualification (TLS/ACL/HA/namespace policy) is still
+outside this Spotter gate.
 
 #### P1-6 — Multiple logical Consul sources are not a single-process model yet
 
