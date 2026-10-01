@@ -192,7 +192,7 @@ if [[ -n "$report_line" ]]; then
   report_json=${report_line#*report=}
   report_json=${report_json%% cleanup_attempted=*}
   printf '%s\n' "$report_json" >"$artifact/report.json"
-  if jq -e --argjson n "$samples" '(.source_id == "consul-real-local") and (.latency_boundary == "consul_agent_mutation_start_to_nacos_catalog_observed") and (.oracle_poll_interval_ms == 100) and (.configured_runs == $n) and (.cleanup_status == "passed") and (.residual_unknown == false) and ([.create,.update,.delete,.recovery,.health_down,.health_recovery] | all(.samples == $n and (.p50_ms >= 0) and (.p90_ms >= 0) and (.p95_ms >= 0) and (.p99_ms >= 0)))' "$artifact/report.json" >/dev/null 2>&1; then
+  if jq -e --argjson n "$samples" '(.source_id == "consul-real-local") and (.latency_boundary == "consul_agent_mutation_start_to_nacos_catalog_observed") and (.oracle_poll_interval_ms == 100) and (.configured_runs == $n) and (.cleanup_status == "passed") and (.residual_unknown == false) and (.subscribe_update_cache_when_empty == true) and (.subscribe_latency_boundary == "consul_agent_mutation_start_to_official_nacos_sdk_subscribe_callback") and ([.create,.update,.delete,.recovery,.health_down,.health_recovery,.subscribe_create,.subscribe_update,.subscribe_delete,.subscribe_recovery,.subscribe_health_down,.subscribe_health_recovery] | all(.samples == $n and (.p50_ms >= 0) and (.p90_ms >= 0) and (.p95_ms >= 0) and (.p99_ms >= 0)))' "$artifact/report.json" >/dev/null 2>&1; then
     qualification_status=passed
   fi
 fi

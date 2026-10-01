@@ -64,6 +64,10 @@ case "$tool" in
     for operation in create update delete recovery health_down health_recovery; do
       report="$report,\"$operation\":{\"samples\":$count,\"p50_ms\":1,\"p90_ms\":1,\"p95_ms\":1,\"p99_ms\":1}"
     done
+    for operation in subscribe_create subscribe_update subscribe_delete subscribe_recovery subscribe_health_down subscribe_health_recovery; do
+      report="$report,\"$operation\":{\"samples\":$count,\"p50_ms\":1,\"p90_ms\":1,\"p95_ms\":1,\"p99_ms\":1,\"events\":$count,\"callback_errors\":0}"
+    done
+    report="$report,\"subscribe_update_cache_when_empty\":true,\"subscribe_latency_boundary\":\"consul_agent_mutation_start_to_official_nacos_sdk_subscribe_callback\""
     report="$report}"
     printf '    consul_real_test.go:1: CONSUL_REAL_QUALIFICATION report=%s cleanup_attempted=true cleanup_errors=0\n' "$report"
     [[ "$mode" != duplicatereport ]] || printf 'CONSUL_REAL_QUALIFICATION report=%s cleanup_attempted=true cleanup_errors=0\n' "$report"

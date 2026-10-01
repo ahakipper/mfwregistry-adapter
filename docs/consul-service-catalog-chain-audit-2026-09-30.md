@@ -21,9 +21,9 @@ Healthy empty state requires three independent confirmations; a provider-owned
 or shutdown, and guarded by the provider lock plus lifecycle state.
 
 The remaining P1/P2 work is bounded: the local ARM64 Consul-to-Nacos 3
-qualification is now executed and preserved, while watch-to-subscribe stage
-timing, larger samples, and deployment-level credential/TLS evidence remain
-open. Source metrics and Consul connection security configuration are
+qualification now observes both catalog polling and the official SDK Subscribe
+callback, while larger samples and deployment-level credential/TLS evidence
+remain open. Source metrics and Consul connection security configuration are
 implemented. Blocking query edge handling is closed and pushed; this status is
 still a local qualification checkpoint, not a production-readiness claim.
 
@@ -87,8 +87,9 @@ sync-completion duration (`sync_ok`/`sync_error`). Labels use only normalized lo
 bounded outcomes; legacy/manual handlers without a watch origin emit no timing
 sample. The same non-zero origin is now carried into provider `Event.Trigger`
 and the per-sink event-to-store metric, including full-operation replay, so
-worker-to-Nacos SDK acknowledgement is observable. Nacos Subscribe visibility
-and a live per-stage percentile report remain open.
+worker-to-Nacos SDK acknowledgement is observable. The guarded Nacos3 gate also
+observes official SDK Subscribe callbacks; larger live samples and deployment
+qualification remain open.
 
 Stage 8 adds source-scoped Consul Token/TokenFile, TLS, datacenter, and
 namespace options. Every endpoint receives a fresh API config; secrets stay
@@ -195,18 +196,18 @@ field, while equal revisions compare the complete canonical Spotter payload,
 covering labels, ports, images, hostname, source identity, and status before a
 Nacos update is emitted.
 
-#### P1-4 — Watch-to-Nacos latency measurement is only partially staged
+#### P1-4 — Watch-to-Nacos latency measurement is staged locally; production qualification remains open
 
-The provider now records an accurately timestamped Consul blocking-watch return
-to sync-completion metric and carries the same origin through incremental and
-recovery-full `Event.Trigger` values. The worker's per-sink event-to-store
-metric therefore measures the origin through Nacos SDK acknowledgement,
-including the `PushAllOperation` path. The guarded `consul_real` gate still
-records source mutation start to Nacos catalog visibility for create, update,
-health-down, health-recovery, delete, and recovery, with P50/P90/P95/P99
-output. The local ARM64 run is preserved, but its two samples per operation are
-diagnostic evidence rather than a production percentile/SLO claim. Nacos
-Subscribe visibility and a live per-stage percentile report remain open.
+The provider records an accurately timestamped Consul blocking-watch return to
+sync-completion and carries the same origin through incremental and recovery-
+full `Event.Trigger` values. The worker's per-sink event-to-store metric
+measures the origin through Nacos SDK acknowledgement, including
+`PushAllOperation`. The guarded `consul_real` gate now also subscribes through
+the official Nacos SDK with `UpdateCacheWhenEmpty=true` and observes create,
+update, health-down, health-recovery, delete, and recovery callbacks. The
+latest local ARM64 run is preserved, but its two samples per operation are
+diagnostic evidence rather than a production percentile/SLO claim; larger
+sample sizes and deployment-level qualification remain open.
 
 #### P1-5 — Real Consul + Nacos 3 qualification is absent
 

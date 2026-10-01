@@ -35,6 +35,20 @@ Configured samples: 2. The report covered create, update, delete, recovery, TTL 
 | Health down | 2,973.48 ms | 2,977.26 ms | 2,977.26 ms | 2,977.26 ms |
 | Health recovery | 953.81 ms | 1,039.83 ms | 1,039.83 ms | 1,039.83 ms |
 
+The same mutations were observed through the official Nacos SDK Subscribe
+callback with `UpdateCacheWhenEmpty=true`:
+
+| Subscribe transition | P50 | P90 | P95 | P99 |
+| --- | ---: | ---: | ---: | ---: |
+| Create | 533.33 ms | 600.70 ms | 600.70 ms | 600.70 ms |
+| Update | 1,215.85 ms | 1,312.82 ms | 1,312.82 ms | 1,312.82 ms |
+| Delete | 1,729.96 ms | 2,954.46 ms | 2,954.46 ms | 2,954.46 ms |
+| Recovery | 1,011.93 ms | 1,162.38 ms | 1,162.38 ms | 1,162.38 ms |
+| Health down | 2,988.19 ms | 3,009.60 ms | 3,009.60 ms | 3,009.60 ms |
+| Health recovery | 839.88 ms | 943.45 ms | 943.45 ms | 943.45 ms |
+
+All six Subscribe summaries had 2 samples and zero callback errors.
+
 The real Nacos catalog returned the observed host IP `172.17.0.5`, confirming that the Consul provider projection uses the Consul node address rather than the registration's `Service.Address=127.0.0.1`.
 
 The final lifecycle metadata was:
@@ -46,7 +60,7 @@ residual_unknown=false
 final_exit_code=0
 ```
 
-The complete artifact is under `build/consul-real/20261001T005938Z-82899/` in the local workspace. The directory is ignored by Git and contains the JSON report, test log, image architecture records, startup logs, container logs, cleanup log, and final exit metadata. The Nacos health switch was restored to its original value before the container was removed.
+The complete artifact is under `build/consul-real/20261001T021656Z-54838/` in the local workspace. The directory is ignored by Git and contains the JSON report, test log, image architecture records, startup logs, container logs, cleanup log, and final exit metadata. The Nacos health switch was restored to its original value before the container was removed.
 
 ## Interpretation and limits
 
@@ -54,6 +68,13 @@ This is a real local ARM64 Consul 1.22 → Spotter provider/worker → Nacos 3.2
 
 ```
 Consul Agent mutation start → Nacos catalog observed by SDK-backed polling
+and official SDK Subscribe callback
 ```
 
-It does not decompose Consul blocking-watch return, provider conversion, worker queue admission, Nacos SDK acknowledgement, or Nacos Subscribe delivery into separate timestamps. The two samples per operation are too small for a statistically meaningful production percentile claim. TLS/ACL, multi-node HA, non-public namespace authorization, and Consul Enterprise partition behavior remain deployment-scope evidence gaps.
+The test separately records the provider watch-to-sync metric and carries the
+same origin through Event.Trigger to the per-sink Nacos SDK acknowledgement
+metric; the JSON report above contains the catalog and Subscribe observations.
+The two samples per operation are too small for a statistically meaningful
+production percentile claim. TLS/ACL, multi-node HA, non-public namespace
+authorization, and Consul Enterprise partition behavior remain deployment-
+scope evidence gaps.
