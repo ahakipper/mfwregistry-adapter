@@ -120,6 +120,57 @@ func TestBlackboxNacos3AdminHealthBootstrapUsesExplicitCompatibilityPaths(t *tes
 	}
 }
 
+func TestBlackboxNacos3AdminHealthReadbackAcceptsConfiguredGroupWithNilQuery(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/nacos/v3/admin/ns/ops/switches" {
+			t.Fatalf("request = %s %s, want GET /nacos/v3/admin/ns/ops/switches", r.Method, r.URL.Path)
+		}
+		if r.URL.Query().Get("groupName") != "DEFAULT_GROUP" {
+			t.Fatalf("groupName = %q, want DEFAULT_GROUP", r.URL.Query().Get("groupName"))
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"code":0,"message":"success","data":{"healthCheckEnabled":false}}`)
+	}))
+	defer server.Close()
+	client, err := nacos.NewClientWithConfig(nacos.ClientConfig{
+		TransportMode: nacos.TransportHTTPCompat,
+		ServerURL:     server.URL,
+		GroupName:     nacos.DefaultGroup,
+	}, &fakes.FakeLogger{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	enabled, err := client.GetNamingHealthCheckEnabledV3AdminCompat()
+	if err != nil || enabled {
+		t.Fatalf("healthCheckEnabled readback = %v, error = %v, want false", enabled, err)
+	}
+}
+
+func TestBlackboxNacos3AdminHealthReadbackFailsClosedOnInvalidEnvelope(t *testing.T) {
+	for _, body := range []string{
+		`{"code":403,"data":{"healthCheckEnabled":false}}`,
+		`{"data":{"healthCheckEnabled":false}}`,
+		`{"code":0,"data":{}}`,
+		`{"code":0,"data":null}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(w, body)
+			}))
+			defer server.Close()
+			client, err := nacos.NewHTTPCompatClient(server.URL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			if enabled, err := client.GetNamingHealthCheckEnabledV3AdminCompat(); err == nil {
+				t.Fatalf("readback enabled=%v accepted an invalid Admin envelope", enabled)
+			}
+		})
+	}
+}
+
 func TestBlackboxClientRegisterErrorPropagates(t *testing.T) {
 	client, server := newClientAt(t)
 	_ = server

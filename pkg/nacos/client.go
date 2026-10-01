@@ -898,14 +898,18 @@ func (c *Client) GetNamingHealthCheckEnabledV3AdminCompat() (bool, error) {
 		return false, fmt.Errorf("%w: Nacos 3 admin compatibility transport is unavailable", ErrUnsupportedOperation)
 	}
 	var response struct {
+		Code *int `json:"code"`
 		Data struct {
-			HealthCheckEnabled bool `json:"healthCheckEnabled"`
+			HealthCheckEnabled *bool `json:"healthCheckEnabled"`
 		} `json:"data"`
 	}
 	if err := c.doJSON(http.MethodGet, pathNamingOpsV3Admin, nil, &response); err != nil {
 		return false, err
 	}
-	return response.Data.HealthCheckEnabled, nil
+	if response.Code == nil || *response.Code != 0 || response.Data.HealthCheckEnabled == nil {
+		return false, errors.New("nacos: Admin health readback has no successful explicit healthCheckEnabled value")
+	}
+	return *response.Data.HealthCheckEnabled, nil
 }
 
 // setNacos3AdminNamespace keeps the Nacos 3 Admin representation aligned with
@@ -1185,6 +1189,9 @@ func (c *Client) doForm(method, path string, values url.Values) error {
 func (c *Client) doJSON(method, path string, values url.Values, out interface{}) error {
 	if c == nil || c.http == nil {
 		return fmt.Errorf("%w: raw HTTP JSON %s %s is unavailable in sdk transport", ErrUnsupportedOperation, method, path)
+	}
+	if values == nil {
+		values = make(url.Values)
 	}
 	c.addAuth(values)
 	var lastErr error
