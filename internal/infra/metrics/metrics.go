@@ -146,9 +146,9 @@ func (r *Recorder) IncConsulHealthyEmptyConfirmation(source, outcome string) {
 	metrics.ConsulHealthyEmptyConfirmationsTotal.WithLabelValues(source, outcome).Inc()
 }
 
-// ObserveConsulWatchToSyncDuration records an accurately measured watch to
-// sync duration when a provider can supply one. The current Consul monitor
-// does not expose watch timestamps, so the provider does not call this method.
+// ObserveConsulWatchToSyncDuration records an accurately measured blocking
+// watch-to-sync duration. The provider calls this only with a real watch
+// return timestamp; legacy/manual handlers produce no sample.
 func (r *Recorder) ObserveConsulWatchToSyncDuration(source, outcome string, d time.Duration) {
 	metrics.ConsulWatchToSyncDuration.WithLabelValues(source, outcome).Observe(d.Seconds())
 }

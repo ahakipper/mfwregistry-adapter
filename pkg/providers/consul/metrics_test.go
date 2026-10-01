@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/consul/api"
 
@@ -120,5 +121,28 @@ func TestConsulSourceMetricsCountHealthyEmptyConfirmations(t *testing.T) {
 	}
 	if confirmations[0].Outcome != consulMetricOutcomePending || confirmations[1].Outcome != consulMetricOutcomePending || confirmations[2].Outcome != consulMetricOutcomeConfirmed {
 		t.Fatalf("healthy-empty confirmation outcomes = %#v, want pending,pending,confirmed", confirmations)
+	}
+}
+
+func TestConsulWatchToSyncMetricsUseRealOriginAndOutcome(t *testing.T) {
+	recorder := fakes.NewFakeMetricsRecorder()
+	c := newMetricsProvider(&metricsMonitor{}, recorder)
+	origin := time.Now().Add(-20 * time.Millisecond)
+	c.recordWatchToSync(origin, nil)
+	c.recordWatchToSync(origin, errors.New("sync failed"))
+
+	observations := recorder.ConsulWatchToSyncObservations()
+	if len(observations) != 2 {
+		t.Fatalf("watch-to-sync observations = %#v, want 2", observations)
+	}
+	if observations[0].Source != "catalog-a" || observations[0].Outcome != "ok" || observations[0].Duration <= 0 {
+		t.Fatalf("success watch-to-sync observation = %#v", observations[0])
+	}
+	if observations[1].Outcome != "error" || observations[1].Duration <= 0 {
+		t.Fatalf("error watch-to-sync observation = %#v", observations[1])
+	}
+	c.recordWatchToSync(time.Time{}, nil)
+	if got := len(recorder.ConsulWatchToSyncObservations()); got != 2 {
+		t.Fatalf("zero-origin observation count = %d, want 2", got)
 	}
 }

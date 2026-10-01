@@ -81,12 +81,12 @@ built when a later source fails. The command-line remains single-source, while
 embedded configuration can provide multiple descriptors.
 
 Stage 7 adds an optional `ConsulMetricsRecorder` seam and Prometheus/Fake
-implementations for catalog-read duration, conversion skips, source errors, and
-healthy-empty confirmation advancements. Labels use only normalized logical
-source IDs and bounded outcomes; the provider does not synthesize a
-watch-to-sync duration without an actual watch timestamp. End-to-end latency
-percentiles and real Nacos 3 qualification remain open because they require a
-live source and Nacos observation boundary.
+implementations for catalog-read duration, conversion skips, source errors,
+healthy-empty confirmation advancements, and the real blocking-watch-return to
+sync-completion duration. Labels use only normalized logical source IDs and
+bounded outcomes; legacy/manual handlers without a watch origin emit no timing
+sample. End-to-end latency percentiles from worker admission through Nacos SDK
+acknowledgement and Subscribe visibility remain open.
 
 Stage 8 adds source-scoped Consul Token/TokenFile, TLS, datacenter, and
 namespace options. Every endpoint receives a fresh API config; secrets stay
@@ -193,14 +193,16 @@ field, while equal revisions compare the complete canonical Spotter payload,
 covering labels, ports, images, hostname, source identity, and status before a
 Nacos update is emitted.
 
-#### P1-4 — No Consul Watch → Nacos Watch latency measurement
+#### P1-4 — Watch-to-Nacos latency measurement is only partially staged
 
-The guarded `consul_real` gate records source mutation start to
-Nacos catalog visibility for create, update, health-down, health-recovery,
-delete, and recovery, with P50/P90/P95/P99 output. The local ARM64 run is
-preserved, but its two samples per operation are diagnostic evidence rather
-than a production percentile/SLO claim; the gate does not timestamp each
-internal Watch/queue/Subscribe stage.
+The provider now records an accurately timestamped Consul blocking-watch return
+to sync-completion metric. The guarded `consul_real` gate still records source
+mutation start to Nacos catalog visibility for create, update, health-down,
+health-recovery, delete, and recovery, with P50/P90/P95/P99 output. The local
+ARM64 run is preserved, but its two samples per operation are diagnostic
+evidence rather than a production percentile/SLO claim. Worker admission,
+Nacos SDK acknowledgement, and Nacos Subscribe visibility remain separate
+observation stages and are not yet measured by the real gate.
 
 #### P1-5 — Real Consul + Nacos 3 qualification is absent
 
@@ -225,7 +227,8 @@ single-source while embedded configuration supports multiple descriptors.
   limiting are closed in the working tree; the real Consul latency and load
   qualification remains open.
 - Conversion skips endpoints with missing `ports`, `appCode`, `version`, or
-  required metadata; the skip is logged but not exposed as a source metric.
+  required metadata; the skip is fail-closed and exposed through the bounded
+  source-scoped conversion-skip metric.
 - The current Consul evidence does not include a scale run comparable to the
   K8s KWOK run. This remains an accepted scope boundary until Consul scale is
   required.
@@ -324,6 +327,7 @@ Consul health endpoints are filtered views while catalog endpoints expose raw
 entries, which is relevant to the `passingOnly` decision. See the [official
 Consul health API documentation](https://developer.hashicorp.com/consul/api-docs/health).
 
-The current evidence proves local provider mechanics and one loopback fan-out
-path. It does not yet prove production Consul credentials/TLS, a multiple-source
-process, or Consul-specific end-to-end latency percentiles.
+The current evidence proves local provider mechanics, an accurately measured
+watch-to-sync metric seam, and one loopback fan-out path. It does not yet prove
+production Consul credentials/TLS, a multiple-source production process, or
+per-stage worker/Nacos SDK/Subscribe end-to-end latency percentiles.

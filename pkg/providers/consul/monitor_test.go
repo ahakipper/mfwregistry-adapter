@@ -294,6 +294,33 @@ func TestConsulMonitorZeroIndexUsesBlockingFloorWithoutChange(t *testing.T) {
 	}
 }
 
+func TestConsulMonitorWatchConsulPublishesHealthStateReturnTimestamp(t *testing.T) {
+	client, requests, responses := newScriptedHealthStateClient(t)
+	clock := &observedClock{
+		FakeClock:  fakes.NewFakeClock(time.Unix(190, 0)),
+		afterCalls: make(chan time.Duration, 8),
+	}
+	monitor := newTestConsulMonitor(t, &staticConsulClientFactory{client: client}, nil, nil, clock)
+	monitor.watchTimestamps = make(chan time.Time, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	change := make(chan struct{}, 1)
+	go func() { done <- monitor.watchConsul(ctx, change) }()
+
+	assertWatchRequest(t, requests, "")
+	responses <- healthStateResponse{index: 10}
+	awaitSignal(t, change, "watch change")
+	watchAt := monitor.takeWatchTimestamp()
+	if watchAt.IsZero() || !watchAt.Equal(clock.Now()) {
+		t.Fatalf("watch origin = %v, want fake clock time %v", watchAt, clock.Now())
+	}
+	cancel()
+	if err := awaitError(t, done); err != nil {
+		t.Fatalf("watchConsul() error = %v", err)
+	}
+}
+
 func TestConsulMonitorIndexRollbackRetriesImmediatelyAndSignalsOnce(t *testing.T) {
 	client, requests, responses := newScriptedHealthStateClient(t)
 	clock := &observedClock{
@@ -705,6 +732,77 @@ func TestConsulMonitorDebounceResetsForMultipleChangesAndRunsOnce(t *testing.T) 
 	cancel()
 	if err := awaitError(t, done); err != nil {
 		t.Fatalf("updateRecord() error = %v", err)
+	}
+}
+
+func TestConsulMonitorDebouncePreservesEarliestWatchOrigin(t *testing.T) {
+	clock := &observedClock{
+		FakeClock:  fakes.NewFakeClock(time.Unix(300, 0)),
+		afterCalls: make(chan time.Duration, 12),
+	}
+	monitor := newTestConsulMonitor(t, &staticConsulClientFactory{}, nil, nil, clock)
+	monitor.watchTimestamps = make(chan time.Time, 2)
+	origins := make(chan time.Time, 1)
+	monitor.AppendTimestampedInstanceChangeHandler(func(watchAt time.Time) error {
+		origins <- watchAt
+		return nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	change := make(chan struct{})
+	done := make(chan error, 1)
+	go func() { done <- monitor.updateRecord(ctx, change) }()
+	if got := awaitDuration(t, clock.afterCalls); got != periodicCheckTime {
+		t.Fatalf("initial periodic check = %v, want %v", got, periodicCheckTime)
+	}
+
+	first := clock.Now().Add(-200 * time.Millisecond)
+	second := clock.Now().Add(-100 * time.Millisecond)
+	monitor.watchTimestamps <- first
+	change <- struct{}{}
+	if got := awaitDuration(t, clock.afterCalls); got != periodicCheckTime {
+		t.Fatalf("first reset periodic check = %v, want %v", got, periodicCheckTime)
+	}
+	clock.Advance(30 * time.Millisecond)
+	monitor.watchTimestamps <- second
+	change <- struct{}{}
+	if got := awaitDuration(t, clock.afterCalls); got != periodicCheckTime {
+		t.Fatalf("second reset periodic check = %v, want %v", got, periodicCheckTime)
+	}
+	clock.Advance(50 * time.Millisecond)
+	select {
+	case got := <-origins:
+		if !got.Equal(first) {
+			t.Fatalf("coalesced watch origin = %v, want earliest %v", got, first)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed handler did not run after debounce")
+	}
+	select {
+	case extra := <-origins:
+		t.Fatalf("duplicate timed handler origin = %v", extra)
+	default:
+	}
+
+	cancel()
+	if err := awaitError(t, done); err != nil {
+		t.Fatalf("updateRecord() error = %v", err)
+	}
+}
+
+func TestConsulMonitorTimestampedHandlerRequiresOrigin(t *testing.T) {
+	monitor := newTestConsulMonitor(t, &staticConsulClientFactory{}, nil, nil, nil)
+	called := make(chan struct{}, 1)
+	monitor.AppendTimestampedInstanceChangeHandler(func(time.Time) error {
+		called <- struct{}{}
+		return nil
+	})
+	monitor.updateInstanceRecord()
+	select {
+	case <-called:
+		t.Fatal("timestamped handler ran without a watch origin")
+	case <-time.After(20 * time.Millisecond):
 	}
 }
 

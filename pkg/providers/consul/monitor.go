@@ -26,6 +26,12 @@ type Monitor interface {
 // CatalogService payload. It is additive for compatibility with InstanceHandler.
 type InstanceChangeHandler func() error
 
+// TimestampedInstanceChangeHandler receives the real time at which the
+// blocking Consul watch returned a changed response. The timestamp is kept
+// separate from InstanceChangeHandler so legacy fixtures and callers retain
+// their payload-free API.
+type TimestampedInstanceChangeHandler func(watchAt time.Time) error
+
 // InstanceHandler processes service instance change events.
 type InstanceHandler func(instance *api.CatalogService) error
 
@@ -38,11 +44,13 @@ type consulMonitor struct {
 	notifier      ports.Notifier
 	clock         ports.Clock
 
-	handlersMu       sync.RWMutex
-	instanceHandlers []InstanceHandler
-	changeHandlers   []InstanceChangeHandler
-	serviceHandlers  []ServiceHandler
-	handlersWG       sync.WaitGroup
+	handlersMu          sync.RWMutex
+	instanceHandlers    []InstanceHandler
+	changeHandlers      []InstanceChangeHandler
+	timedChangeHandlers []TimestampedInstanceChangeHandler
+	serviceHandlers     []ServiceHandler
+	handlersWG          sync.WaitGroup
+	watchTimestamps     chan time.Time
 }
 
 // consulPassingOnly keeps the source contract explicit: desired catalog reads
@@ -222,6 +230,9 @@ func isNilInterface(value interface{}) bool {
 
 func (m *consulMonitor) Start(ctx context.Context) error {
 	change := make(chan struct{}, 64)
+	m.handlersMu.Lock()
+	m.watchTimestamps = make(chan time.Time, cap(change))
+	m.handlersMu.Unlock()
 
 	eg, groupCtx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
@@ -276,10 +287,19 @@ func (m *consulMonitor) watchConsul(ctx context.Context, change chan<- struct{})
 		} else {
 			changed, retryImmediately := consulIndex.observe(queryMeta)
 			if changed {
+				watchAt := m.clock.Now()
 				// A rollback must re-establish the blocking baseline without
 				// delay; only ordinary rapid changes consume rate-limit tokens.
 				if !retryImmediately && !changeLimiter.waitForChange(ctx, m.clock) {
 					return nil
+				}
+				timestamps := m.watchTimestampChannel()
+				if timestamps != nil {
+					select {
+					case timestamps <- watchAt:
+					case <-ctx.Done():
+						return nil
+					}
 				}
 				select {
 				case change <- struct{}{}:
@@ -309,6 +329,7 @@ func (m *consulMonitor) wait(ctx context.Context, duration time.Duration) bool {
 
 func (m *consulMonitor) updateRecord(ctx context.Context, change <-chan struct{}) error {
 	var lastChange time.Time
+	var firstWatchAt time.Time
 	periodicCheck := m.clock.After(periodicCheckTime)
 
 	for {
@@ -318,11 +339,15 @@ func (m *consulMonitor) updateRecord(ctx context.Context, change <-chan struct{}
 		case <-periodicCheck:
 			if !lastChange.IsZero() && m.clock.Now().Sub(lastChange) >= refreshIdleTime {
 				m.logger.Infof("consul service changed")
-				m.updateInstanceRecord()
+				m.updateInstanceRecordAt(firstWatchAt)
 				lastChange = time.Time{}
+				firstWatchAt = time.Time{}
 			}
 			periodicCheck = m.clock.After(periodicCheckTime)
 		case <-change:
+			if watchAt := m.takeWatchTimestamp(); !watchAt.IsZero() && (firstWatchAt.IsZero() || watchAt.Before(firstWatchAt)) {
+				firstWatchAt = watchAt
+			}
 			lastChange = m.clock.Now()
 			periodicCheck = m.clock.After(periodicCheckTime)
 		}
@@ -344,6 +369,10 @@ func (m *consulMonitor) updateServiceRecord() {
 }
 
 func (m *consulMonitor) updateInstanceRecord() {
+	m.updateInstanceRecordAt(time.Time{})
+}
+
+func (m *consulMonitor) updateInstanceRecordAt(watchAt time.Time) {
 	changeHandlers := m.changeHandlerSnapshot()
 	if len(changeHandlers) > 0 {
 		m.handlersWG.Add(len(changeHandlers))
@@ -353,6 +382,19 @@ func (m *consulMonitor) updateInstanceRecord() {
 				if err := h(); err != nil {
 					m.notifier.Notify("Failed to handle the consul instance change", err.Error())
 					m.logger.Warnf("Error executing instance change handler: %v", err)
+				}
+			}(handler)
+		}
+	}
+	timedHandlers := m.timedChangeHandlerSnapshot()
+	if !watchAt.IsZero() && len(timedHandlers) > 0 {
+		m.handlersWG.Add(len(timedHandlers))
+		for _, handler := range timedHandlers {
+			go func(h TimestampedInstanceChangeHandler) {
+				defer m.handlersWG.Done()
+				if err := h(watchAt); err != nil {
+					m.notifier.Notify("Failed to handle the consul instance change", err.Error())
+					m.logger.Warnf("Error executing timestamped instance handler: %v", err)
 				}
 			}(handler)
 		}
@@ -375,6 +417,37 @@ func (m *consulMonitor) AppendInstanceChangeHandler(handler InstanceChangeHandle
 	m.handlersMu.Lock()
 	m.changeHandlers = append(m.changeHandlers, handler)
 	m.handlersMu.Unlock()
+}
+
+func (m *consulMonitor) AppendTimestampedInstanceChangeHandler(handler TimestampedInstanceChangeHandler) {
+	m.handlersMu.Lock()
+	m.timedChangeHandlers = append(m.timedChangeHandlers, handler)
+	m.handlersMu.Unlock()
+}
+
+func (m *consulMonitor) timedChangeHandlerSnapshot() []TimestampedInstanceChangeHandler {
+	m.handlersMu.RLock()
+	defer m.handlersMu.RUnlock()
+	return append([]TimestampedInstanceChangeHandler(nil), m.timedChangeHandlers...)
+}
+
+func (m *consulMonitor) watchTimestampChannel() chan time.Time {
+	m.handlersMu.RLock()
+	defer m.handlersMu.RUnlock()
+	return m.watchTimestamps
+}
+
+func (m *consulMonitor) takeWatchTimestamp() time.Time {
+	timestamps := m.watchTimestampChannel()
+	if timestamps == nil {
+		return time.Time{}
+	}
+	select {
+	case watchAt := <-timestamps:
+		return watchAt
+	default:
+		return time.Time{}
+	}
 }
 func (m *consulMonitor) changeHandlerSnapshot() []InstanceChangeHandler {
 	m.handlersMu.RLock()

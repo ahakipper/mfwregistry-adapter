@@ -181,9 +181,8 @@ type ConsulMetricsRecorder interface {
 	// advancement. Outcome is "pending" until the confirmation threshold is
 	// reached, then "confirmed".
 	IncConsulHealthyEmptyConfirmation(source, outcome string)
-	// ObserveConsulWatchToSyncDuration is reserved for providers that can
-	// associate a watch notification with an accurate event timestamp. The
-	// current Consul monitor does not expose that timestamp, so callers must
-	// not synthesize one.
+	// ObserveConsulWatchToSyncDuration records a duration only when the source
+	// supplies the actual blocking-watch return timestamp. Callers must not
+	// synthesize an origin from handler execution time.
 	ObserveConsulWatchToSyncDuration(source, outcome string, d time.Duration)
 }

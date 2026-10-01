@@ -301,7 +301,15 @@ func newConsulProvider(ctx context.Context, worker worker.Worker, pushInterval i
 
 	// Watch the change events to refresh local caches
 	// monitor.AppendServiceHandler(provider.ServiceChanged)
-	if changeMonitor, ok := monitor.(interface{ AppendInstanceChangeHandler(InstanceChangeHandler) }); ok {
+	if timestampedMonitor, ok := monitor.(interface {
+		AppendTimestampedInstanceChangeHandler(TimestampedInstanceChangeHandler)
+	}); ok {
+		timestampedMonitor.AppendTimestampedInstanceChangeHandler(func(watchAt time.Time) error {
+			err := consulProvider.syncInstance()
+			consulProvider.recordWatchToSync(watchAt, err)
+			return err
+		})
+	} else if changeMonitor, ok := monitor.(interface{ AppendInstanceChangeHandler(InstanceChangeHandler) }); ok {
 		changeMonitor.AppendInstanceChangeHandler(func() error { return consulProvider.syncInstance() })
 	} else {
 		monitor.AppendInstanceHandler(consulProvider.InstanceChanged)
@@ -309,6 +317,31 @@ func newConsulProvider(ctx context.Context, worker worker.Worker, pushInterval i
 
 	//return &controller, err
 	return consulProvider, nil
+}
+
+// recordWatchToSync publishes a real blocking-watch-return to sync-completion
+// duration. A zero origin is rejected so legacy/manual handlers cannot create
+// synthetic samples; negative durations are clamped only for an injected
+// clock moving backwards.
+func (c *consul) recordWatchToSync(watchAt time.Time, syncErr error) {
+	if watchAt.IsZero() {
+		return
+	}
+	duration := time.Since(watchAt)
+	if duration < 0 {
+		duration = 0
+	}
+	outcome := "ok"
+	if syncErr != nil {
+		outcome = "error"
+	}
+	c.Lock()
+	recorder := c.consulMetricsLocked()
+	source := c.metricSourceScope()
+	c.Unlock()
+	if recorder != nil {
+		recorder.ObserveConsulWatchToSyncDuration(source, outcome, duration)
+	}
 }
 
 func consulSourceClusterID(addrs []string, configured string) string {
