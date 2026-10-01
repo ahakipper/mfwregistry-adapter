@@ -7,6 +7,8 @@ run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 artifact_root=${CONSUL_REAL_LOCAL_ARTIFACT_ROOT:-"$root/build/consul-real"}
 artifact="$artifact_root/$run_id"
 mkdir -p "$artifact" || { echo "CONSUL_REAL_LOCAL_ERROR: cannot create artifact directory" >&2; exit 2; }
+[[ -r "$root/scripts/consul-real-limits.hcl" ]] || { echo "CONSUL_REAL_LOCAL_ERROR: missing Consul limits fixture" >&2; exit 2; }
+cp "$root/scripts/consul-real-limits.hcl" "$artifact/consul-limits.hcl" || { echo "CONSUL_REAL_LOCAL_ERROR: cannot record Consul limits fixture" >&2; exit 2; }
 
 consul_image=${CONSUL_REAL_LOCAL_CONSUL_IMAGE:-hashicorp/consul:1.22.0}
 consul_digest=${CONSUL_REAL_LOCAL_CONSUL_DIGEST:-sha256:117f1fdd7cd6d84069fa0f69a0c0804b5b3bf9a30450d2143d5817b78ce757b6}
@@ -26,7 +28,7 @@ report_marker=${CONSUL_REAL_LOCAL_REPORT_MARKER:-CONSUL_REAL_QUALIFICATION}
 report_mode=${CONSUL_REAL_LOCAL_REPORT_MODE:-standard}
 scale_list=${CONSUL_REAL_LOCAL_SCALE_LIST:-100,1000,10000}
 scale_runs=${CONSUL_REAL_LOCAL_SCALE_RUNS:-1}
-scale_observe_timeout=${CONSUL_REAL_LOCAL_SCALE_OBSERVE_TIMEOUT:-5m}
+scale_observe_timeout=${CONSUL_REAL_LOCAL_SCALE_OBSERVE_TIMEOUT:-5s}
 scale_push_concurrency=${CONSUL_REAL_LOCAL_SCALE_PUSH_CONCURRENCY:-8}
 scale_count=$(printf '%s' "$scale_list" | awk -F, '{print NF}')
 consul_name="spotter-consul-real-$run_id"
@@ -164,7 +166,7 @@ done
 inspect_arch "$consul_image" "$consul_digest" consul-image
 inspect_arch "$nacos_image" "$nacos_digest" nacos-image
 
-consul_id=$(docker create --platform linux/arm64 --name "$consul_name" --label "io.spotter.consul-real.run=$run_id" -p "127.0.0.1:$consul_port:8500" "$consul_image@$consul_digest" agent -server -bootstrap-expect=1 -client=0.0.0.0 -bind=0.0.0.0 -ui=false) || die "Consul create failed"
+consul_id=$(docker create --platform linux/arm64 --name "$consul_name" --label "io.spotter.consul-real.run=$run_id" -v "$root/scripts/consul-real-limits.hcl:/consul/config/spotter-real-limits.hcl:ro" -p "127.0.0.1:$consul_port:8500" "$consul_image@$consul_digest" agent -config-file=/consul/config/spotter-real-limits.hcl -server -bootstrap-expect=1 -client=0.0.0.0 -bind=0.0.0.0 -ui=false) || die "Consul create failed"
 nacos_token=$(printf 'spotter-nacos-real-arm64-token-2026-10' | base64 | tr -d '\n')
 [[ ${#nacos_token} -ge 43 ]] || die "local Nacos JWT fixture token was not generated"
 nacos_id=$(docker create --platform linux/arm64 --name "$nacos_name" --label "io.spotter.nacos-real.run=$run_id" -e MODE=standalone -e NACOS_AUTH_ENABLE=false -e NACOS_AUTH_ADMIN_ENABLE=false -e NACOS_AUTH_IDENTITY_KEY=spotter-real -e NACOS_AUTH_IDENTITY_VALUE=spotter-real-local -e NACOS_AUTH_TOKEN="$nacos_token" -e JVM_XMS=512m -e JVM_XMX=512m -e JVM_XMN=256m -p "127.0.0.1:$nacos_port:8848" -p "127.0.0.1:$nacos_grpc_port:9848" -p "127.0.0.1:$nacos_raft_port:9849" "$nacos_image@$nacos_digest") || die "Nacos create failed"
@@ -203,7 +205,7 @@ if [[ -n "$report_line" ]]; then
   report_json=${report_json%% cleanup_attempted=*}
   printf '%s\n' "$report_json" >"$artifact/report.json"
   if [[ "$report_mode" == scale ]]; then
-    if valid_report=$(jq -e --arg scale_list "$scale_list" '(.cleanup_status == "passed") and (.residual_unknown == false) and (.ledger_complete == true) and (.canonical_equality == "wire_predicate_passed") and (([.scales[].instances] | sort) == ($scale_list | split(",") | map(tonumber) | sort)) and (([.scales[] | select((.catalog.samples != .instances) or (.subscribe.samples != .instances) or (.sync_all_events <= 0) or (.stage_samples_complete != true))] | length) == 0) and ([.scales[] | .catalog, .subscribe, .watch_to_provider_sync, .provider_sync_to_nacos_ack, .nacos_ack_to_catalog, .nacos_ack_to_subscribe] | all((.samples > 0) and (.p80_ms >= 0) and (.p90_ms >= 0) and (.p99_ms >= 0)))' "$artifact/report.json" 2>/dev/null); then :; else valid_report=""; fi
+    if valid_report=$(jq -e --arg scale_list "$scale_list" '(.cleanup_status == "passed") and (.residual_unknown == false) and (.ledger_complete == true) and (.canonical_equality == "wire_predicate_passed") and (.observation_deadline_ms == 5000) and (([.scales[].instances] | sort) == ($scale_list | split(",") | map(tonumber) | sort)) and (([.scales[] | select((.catalog.samples != .instances) or (.subscribe.samples != .instances) or (.sync_all_events <= 0) or (.stage_samples_complete != true))] | length) == 0) and ([.scales[] | .catalog, .subscribe, .watch_to_provider_sync, .provider_sync_to_nacos_ack, .nacos_ack_to_catalog, .nacos_ack_to_subscribe] | all((.samples > 0) and (.p80_ms >= 0) and (.p90_ms >= 0) and (.p99_ms >= 0)))' "$artifact/report.json" 2>/dev/null); then :; else valid_report=""; fi
   else
     if valid_report=$(jq -e --argjson n "$samples" '(.source_id == "consul-real-local") and (.latency_boundary == "consul_agent_mutation_start_to_nacos_catalog_observed") and (.oracle_poll_interval_ms == 100) and (.configured_runs == $n) and (.cleanup_status == "passed") and (.residual_unknown == false) and (.subscribe_update_cache_when_empty == true) and (.subscribe_latency_boundary == "consul_agent_mutation_start_to_official_nacos_sdk_subscribe_callback") and ([.create,.update,.delete,.recovery,.health_down,.health_recovery,.subscribe_create,.subscribe_update,.subscribe_delete,.subscribe_recovery,.subscribe_health_down,.subscribe_health_recovery] | all(.samples == $n and (.p50_ms >= 0) and (.p90_ms >= 0) and (.p95_ms >= 0) and (.p99_ms >= 0)))' "$artifact/report.json" 2>/dev/null); then :; else valid_report=""; fi
   fi

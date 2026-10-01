@@ -52,7 +52,7 @@ case "$tool" in
   go)
     if [[ "$*" == *'^TestConsulRealScaleQualification$'* ]]; then
       [[ "${CONSUL_REAL_SCALE_LIST:-}" == "100,1000,10000" ]] || exit 70
-      report='{"latency_boundary":"fixture","push_concurrency":8,"ledger_complete":true,"canonical_equality":"wire_predicate_passed","cleanup_status":"passed","residual_unknown":false,"scales":['
+      report='{"latency_boundary":"fixture","push_concurrency":8,"observation_deadline_ms":5000,"ledger_complete":true,"canonical_equality":"wire_predicate_passed","cleanup_status":"passed","residual_unknown":false,"scales":['
       first=true
       IFS=',' read -r -a scale_values <<< "${CONSUL_REAL_SCALE_LIST}"
       for scale in "${scale_values[@]}"; do

@@ -40,19 +40,22 @@ type consulScaleResult struct {
 	NacosAckToSubscribe    consulScaleLatencySummary `json:"nacos_ack_to_subscribe"`
 	Catalog                consulScaleLatencySummary `json:"catalog"`
 	Subscribe              consulScaleLatencySummary `json:"subscribe"`
+	CatalogComplete        bool                      `json:"catalog_complete"`
+	SubscribeComplete      bool                      `json:"subscribe_complete"`
 	StageSamplesComplete   bool                      `json:"stage_samples_complete"`
 }
 
 type consulScaleReport struct {
-	Boundary          string              `json:"latency_boundary"`
-	PushConcurrency   int                 `json:"push_concurrency"`
-	Scales            []consulScaleResult `json:"scales"`
-	LedgerComplete    bool                `json:"ledger_complete"`
-	CanonicalEquality string              `json:"canonical_equality"`
-	FailedScale       int                 `json:"failed_scale,omitempty"`
-	FailureKind       string              `json:"failure_kind,omitempty"`
-	CleanupStatus     string              `json:"cleanup_status"`
-	ResidualUnknown   bool                `json:"residual_unknown"`
+	Boundary              string              `json:"latency_boundary"`
+	PushConcurrency       int                 `json:"push_concurrency"`
+	ObservationDeadlineMS int                 `json:"observation_deadline_ms"`
+	Scales                []consulScaleResult `json:"scales"`
+	LedgerComplete        bool                `json:"ledger_complete"`
+	CanonicalEquality     string              `json:"canonical_equality"`
+	FailedScale           int                 `json:"failed_scale,omitempty"`
+	FailureKind           string              `json:"failure_kind,omitempty"`
+	CleanupStatus         string              `json:"cleanup_status"`
+	ResidualUnknown       bool                `json:"residual_unknown"`
 }
 
 type scaleRecordingWorker struct {
@@ -120,6 +123,26 @@ func (w *scaleRecordingWorker) recordWriteAck(items []*instance.Instance, acknow
 			}
 		}
 	}
+}
+
+func (w *scaleRecordingWorker) stagePresence(ids []string) (providerSeen, ackSeen int, missingProvider, missingAck []string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, id := range ids {
+		_, providerOK := w.providerAt[id]
+		_, ackOK := w.writeAckAt[id]
+		if providerOK {
+			providerSeen++
+		} else {
+			missingProvider = append(missingProvider, id)
+		}
+		if ackOK {
+			ackSeen++
+		} else {
+			missingAck = append(missingAck, id)
+		}
+	}
+	return providerSeen, ackSeen, missingProvider, missingAck
 }
 
 type consulScaleStageSamples struct {
@@ -251,11 +274,12 @@ func TestConsulRealScaleQualification(t *testing.T) {
 	go func() { providerDone <- provider.Run() }()
 
 	report := consulScaleReport{
-		Boundary:          "Consul instance mutation start to Nacos catalog/official SDK Subscribe visibility",
-		PushConcurrency:   pushConcurrency,
-		LedgerComplete:    true,
-		CanonicalEquality: "wire_predicate_passed",
-		CleanupStatus:     "not_needed",
+		Boundary:              "Consul instance mutation start to Nacos catalog/official SDK Subscribe visibility",
+		PushConcurrency:       pushConcurrency,
+		ObservationDeadlineMS: int(observeTimeout / time.Millisecond),
+		LedgerComplete:        true,
+		CanonicalEquality:     "wire_predicate_passed",
+		CleanupStatus:         "not_needed",
 	}
 	active := make(map[string][]string)
 	subscriptions := make(map[string]*consulRealSubscribeOracle)
@@ -363,24 +387,53 @@ func TestConsulRealScaleQualification(t *testing.T) {
 			for i, id := range ids {
 				expectedPorts[id] = 19000 + (i % 30000)
 			}
-			catalogVisibility, err := collectScaleCatalogLatencies(service, source.ID, size, started, expectedPorts, verifyClient, observeTimeout)
-			if err != nil {
-				logScaleFailureDiagnostics(t, consulClient, sink, service, source.ID, ids, catalogVisibility, batchBefore)
-				report.LedgerComplete = false
-				report.CanonicalEquality = "not_verified"
-				report.FailedScale = size
-				report.FailureKind = "catalog_visibility_timeout"
-				t.Errorf("catalog scale=%d run=%d: %v", size, run, err)
-				return
+			type visibilityResult struct {
+				visibility consulScaleVisibilitySamples
+				err        error
 			}
-			subscribeVisibility, err := collectScaleSubscribeLatencies(oracle, checkpoint, size, started, expectedPorts, observeTimeout)
-			if err != nil {
-				logScaleFailureDiagnostics(t, consulClient, sink, service, source.ID, ids, subscribeVisibility, batchBefore)
+			catalogCh := make(chan visibilityResult, 1)
+			subscribeCh := make(chan visibilityResult, 1)
+			go func() {
+				visibility, err := collectScaleCatalogLatencies(service, source.ID, size, started, expectedPorts, verifyClient, observeTimeout)
+				catalogCh <- visibilityResult{visibility: visibility, err: err}
+			}()
+			go func() {
+				visibility, err := collectScaleSubscribeLatencies(oracle, checkpoint, size, started, expectedPorts, observeTimeout)
+				subscribeCh <- visibilityResult{visibility: visibility, err: err}
+			}()
+			catalogResult := <-catalogCh
+			subscribeResult := <-subscribeCh
+			catalogVisibility, subscribeVisibility := catalogResult.visibility, subscribeResult.visibility
+			catalogErr, subscribeErr := catalogResult.err, subscribeResult.err
+			catalogComplete := catalogErr == nil && len(catalogVisibility.Samples) == size
+			subscribeComplete := subscribeErr == nil && len(subscribeVisibility.Samples) == size
+			if !catalogComplete || !subscribeComplete {
+				logScaleFailureDiagnostics(t, consulClient, sink, recordingWorker, service, source.ID, ids, catalogVisibility, subscribeVisibility, batchBefore, fullBefore)
+				report.Scales = append(report.Scales, consulScaleResult{
+					Instances:         size,
+					Runs:              runs,
+					Catalog:           summarizeConsulScale(catalogVisibility.Samples),
+					Subscribe:         summarizeConsulScale(subscribeVisibility.Samples),
+					CatalogComplete:   catalogComplete,
+					SubscribeComplete: subscribeComplete,
+				})
 				report.LedgerComplete = false
 				report.CanonicalEquality = "not_verified"
 				report.FailedScale = size
-				report.FailureKind = "subscribe_visibility_timeout"
-				t.Errorf("Subscribe scale=%d run=%d: %v", size, run, err)
+				switch {
+				case !catalogComplete && !subscribeComplete:
+					report.FailureKind = "catalog_and_subscribe_visibility_timeout"
+				case !catalogComplete:
+					report.FailureKind = "catalog_visibility_timeout"
+				default:
+					report.FailureKind = "subscribe_visibility_timeout"
+				}
+				if catalogErr != nil {
+					t.Errorf("catalog scale=%d run=%d: %v", size, run, catalogErr)
+				}
+				if subscribeErr != nil {
+					t.Errorf("Subscribe scale=%d run=%d: %v", size, run, subscribeErr)
+				}
 				return
 			}
 			stages, stageComplete := recordingWorker.stageSamples(ids, catalogVisibility.ObservedAt, subscribeVisibility.ObservedAt)
@@ -389,6 +442,8 @@ func TestConsulRealScaleQualification(t *testing.T) {
 				Runs:                   runs,
 				Catalog:                summarizeConsulScale(catalogVisibility.Samples),
 				Subscribe:              summarizeConsulScale(subscribeVisibility.Samples),
+				CatalogComplete:        true,
+				SubscribeComplete:      true,
 				WatchToProviderSync:    summarizeConsulScale(stages.WatchToProviderSync),
 				ProviderSyncToNacosAck: summarizeConsulScale(stages.ProviderSyncToNacosAck),
 				NacosAckToCatalog:      summarizeConsulScale(stages.NacosAckToCatalog),
@@ -431,7 +486,7 @@ func TestConsulRealScaleQualification(t *testing.T) {
 func parseScaleList(t *testing.T, raw string) []int {
 	t.Helper()
 	if strings.TrimSpace(raw) == "" {
-		return []int{100, 1000, 10000}
+		return []int{1, 100, 1000, 10000}
 	}
 	result := make([]int, 0)
 	for _, part := range strings.Split(raw, ",") {
@@ -460,11 +515,11 @@ func parseScaleRuns(t *testing.T, raw string) int {
 func parseScaleObserveTimeout(t *testing.T, raw string) time.Duration {
 	t.Helper()
 	if strings.TrimSpace(raw) == "" {
-		return 5 * time.Minute
+		return 5 * time.Second
 	}
 	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
-		t.Fatalf("invalid CONSUL_REAL_SCALE_OBSERVE_TIMEOUT value %q", raw)
+	if err != nil || d != 5*time.Second {
+		t.Fatalf("CONSUL_REAL_SCALE_OBSERVE_TIMEOUT must be exactly 5s, got %q", raw)
 	}
 	return d
 }
@@ -495,22 +550,27 @@ type consulScaleVisibilitySamples struct {
 	ObservedAt map[string]time.Time
 }
 
-func logScaleFailureDiagnostics(t *testing.T, consulClient *api.Client, sink *nacos.Sink, service, cluster string, ids []string, visibility consulScaleVisibilitySamples, batchBefore nacos.BatchMetricsSnapshot) {
+func logScaleFailureDiagnostics(t *testing.T, consulClient *api.Client, sink *nacos.Sink, recordingWorker *scaleRecordingWorker, service, cluster string, ids []string, catalog, subscribe consulScaleVisibilitySamples, batchBefore nacos.BatchMetricsSnapshot, fullBefore int) {
 	t.Helper()
 	sourceEntries, _, sourceErr := consulClient.Health().Service(service, "microservice", true, nil)
 	batchAfter := sink.BatchMetrics()
-	observed := make(map[string]struct{}, len(visibility.ObservedAt))
-	for id := range visibility.ObservedAt {
+	providerSeen, ackSeen, missingProvider, missingAck := recordingWorker.stagePresence(ids)
+	observed := make(map[string]struct{}, len(catalog.ObservedAt))
+	for id := range catalog.ObservedAt {
 		observed[id] = struct{}{}
 	}
+	missingIDs := make([]string, 0)
 	missing := 0
 	for _, id := range ids {
 		if _, ok := observed[id]; !ok {
 			missing++
+			if len(missingIDs) < 20 {
+				missingIDs = append(missingIDs, id)
+			}
 		}
 	}
-	t.Logf("CONSUL_REAL_SCALE diagnostics service=%s cluster=%s source_count=%d source_error=%v observed_count=%d missing_count=%d batch_logical_delta=%d batch_items_delta=%d batch_attempted_delta=%d batch_succeeded_delta=%d batch_transient_delta=%d batch_permanent_delta=%d batch_retry_delta=%d batch_prune_skipped_delta=%d batch_concurrency=%d",
-		service, cluster, len(sourceEntries), sourceErr, len(observed), missing,
+	t.Logf("CONSUL_REAL_SCALE diagnostics service=%s cluster=%s source_count=%d source_error=%v provider_seen=%d provider_missing=%v ack_seen=%d ack_missing=%v catalog_observed=%d catalog_missing_count=%d catalog_missing_sample=%v subscribe_observed=%d subscribe_missing_count=%d sync_all_delta=%d batch_logical_delta=%d batch_items_delta=%d batch_attempted_delta=%d batch_succeeded_delta=%d batch_transient_delta=%d batch_permanent_delta=%d batch_retry_delta=%d batch_prune_skipped_delta=%d batch_concurrency=%d",
+		service, cluster, len(sourceEntries), sourceErr, providerSeen, missingProvider, ackSeen, missingAck, len(observed), missing, missingIDs, len(subscribe.ObservedAt), len(ids)-len(subscribe.ObservedAt), recordingWorker.fullEvents()-fullBefore,
 		batchAfter.LogicalBatches-batchBefore.LogicalBatches,
 		batchAfter.Items-batchBefore.Items,
 		batchAfter.AttemptedItems-batchBefore.AttemptedItems,
@@ -521,6 +581,35 @@ func logScaleFailureDiagnostics(t *testing.T, consulClient *api.Client, sink *na
 		batchAfter.PruneSkippedScopes-batchBefore.PruneSkippedScopes,
 		batchAfter.ConcurrencyCap,
 	)
+}
+
+func snapshotScaleSubscribeVisibility(oracle *consulRealSubscribeOracle, checkpoint int, origins map[string]time.Time, expectedPorts map[string]int) consulScaleVisibilitySamples {
+	oracle.mu.Lock()
+	defer oracle.mu.Unlock()
+	seen := make(map[string]struct{})
+	samples := make([]time.Duration, 0, len(origins))
+	observedAt := make(map[string]time.Time, len(origins))
+	for checkpoint < len(oracle.events) {
+		event := oracle.events[checkpoint]
+		checkpoint++
+		if event.Err != "" {
+			continue
+		}
+		for _, host := range event.Hosts {
+			id := host.Metadata["instanceId"]
+			origin, ok := origins[id]
+			if !ok || host.Port != expectedPorts[id] || host.Metadata["version"] != "consul-scale" || !host.Enabled || !host.Healthy {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			observedAt[id] = event.ReceivedAt
+			samples = append(samples, event.ReceivedAt.Sub(origin))
+		}
+	}
+	return consulScaleVisibilitySamples{Samples: samples, ObservedAt: observedAt}
 }
 
 func collectScaleCatalogLatencies(service, cluster string, want int, origins map[string]time.Time, expectedPorts map[string]int, client *nacos.Client, timeout time.Duration) (consulScaleVisibilitySamples, error) {

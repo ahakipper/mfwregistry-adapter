@@ -77,6 +77,24 @@ returned the same local `429 Too Many Requests` response and observed only
 does not remove this local Nacos/Colima connection-rate limit; it needs a
 separate Nacos transport/server-capacity investigation.
 
+The local Consul fixture now raises `limits.http_max_conns_per_client` to
+10000. With that limit, the 429 disappeared and the 1000-instance diagnostic
+run reached 996/1000 only after a 10-minute window. This remains a failure:
+the mandatory scale acceptance deadline is exactly 5 seconds, so minute-level
+eventual convergence is never promoted to PASS. Failure diagnostics now
+separate source presence, Provider event presence, Nacos write acknowledgement,
+and Catalog observation for the missing identities.
+
+The strict 5-second rerun separates the two Nacos observation planes. At 1000
+instances, Consul, Provider, and Nacos write acknowledgement each reached
+1000/1000; the official SDK Subscribe view also reached 1000/1000 with P99
+about 1.25 seconds. The Catalog query view returned 970/1000 within the same
+deadline. The service-discovery consumer path therefore meets the 5-second
+target, while the Catalog administration oracle remains a separate Nacos
+consistency/performance defect. The overall scale gate stays failed until the
+Catalog requirement is explicitly closed; 10000 is not started under a failed
+1000 Catalog gate.
+
 Consul does have a server-side streaming backend for some blocking-query
 endpoints, including selected `/health/service/:service` queries, but the
 current provider watches the broad `/health/state/any` endpoint and the pinned

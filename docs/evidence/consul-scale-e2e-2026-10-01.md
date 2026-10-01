@@ -55,6 +55,28 @@ reached 948/1000, so lowering Spotter write concurrency alone is insufficient.
 The 10000 gate was not started after the 1000 gate failed; it remains
 NOT QUALIFIED rather than receiving an inferred percentile.
 
+The current acceptance deadline is now fixed at exactly 5 seconds for every
+scale. The 10-minute 996/1000 diagnostic run is retained only as root-cause
+evidence and is not a passing latency result. The local Consul fixture used
+`limits.http_max_conns_per_client=10000`; this removed the Consul 429, but did
+not satisfy the 5-second complete-ledger requirement.
+
+The strict 5-second rerun produced the following layer evidence for 1000:
+
+| Plane | Observed | P99 | Result |
+| --- | ---: | ---: | --- |
+| Consul source | 1000/1000 | — | PASS |
+| Spotter Provider events | 1000/1000 | — | PASS |
+| Nacos write acknowledgement | 1000/1000 | — | PASS |
+| Official SDK Subscribe | 1000/1000 | 1.25s | PASS |
+| Nacos Catalog query | 970/1000 | incomplete | NOT QUALIFIED |
+
+The missing Catalog entries were not missing from Provider or write
+acknowledgement, and Subscribe observed the complete set. This isolates the
+remaining failure to the Nacos Catalog query/visibility plane. The overall
+1000 gate remains failed under the strict all-plane policy, so 10000 is not
+started and receives no inferred percentile.
+
 ## 10,000-instance result
 
 The 10,000-instance run was attempted with a bounded test deadline. Consul accepted the registration wave, but the complete Spotter → Nacos visibility ledger did not converge before the test deadline. The run ended as a test timeout, not a PASS, and no P80/P90/P99 values were emitted for 10,000.
