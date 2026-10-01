@@ -685,6 +685,8 @@ type FakeMetricsRecorder struct {
 	consulSourceErrors    []ConsulSourceErrorObservation
 	consulEmptyConfirms   []ConsulHealthyEmptyConfirmationObservation
 	consulWatchToSync     []ConsulWatchToSyncObservation
+	consulLeaderProbes    []ConsulLeaderProbeObservation
+	consulRequests        []ConsulRequestObservation
 }
 
 // ConsulCatalogReadObservation captures one optional Consul catalog read
@@ -720,6 +722,23 @@ type ConsulWatchToSyncObservation struct {
 	Source   string
 	Outcome  string
 	Duration time.Duration
+}
+
+// ConsulLeaderProbeObservation captures one Status().Leader request duration
+// and its bounded outcome.
+type ConsulLeaderProbeObservation struct {
+	Source   string
+	Outcome  string
+	Duration time.Duration
+}
+
+// ConsulRequestObservation captures one Consul API request duration and its
+// bounded operation/outcome labels.
+type ConsulRequestObservation struct {
+	Source    string
+	Operation string
+	Outcome   string
+	Duration  time.Duration
 }
 
 // NewFakeMetricsRecorder creates an initialized metrics recorder.
@@ -800,6 +819,18 @@ func (r *FakeMetricsRecorder) ObserveConsulWatchToSyncDuration(source, outcome s
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.consulWatchToSync = append(r.consulWatchToSync, ConsulWatchToSyncObservation{Source: source, Outcome: outcome, Duration: d})
+}
+
+func (r *FakeMetricsRecorder) ObserveConsulLeaderProbeDuration(source, outcome string, d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.consulLeaderProbes = append(r.consulLeaderProbes, ConsulLeaderProbeObservation{Source: source, Outcome: outcome, Duration: d})
+}
+
+func (r *FakeMetricsRecorder) ObserveConsulRequestDuration(source, operation, outcome string, d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.consulRequests = append(r.consulRequests, ConsulRequestObservation{Source: source, Operation: operation, Outcome: outcome, Duration: d})
 }
 
 // SyncOnceDurations returns an independent snapshot of recorded durations.
@@ -896,6 +927,20 @@ func (r *FakeMetricsRecorder) ConsulWatchToSyncObservations() []ConsulWatchToSyn
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]ConsulWatchToSyncObservation(nil), r.consulWatchToSync...)
+}
+
+// ConsulLeaderProbeObservations returns an independent snapshot.
+func (r *FakeMetricsRecorder) ConsulLeaderProbeObservations() []ConsulLeaderProbeObservation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]ConsulLeaderProbeObservation(nil), r.consulLeaderProbes...)
+}
+
+// ConsulRequestObservations returns an independent snapshot.
+func (r *FakeMetricsRecorder) ConsulRequestObservations() []ConsulRequestObservation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]ConsulRequestObservation(nil), r.consulRequests...)
 }
 
 // FakeEventQueue is an in-memory highest-Reversion-wins retry queue.
@@ -1060,5 +1105,6 @@ var _ ports.InstanceSink = (*FakeInstanceSink)(nil)
 var _ ports.InstanceSource = (*FakeInstanceSource)(nil)
 var _ ports.LeaderElector = (*FakeLeaderElector)(nil)
 var _ ports.MetricsRecorder = (*FakeMetricsRecorder)(nil)
+var _ ports.ConsulRequestMetricsRecorder = (*FakeMetricsRecorder)(nil)
 var _ ports.EventQueue = (*FakeEventQueue)(nil)
 var _ ports.LegacyEventQueue = (*FakeEventQueue)(nil)

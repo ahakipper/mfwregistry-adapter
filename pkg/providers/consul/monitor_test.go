@@ -159,6 +159,76 @@ func TestConsulMonitorGetServiceEntriesUsesMicroserviceTagAndPassingOnly(t *test
 	}
 }
 
+func TestConsulMonitorRecordsCatalogAndHealthRequestOutcomes(t *testing.T) {
+	server := consulmock.Start()
+	server.SetServices(map[string][]string{"payments": {"microservice"}})
+	server.SetEntries("payments", []*api.ServiceEntry{{
+		Service: &api.AgentService{ID: "passing", Service: "payments", Tags: []string{"microservice"}},
+		Checks:  api.HealthChecks{&api.HealthCheck{Status: api.HealthPassing}},
+	}})
+	factory := &staticConsulClientFactory{client: newConsulClient(t, server.Address())}
+	monitor := newTestConsulMonitor(t, factory, nil, nil, nil)
+	recorder := fakes.NewFakeMetricsRecorder()
+	monitor.SetMetricSource("catalog-a")
+	monitor.SetConsulRequestMetricsRecorder(recorder)
+	if _, err := monitor.GetServices(); err != nil {
+		t.Fatalf("GetServices() error = %v", err)
+	}
+	if _, err := monitor.GetServiceEntries("payments", nil); err != nil {
+		t.Fatalf("GetServiceEntries() error = %v", err)
+	}
+	server.Close()
+	if _, err := monitor.GetServices(); err == nil {
+		t.Fatal("GetServices() after close error = nil")
+	}
+	if _, err := monitor.GetServiceEntries("payments", nil); err == nil {
+		t.Fatal("GetServiceEntries() after close error = nil")
+	}
+
+	observations := recorder.ConsulRequestObservations()
+	if len(observations) != 4 {
+		t.Fatalf("request observations = %#v, want two success and two error observations", observations)
+	}
+	want := []struct {
+		operation string
+		outcome   string
+	}{
+		{operation: "catalog_services", outcome: "success"},
+		{operation: "health_service", outcome: "success"},
+		{operation: "catalog_services", outcome: "error"},
+		{operation: "health_service", outcome: "error"},
+	}
+	for i, expected := range want {
+		got := observations[i]
+		if got.Source != "catalog-a" || got.Operation != expected.operation || got.Outcome != expected.outcome || got.Duration < 0 {
+			t.Fatalf("request observation %d = %#v, want source catalog-a/%s/%s/non-negative duration", i, got, expected.operation, expected.outcome)
+		}
+	}
+}
+
+func TestConsulMonitorRecordsBlockingHealthStateCancellation(t *testing.T) {
+	client, requests, _ := newScriptedHealthStateClient(t)
+	monitor := newTestConsulMonitor(t, &staticConsulClientFactory{client: client}, nil, nil, nil)
+	recorder := fakes.NewFakeMetricsRecorder()
+	monitor.SetMetricSource("catalog-b")
+	monitor.SetConsulRequestMetricsRecorder(recorder)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- monitor.watchConsul(ctx, make(chan struct{}, 1)) }()
+	assertWatchRequest(t, requests, "")
+	cancel()
+	if err := awaitError(t, done); err != nil {
+		t.Fatalf("watchConsul() error = %v", err)
+	}
+	observations := recorder.ConsulRequestObservations()
+	if len(observations) != 1 {
+		t.Fatalf("blocking request observations = %#v, want one", observations)
+	}
+	if got := observations[0]; got.Source != "catalog-b" || got.Operation != "health_state" || got.Outcome != "cancel" || got.Duration < 0 {
+		t.Fatalf("blocking request observation = %#v, want catalog-b/health_state/cancel/non-negative duration", got)
+	}
+}
+
 func TestConsulMonitorFactoryFailureNotifiesWaitsFiveSecondsAndCancelUnblocks(t *testing.T) {
 	factoryErr := errors.New("factory unavailable")
 	factory := &staticConsulClientFactory{err: factoryErr, calls: make(chan struct{}, 1)}

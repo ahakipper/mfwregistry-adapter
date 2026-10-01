@@ -79,6 +79,32 @@ func TestRecorderConsulMetricsUseSourceOutcomeLabels(t *testing.T) {
 	}
 }
 
+func TestRecorderConsulRequestMetricsBoundLabelsAndSourceIsolation(t *testing.T) {
+	r := New()
+	var recorder ports.ConsulRequestMetricsRecorder = r
+	if recorder == nil {
+		t.Fatal("request metrics recorder is nil")
+	}
+	beforeA := consulHistogramCount(t, metrics.ConsulLeaderProbeDuration, "catalog-a", "success")
+	beforeB := consulHistogramCount(t, metrics.ConsulRequestDuration, "catalog-b", "health_state", "cancel")
+	recorder.ObserveConsulLeaderProbeDuration("catalog-a", "success", time.Millisecond)
+	recorder.ObserveConsulRequestDuration("catalog-b", "health_state", "cancel", 2*time.Millisecond)
+	if got := consulHistogramCount(t, metrics.ConsulLeaderProbeDuration, "catalog-a", "success") - beforeA; got != 1 {
+		t.Fatalf("leader probe source-a delta = %d, want 1", got)
+	}
+	if got := consulHistogramCount(t, metrics.ConsulRequestDuration, "catalog-b", "health_state", "cancel") - beforeB; got != 1 {
+		t.Fatalf("health-state source-b delta = %d, want 1", got)
+	}
+
+	// Invalid source/operation/outcome values are collapsed to bounded labels;
+	// the endpoint and token text must not become a Prometheus series.
+	beforeUnknown := consulHistogramCount(t, metrics.ConsulRequestDuration, "unknown", "other", "other")
+	recorder.ObserveConsulRequestDuration("https://token@example.invalid:8500", "raw /v1/secret", "raw error token", time.Millisecond)
+	if got := consulHistogramCount(t, metrics.ConsulRequestDuration, "unknown", "other", "other") - beforeUnknown; got != 1 {
+		t.Fatalf("bounded invalid request count = %d, want 1", got)
+	}
+}
+
 func consulCounterValue(t *testing.T, collector *prometheus.CounterVec, labels ...string) float64 {
 	t.Helper()
 	metric, err := collector.GetMetricWithLabelValues(labels...)

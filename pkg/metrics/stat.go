@@ -142,8 +142,30 @@ var (
 		},
 		[]string{"source", "outcome"},
 	)
+	ConsulLeaderProbeDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "consul_leader_probe_duration_seconds",
+			Help: "duration of Consul Status().Leader probes by logical source and outcome",
+			Buckets: []float64{
+				0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05,
+				0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30,
+			},
+		},
+		[]string{"source", "outcome"},
+	)
+	ConsulRequestDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "consul_request_duration_seconds",
+			Help: "duration of Consul API requests by logical source, operation, and outcome",
+			Buckets: []float64{
+				0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05,
+				0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30,
+			},
+		},
+		[]string{"source", "operation", "outcome"},
+	)
 )
 
 func init() {
-	prometheus.MustRegister(SyncAllDurationsHistogram, SyncAllK8sDurationsHistogram, SyncAllEcsDurationsHistogram, SyncOnceDurationsHistogram, SyncOnceGauge, SyncErrorGauge, EventToStoreE2EDuration, EventsDroppedTotal, K8sQueueDepthGauge, ConsulCatalogReadDuration, ConsulConversionSkipsTotal, ConsulSourceErrorsTotal, ConsulHealthyEmptyConfirmationsTotal, ConsulWatchToSyncDuration)
+	prometheus.MustRegister(SyncAllDurationsHistogram, SyncAllK8sDurationsHistogram, SyncAllEcsDurationsHistogram, SyncOnceDurationsHistogram, SyncOnceGauge, SyncErrorGauge, EventToStoreE2EDuration, EventsDroppedTotal, K8sQueueDepthGauge, ConsulCatalogReadDuration, ConsulConversionSkipsTotal, ConsulSourceErrorsTotal, ConsulHealthyEmptyConfirmationsTotal, ConsulWatchToSyncDuration, ConsulLeaderProbeDuration, ConsulRequestDuration)
 }

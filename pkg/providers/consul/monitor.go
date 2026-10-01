@@ -43,6 +43,9 @@ type consulMonitor struct {
 	logger        ports.Logger
 	notifier      ports.Notifier
 	clock         ports.Clock
+	metricsMu     sync.RWMutex
+	metrics       ports.ConsulRequestMetricsRecorder
+	metricSource  string
 
 	handlersMu          sync.RWMutex
 	instanceHandlers    []InstanceHandler
@@ -215,6 +218,48 @@ func NewConsulMonitor(clientF ConsulClientFactory, logger ports.Logger, notifier
 	}, nil
 }
 
+// SetConsulRequestMetricsRecorder installs optional request-level metrics
+// without changing the Monitor interface or existing callers.
+func (m *consulMonitor) SetConsulRequestMetricsRecorder(recorder ports.ConsulRequestMetricsRecorder) {
+	if m == nil {
+		return
+	}
+	m.metricsMu.Lock()
+	m.metrics = recorder
+	m.metricsMu.Unlock()
+}
+
+// SetMetricSource installs the logical source scope used by request metrics.
+func (m *consulMonitor) SetMetricSource(source string) {
+	if m == nil {
+		return
+	}
+	m.metricsMu.Lock()
+	m.metricSource = normalizeConsulMetricSource(source)
+	m.metricsMu.Unlock()
+}
+
+func (m *consulMonitor) requestMetrics() (ports.ConsulRequestMetricsRecorder, string) {
+	if m == nil {
+		return nil, "unknown"
+	}
+	m.metricsMu.RLock()
+	defer m.metricsMu.RUnlock()
+	source := m.metricSource
+	if source == "" {
+		source = "unknown"
+	}
+	return m.metrics, source
+}
+
+func (m *consulMonitor) observeRequest(started time.Time, operation, outcome string) {
+	recorder, source := m.requestMetrics()
+	if recorder == nil {
+		return
+	}
+	recorder.ObserveConsulRequestDuration(source, operation, outcome, elapsedSince(started))
+}
+
 func isNilInterface(value interface{}) bool {
 	if value == nil {
 		return true
@@ -277,7 +322,9 @@ func (m *consulMonitor) watchConsul(ctx context.Context, change chan<- struct{})
 			WaitIndex: consulIndex.waitIndex,
 			WaitTime:  blockQueryWaitTime,
 		}).WithContext(ctx)
+		requestStarted := time.Now()
 		_, queryMeta, err := client.Health().State(api.HealthAny, queryOptions)
+		m.observeRequest(requestStarted, "health_state", classifyConsulRequestError(err, ctx))
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
@@ -487,7 +534,9 @@ func (m *consulMonitor) GetServices() (map[string][]string, error) {
 		m.logger.Errorf("get consul client: %v", err)
 		return nil, err
 	}
+	requestStarted := time.Now()
 	services, _, err := client.Catalog().Services(nil)
+	m.observeRequest(requestStarted, "catalog_services", classifyConsulRequestError(err, nil))
 	if err != nil {
 		m.logger.Warnf("Could not retrieve services from consul: %v", err)
 		return nil, err
@@ -501,7 +550,13 @@ func (m *consulMonitor) GetServiceEntries(name string, q *api.QueryOptions) ([]*
 		m.logger.Errorf("get consul client: %v", err)
 		return nil, err
 	}
+	requestStarted := time.Now()
 	endpoints, _, err := client.Health().Service(name, tagMicroservice, consulPassingOnly, q)
+	var requestContext context.Context
+	if q != nil {
+		requestContext = q.Context()
+	}
+	m.observeRequest(requestStarted, "health_service", classifyConsulRequestError(err, requestContext))
 	if err != nil {
 		m.logger.Warnf("Could not retrieve service catalog from consul: %v", err)
 		return nil, err

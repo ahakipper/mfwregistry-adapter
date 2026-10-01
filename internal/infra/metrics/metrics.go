@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	_ "net/http/pprof" // registers pprof handlers on http.DefaultServeMux
+	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +41,7 @@ type Recorder struct{}
 // Compile-time assertion that Recorder satisfies the port.
 var _ ports.MetricsRecorder = (*Recorder)(nil)
 var _ ports.ConsulMetricsRecorder = (*Recorder)(nil)
+var _ ports.ConsulRequestMetricsRecorder = (*Recorder)(nil)
 
 // New returns a Recorder. It never fails; the collectors it observes are
 // already registered by the pkg/metrics init function.
@@ -152,6 +154,60 @@ func (r *Recorder) IncConsulHealthyEmptyConfirmation(source, outcome string) {
 // recorded by the per-sink event-to-store metric.
 func (r *Recorder) ObserveConsulWatchToSyncDuration(source, outcome string, d time.Duration) {
 	metrics.ConsulWatchToSyncDuration.WithLabelValues(source, outcome).Observe(d.Seconds())
+}
+
+// ObserveConsulLeaderProbeDuration records one bounded Status().Leader probe.
+// The source is an already configured logical source identifier; invalid
+// values are collapsed to "unknown" so an endpoint, token, or raw diagnostic
+// can never become a high-cardinality label.
+func (r *Recorder) ObserveConsulLeaderProbeDuration(source, outcome string, d time.Duration) {
+	metrics.ConsulLeaderProbeDuration.WithLabelValues(
+		boundedConsulMetricSource(source),
+		boundedConsulMetricOutcome(outcome, consulLeaderOutcomes),
+	).Observe(d.Seconds())
+}
+
+// ObserveConsulRequestDuration records one bounded Consul API request. The
+// operation and outcome allowlists keep request metrics finite even if a
+// future caller passes an untrusted error string by mistake.
+func (r *Recorder) ObserveConsulRequestDuration(source, operation, outcome string, d time.Duration) {
+	metrics.ConsulRequestDuration.WithLabelValues(
+		boundedConsulMetricSource(source),
+		boundedConsulMetricOutcome(operation, consulRequestOperations),
+		boundedConsulMetricOutcome(outcome, consulRequestOutcomes),
+	).Observe(d.Seconds())
+}
+
+var consulLeaderOutcomes = map[string]struct{}{
+	"success": {}, "error": {}, "empty_leader": {}, "timeout": {}, "cancel": {}, "other": {},
+}
+
+var consulRequestOperations = map[string]struct{}{
+	"client_create": {}, "catalog_services": {}, "health_service": {}, "health_state": {}, "other": {},
+}
+
+var consulRequestOutcomes = map[string]struct{}{
+	"success": {}, "error": {}, "timeout": {}, "cancel": {}, "other": {},
+}
+
+func boundedConsulMetricSource(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 64 {
+		return "unknown"
+	}
+	for _, r := range value {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.') {
+			return "unknown"
+		}
+	}
+	return value
+}
+
+func boundedConsulMetricOutcome(value string, allowed map[string]struct{}) string {
+	if _, ok := allowed[value]; ok {
+		return value
+	}
+	return "other"
 }
 
 // httpServer serves promhttp and pprof endpoints and stops idempotently.

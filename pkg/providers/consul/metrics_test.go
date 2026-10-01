@@ -16,10 +16,12 @@ import (
 // the distinction between a healthy empty catalog and source/partial errors
 // without requiring a Consul HTTP server.
 type metricsMonitor struct {
-	services    map[string][]string
-	entries     map[string][]*api.ServiceEntry
-	servicesErr error
-	entriesErr  error
+	services        map[string][]string
+	entries         map[string][]*api.ServiceEntry
+	servicesErr     error
+	entriesErr      error
+	requestRecorder ports.ConsulRequestMetricsRecorder
+	requestSource   string
 }
 
 func (m *metricsMonitor) Start(context.Context) error { return nil }
@@ -40,6 +42,10 @@ func (m *metricsMonitor) GetServiceEntries(name string, _ *api.QueryOptions) ([]
 
 func (m *metricsMonitor) AppendServiceHandler(ServiceHandler)   {}
 func (m *metricsMonitor) AppendInstanceHandler(InstanceHandler) {}
+func (m *metricsMonitor) SetConsulRequestMetricsRecorder(recorder ports.ConsulRequestMetricsRecorder) {
+	m.requestRecorder = recorder
+}
+func (m *metricsMonitor) SetMetricSource(source string) { m.requestSource = source }
 
 func newMetricsProvider(m Monitor, recorder *fakes.FakeMetricsRecorder) *consul {
 	return &consul{
@@ -144,5 +150,24 @@ func TestConsulWatchToSyncMetricsUseRealOriginAndOutcome(t *testing.T) {
 	c.recordWatchToSync(time.Time{}, nil)
 	if got := len(recorder.ConsulWatchToSyncObservations()); got != 2 {
 		t.Fatalf("zero-origin observation count = %d, want 2", got)
+	}
+}
+
+func TestConsulRequestMetricsWiringPropagatesRecorderAndSource(t *testing.T) {
+	factory, err := NewClientFactory([]string{"127.0.0.1:8500"}, nil)
+	if err != nil {
+		t.Fatalf("NewClientFactory() error = %v", err)
+	}
+	monitor := &metricsMonitor{}
+	recorder := fakes.NewFakeMetricsRecorder()
+	c := &consul{sourceCluster: "catalog-wire", clientFactory: factory, monitor: monitor}
+	c.SetMetricsRecorder(recorder)
+
+	gotFactoryRecorder, gotFactorySource := factory.requestMetrics()
+	if gotFactoryRecorder != recorder || gotFactorySource != "catalog-wire" {
+		t.Fatalf("factory metrics wiring = %p/%q, want recorder/%q", gotFactoryRecorder, gotFactorySource, "catalog-wire")
+	}
+	if monitor.requestRecorder != recorder || monitor.requestSource != "catalog-wire" {
+		t.Fatalf("monitor metrics wiring = %p/%q, want recorder/%q", monitor.requestRecorder, monitor.requestSource, "catalog-wire")
 	}
 }

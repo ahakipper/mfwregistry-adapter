@@ -10,6 +10,7 @@ import (
 
 	"spotter/internal/ports"
 	"spotter/internal/testkit/consulmock"
+	"spotter/internal/testkit/fakes"
 )
 
 func TestNewClientFactoryRejectsNoUsableAddresses(t *testing.T) {
@@ -431,6 +432,101 @@ func TestClientFactoryNilLoggerUsesNopLogger(t *testing.T) {
 		t.Fatalf("ConsulClientFactory() with nil logger error = %v", err)
 	}
 	assertLeaderRequests(t, server, 1)
+}
+
+func TestClientFactoryRecordsCachedConfiguredFailoverAndErrorOutcomes(t *testing.T) {
+	first := consulmock.Start()
+	defer first.Close()
+	second := consulmock.Start()
+	defer second.Close()
+	first.SetLeader("127.0.0.1:8301")
+	second.SetLeader("127.0.0.1:8302")
+
+	factory, err := NewClientFactory([]string{first.Address(), second.Address()}, nil)
+	if err != nil {
+		t.Fatalf("NewClientFactory() error = %v", err)
+	}
+	recorder := fakes.NewFakeMetricsRecorder()
+	factory.SetMetricSource("catalog-a")
+	factory.SetConsulRequestMetricsRecorder(recorder)
+
+	if _, err := factory.ConsulClientFactory(); err != nil {
+		t.Fatalf("configured probe error = %v", err)
+	}
+	first.SetLeader("")
+	if _, err := factory.ConsulClientFactory(); err != nil {
+		t.Fatalf("failover probe error = %v", err)
+	}
+
+	observations := recorder.ConsulLeaderProbeObservations()
+	if len(observations) != 3 {
+		t.Fatalf("leader probe observations = %#v, want configured success, cached empty, configured success", observations)
+	}
+	wantOutcomes := []string{"success", "empty_leader", "success"}
+	for i, want := range wantOutcomes {
+		if observations[i].Source != "catalog-a" || observations[i].Outcome != want || observations[i].Duration < 0 {
+			t.Fatalf("leader probe observation %d = %#v, want source catalog-a/outcome %q/non-negative duration", i, observations[i], want)
+		}
+	}
+
+	dead := consulmock.Start()
+	deadAddress := dead.Address()
+	dead.Close()
+	errorFactory, err := NewClientFactory([]string{deadAddress}, nil)
+	if err != nil {
+		t.Fatalf("error factory construction = %v", err)
+	}
+	errorFactory.SetMetricSource("catalog-b")
+	errorFactory.SetConsulRequestMetricsRecorder(recorder)
+	if _, err := errorFactory.ConsulClientFactory(); err == nil {
+		t.Fatal("dead configured address error = nil")
+	}
+	observations = recorder.ConsulLeaderProbeObservations()
+	last := observations[len(observations)-1]
+	if last.Source != "catalog-b" || last.Outcome != "error" {
+		t.Fatalf("dead configured probe = %#v, want catalog-b/error", last)
+	}
+
+	createFactory, err := NewClientFactoryWithOptions([]string{"http://unused"}, ConsulClientOptions{TokenFile: "/definitely/missing/spotter-consul-token"}, nil)
+	if err != nil {
+		t.Fatalf("create-error factory construction = %v", err)
+	}
+	createFactory.SetMetricSource("catalog-c")
+	createFactory.SetConsulRequestMetricsRecorder(recorder)
+	if _, err := createFactory.ConsulClientFactory(); err == nil {
+		t.Fatal("client create error = nil")
+	}
+	requests := recorder.ConsulRequestObservations()
+	if len(requests) == 0 {
+		t.Fatal("client create error produced no request observation")
+	}
+	createObservation := requests[len(requests)-1]
+	if createObservation.Source != "catalog-c" || createObservation.Operation != "client_create" || createObservation.Outcome != "error" || createObservation.Duration < 0 {
+		t.Fatalf("client create observation = %#v, want catalog-c/client_create/error/non-negative duration", createObservation)
+	}
+}
+
+func TestClientFactoryRejectsUnsafeMetricSourceWithoutLeakingEndpoint(t *testing.T) {
+	factory, err := NewClientFactory([]string{"127.0.0.1:8500"}, nil)
+	if err != nil {
+		t.Fatalf("NewClientFactory() error = %v", err)
+	}
+	recorder := fakes.NewFakeMetricsRecorder()
+	factory.SetMetricSource("https://acl-secret@example.invalid:8500")
+	factory.SetConsulRequestMetricsRecorder(recorder)
+	if _, err := factory.ConsulClientFactory(); err == nil {
+		t.Fatal("unreachable endpoint error = nil")
+	}
+	observations := recorder.ConsulLeaderProbeObservations()
+	if len(observations) != 1 {
+		t.Fatalf("probe observations = %#v, want one", observations)
+	}
+	if observations[0].Source != "unknown" {
+		t.Fatalf("unsafe metric source = %q, want unknown", observations[0].Source)
+	}
+	if observations[0].Duration < 0 {
+		t.Fatalf("probe duration = %v, want non-negative", observations[0].Duration)
+	}
 }
 
 func TestClientFactoryDeprecatedConstructorDelegates(t *testing.T) {

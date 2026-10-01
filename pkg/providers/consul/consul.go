@@ -214,7 +214,27 @@ type MetricsReporter interface {
 func (c *consul) SetMetricsRecorder(recorder ports.MetricsRecorder) {
 	c.Lock()
 	c.metricsRecorder = recorder
+	source := c.metricSourceScope()
+	clientFactory := c.clientFactory
+	monitor := c.monitor
 	c.Unlock()
+	requestRecorder, _ := recorder.(ports.ConsulRequestMetricsRecorder)
+	if setter, ok := clientFactory.(interface {
+		SetConsulRequestMetricsRecorder(ports.ConsulRequestMetricsRecorder)
+	}); ok {
+		setter.SetConsulRequestMetricsRecorder(requestRecorder)
+	}
+	if setter, ok := clientFactory.(interface{ SetMetricSource(string) }); ok {
+		setter.SetMetricSource(source)
+	}
+	if setter, ok := monitor.(interface {
+		SetConsulRequestMetricsRecorder(ports.ConsulRequestMetricsRecorder)
+	}); ok {
+		setter.SetConsulRequestMetricsRecorder(requestRecorder)
+	}
+	if setter, ok := monitor.(interface{ SetMetricSource(string) }); ok {
+		setter.SetMetricSource(source)
+	}
 }
 
 // SetNacosReconcileSource turns the nacos-reconcile compare semantics on or
@@ -269,6 +289,12 @@ func newConsulProvider(ctx context.Context, worker worker.Worker, pushInterval i
 	}
 	if monitor, err = NewConsulMonitor(cf, logger, notifier, nil); err != nil {
 		return nil, err
+	}
+	if setter, ok := cf.(interface{ SetMetricSource(string) }); ok {
+		setter.SetMetricSource(sourceCluster)
+	}
+	if setter, ok := monitor.(interface{ SetMetricSource(string) }); ok {
+		setter.SetMetricSource(sourceCluster)
 	}
 	consulProvider := &consul{
 		providerName:       "consul",

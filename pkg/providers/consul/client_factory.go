@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/consul/api"
 
@@ -43,11 +44,14 @@ type ConsulClientOptions struct {
 type ClientFactoryOptions = ConsulClientOptions
 
 type ClientFactorySimple struct {
-	addrs   []string
-	clients map[string]*api.Client
-	logger  ports.Logger
-	options ConsulClientOptions
-	mu      sync.RWMutex
+	addrs     []string
+	clients   map[string]*api.Client
+	logger    ports.Logger
+	options   ConsulClientOptions
+	mu        sync.RWMutex
+	metricsMu sync.RWMutex
+	metrics   ports.ConsulRequestMetricsRecorder
+	source    string
 }
 
 func NewClientFactory(addrs []string, logger ports.Logger) (*ClientFactorySimple, error) {
@@ -105,7 +109,9 @@ func (cfs *ClientFactorySimple) ConsulClientFactory() (*api.Client, error) {
 
 	for _, cached := range cfs.cachedClients() {
 		attempted[cached.addr] = struct{}{}
+		probeStarted := time.Now()
 		leader, err := cached.client.Status().Leader()
+		cfs.observeLeaderProbe(probeStarted, leader, err)
 		if err == nil && leader != "" {
 			return cached.client, nil
 		}
@@ -127,15 +133,19 @@ func (cfs *ClientFactorySimple) ConsulClientFactory() (*api.Client, error) {
 
 		config := cfs.apiConfig(addr)
 
+		createStarted := time.Now()
 		client, err := api.NewClient(config)
 		if err != nil {
+			cfs.observeRequest(createStarted, "client_create", "error")
 			err = fmt.Errorf("create Consul client for %q: %w", addr, err)
 			failures = append(failures, err)
 			cfs.warnf("%v", err)
 			continue
 		}
 
+		probeStarted := time.Now()
 		leader, err := client.Status().Leader()
+		cfs.observeLeaderProbe(probeStarted, leader, err)
 		if err != nil {
 			err = fmt.Errorf("check Consul leader at %q: %w", addr, err)
 			failures = append(failures, err)
@@ -157,6 +167,73 @@ func (cfs *ClientFactorySimple) ConsulClientFactory() (*api.Client, error) {
 		return nil, errors.New("no valid Consul client found")
 	}
 	return nil, &clientProbeAggregateError{failures: failures}
+}
+
+// SetConsulRequestMetricsRecorder installs the optional request-level
+// recorder. It is intentionally additive to the existing ConsulMetricsRecorder
+// seam so external catalog metric implementations remain source-compatible.
+func (cfs *ClientFactorySimple) SetConsulRequestMetricsRecorder(recorder ports.ConsulRequestMetricsRecorder) {
+	if cfs == nil {
+		return
+	}
+	cfs.metricsMu.Lock()
+	cfs.metrics = recorder
+	cfs.metricsMu.Unlock()
+}
+
+// SetMetricSource installs the logical source scope used by request metrics.
+// Only wire-safe source IDs are accepted; an endpoint or token-like value is
+// collapsed to "unknown" and therefore cannot leak through a metric label.
+func (cfs *ClientFactorySimple) SetMetricSource(source string) {
+	if cfs == nil {
+		return
+	}
+	cfs.metricsMu.Lock()
+	cfs.source = normalizeConsulMetricSource(source)
+	cfs.metricsMu.Unlock()
+}
+
+func (cfs *ClientFactorySimple) requestMetrics() (ports.ConsulRequestMetricsRecorder, string) {
+	if cfs == nil {
+		return nil, "unknown"
+	}
+	cfs.metricsMu.RLock()
+	defer cfs.metricsMu.RUnlock()
+	source := cfs.source
+	if source == "" {
+		source = "unknown"
+	}
+	return cfs.metrics, source
+}
+
+func (cfs *ClientFactorySimple) observeLeaderProbe(started time.Time, leader string, err error) {
+	recorder, source := cfs.requestMetrics()
+	if recorder == nil {
+		return
+	}
+	outcome := "success"
+	if err != nil {
+		outcome = classifyConsulRequestError(err, nil)
+	} else if strings.TrimSpace(leader) == "" {
+		outcome = "empty_leader"
+	}
+	recorder.ObserveConsulLeaderProbeDuration(source, outcome, elapsedSince(started))
+}
+
+func (cfs *ClientFactorySimple) observeRequest(started time.Time, operation, outcome string) {
+	recorder, source := cfs.requestMetrics()
+	if recorder == nil {
+		return
+	}
+	recorder.ObserveConsulRequestDuration(source, operation, outcome, elapsedSince(started))
+}
+
+func elapsedSince(started time.Time) time.Duration {
+	duration := time.Since(started)
+	if duration < 0 {
+		return 0
+	}
+	return duration
 }
 
 func normalizeClientOptions(options ConsulClientOptions) ConsulClientOptions {

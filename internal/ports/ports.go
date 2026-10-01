@@ -187,3 +187,20 @@ type ConsulMetricsRecorder interface {
 	// measured by the per-sink event-to-store metric.
 	ObserveConsulWatchToSyncDuration(source, outcome string, d time.Duration)
 }
+
+// ConsulRequestMetricsRecorder is the optional request-observability seam for
+// the Consul source. It is deliberately separate from ConsulMetricsRecorder:
+// existing applications may implement the catalog/snapshot metrics interface
+// without having to grow a new request-level method set. Implementations must
+// receive only a logical source scope and bounded operation/outcome values;
+// endpoint addresses, ACL tokens, and raw error strings are never labels.
+type ConsulRequestMetricsRecorder interface {
+	// ObserveConsulLeaderProbeDuration records a Status().Leader probe. The
+	// outcome is one of the bounded values success, error, empty_leader, or
+	// other source-defined diagnostics selected by the provider.
+	ObserveConsulLeaderProbeDuration(source, outcome string, d time.Duration)
+	// ObserveConsulRequestDuration records one Consul API request such as
+	// catalog_services, health_service, or health_state. Operation and outcome
+	// are bounded by the concrete recorder before they reach Prometheus.
+	ObserveConsulRequestDuration(source, operation, outcome string, d time.Duration)
+}

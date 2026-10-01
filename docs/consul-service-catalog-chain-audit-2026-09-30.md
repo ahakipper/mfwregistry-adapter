@@ -109,6 +109,18 @@ run passed with two samples per operation; its exact report and limits are in
 scratch/write/admin guards the target fails closed or the tagged test skips as
 `NOT VERIFIED`; neither outcome is a production pass.
 
+Stage 10 closes the local request-observability gap. An independent optional
+`ConsulRequestMetricsRecorder` now records cached and configured
+`Status().Leader` probes, client-construction failures, `Catalog.Services`,
+`Health.Service`, and blocking `Health.State` requests, including bounded
+success, error, timeout, and cancellation outcomes. The recorder is wired
+through each source's client factory and monitor without extending the legacy
+`ConsulMetricsRecorder` interface. Prometheus and fake implementations reject
+unsafe source/operation/outcome label values, so endpoint addresses, ACL
+tokens, and raw errors cannot become labels. Focused factory/monitor/source
+isolation tests and race coverage are release gates; deployment-level latency
+and scale qualification remain separate evidence.
+
 The repository release gate was rerun on 2026-10-01 after these changes:
 `go test ./... -count=1`, `go vet ./...`, and `make test-all` all passed. The
 last command covered race tests, blackbox tests, the smoke binary, and tagged
@@ -238,8 +250,11 @@ single-source while embedded configuration supports multiple descriptors.
 - The current Consul evidence does not include a scale run comparable to the
   K8s KWOK run. This remains an accepted scope boundary until Consul scale is
   required.
-- Client leader probing and repeated catalog reads need request/latency metrics
-  before tuning concurrency or refresh intervals.
+- Client leader probing and repeated catalog reads now expose optional
+  source-scoped request/latency metrics for `leader_probe`, `catalog_services`,
+  `health_service`, and blocking `health_state` calls. Endpoint addresses,
+  tokens, and raw errors are not labels; tuning still requires deployment
+  samples rather than synthetic unit numbers.
 
 ## P0–P2 execution plan
 
