@@ -14,7 +14,7 @@ import (
 )
 
 // TestNacosSDKPersistentLifecycle is an opt-in scratch/pre-production gate.
-// Set NACOS_SERVER to one or more comma-separated Nacos 2.x addresses and
+// Set NACOS_SERVER to one or more comma-separated Nacos 3.x addresses and
 // NACOS_NAMESPACE/NACOS_GROUP/NACOS_USERNAME/NACOS_PASSWORD as needed. The
 // default CI suite intentionally skips this test when no target is supplied;
 // a skip is NOT production evidence.

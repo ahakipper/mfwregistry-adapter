@@ -2,7 +2,7 @@
 
 Date: 2026-09-30  
 Branch: `refactor/all`  
-Audited HEAD: `e1ae3b5`
+Initial audited HEAD: `e1ae3b5` (historical baseline; current evidence is listed below)
 
 ## Current execution status — 2026-10-01
 
@@ -20,12 +20,12 @@ Healthy empty state requires three independent confirmations; a provider-owned
 6-hour full-push interval. The timer is single-instance, stopped on recovery
 or shutdown, and guarded by the provider lock plus lifecycle state.
 
-The remaining P1/P2 work is still open: Consul-to-Nacos watch latency
-percentiles and live qualification. Source metrics and Consul connection
-security configuration are implemented; the guarded real qualification entry
-point is present, while live credential/TLS/Nacos3 execution remains open. Blocking
-query edge handling is closed and pushed; this status is still an
-implementation checkpoint, not a production-readiness claim.
+The remaining P1/P2 work is bounded: the local ARM64 Consul-to-Nacos 3
+qualification is now executed and preserved, while watch-to-subscribe stage
+timing, larger samples, and deployment-level credential/TLS evidence remain
+open. Source metrics and Consul connection security configuration are
+implemented. Blocking query edge handling is closed and pushed; this status is
+still a local qualification checkpoint, not a production-readiness claim.
 
 Stage 2 has now closed the first two items in that list. Equal `Reversion`
 updates use the complete Spotter canonical payload, so same-index changes to
@@ -94,21 +94,24 @@ out of logs and metric labels, and the legacy constructor remains compatible.
 The remaining security item is live TLS/ACL qualification against a real
 Consul deployment, not a missing configuration path.
 
-Stage 9 adds the guarded `consul_real` qualification test. With explicit
-Consul and Nacos scratch/write guards it drives real Consul Agent register,
+Stage 9 adds the guarded `consul_real` qualification test and the
+`make test-consul-real-local` lifecycle. The target pins ARM64 Consul 1.22 and
+Nacos 3.2.4 images, creates only labeled disposable containers, preflights and
+reads back Nacos `healthCheckEnabled=false`, drives real Consul Agent register,
 TTL health, deregister, the real provider, the DefaultWorker, and the official
-Nacos SDK, then reports create/delete/recovery P50/P90/P95/P99 and cleanup
-residual status. Without both real endpoints and write guards it skips as
-`NOT VERIFIED`; it does not turn mock or absent-environment results into a
-production pass. The scenario now covers create/update/health-down/
-health-recovery/delete/recovery samples; live execution is still required to
-populate production P50/P90/P95/P99 evidence.
+Nacos SDK, then validates create/update/health-down/health-recovery/delete/
+recovery P50/P90/P95/P99 reports plus cleanup residual status. The 2026-10-01
+run passed with two samples per operation; its exact report and limits are in
+`docs/evidence/consul-nacos3-arm64-real-2026-10-01.md`. Without both local
+scratch/write/admin guards the target fails closed or the tagged test skips as
+`NOT VERIFIED`; neither outcome is a production pass.
 
 The repository release gate was rerun on 2026-10-01 after these changes:
 `go test ./... -count=1`, `go vet ./...`, and `make test-all` all passed. The
 last command covered race tests, blackbox tests, the smoke binary, and tagged
-local E2E tests. These are local correctness gates; they do not replace the
-open real-Consul/Nacos3 percentile and deployment qualification evidence.
+local E2E tests. These are local correctness gates; the local Consul/Nacos3
+scratch evidence is recorded separately and does not replace deployment-level
+TLS/ACL/HA/namespace qualification.
 
 ## Executive assessment
 
@@ -128,11 +131,10 @@ Consul blocking health-state query
   -> Nacos SDK register/deregister or PushAll prune
 ```
 
-The core implementation is reusable, but Consul-to-Nacos production readiness
-is not yet proved. The current test suite proves most local mechanics, one
-loopback fan-out path, and a guarded real qualification entry point; it does
-not yet contain live Consul/Nacos3 latency percentiles or a real deployment
-qualification result.
+The core implementation is reusable. A real local ARM64 Consul/Nacos3
+qualification now proves the provider/worker/official-SDK path for the
+recorded scratch run. Production readiness remains bounded by the latency
+boundary and deployment evidence stated in the evidence report.
 
 There is no `main` branch ref in this checkout. The historical baseline is
 `origin/master`, which also contains an older Consul provider. `refactor/all`
@@ -193,18 +195,19 @@ Nacos update is emitted.
 
 #### P1-4 — No Consul Watch → Nacos Watch latency measurement
 
-The guarded `consul_real` gate now records source mutation acknowledgement to
+The guarded `consul_real` gate records source mutation start to
 Nacos catalog visibility for create, update, health-down, health-recovery,
-delete, and recovery, with P50/P90/P95/P99 output. A live run is still
-required; the local environment has no Consul/Nacos3 target, so no production
-percentile result is claimed.
+delete, and recovery, with P50/P90/P95/P99 output. The local ARM64 run is
+preserved, but its two samples per operation are diagnostic evidence rather
+than a production percentile/SLO claim; the gate does not timestamp each
+internal Watch/queue/Subscribe stage.
 
 #### P1-5 — Real Consul + Nacos 3 qualification is absent
 
-The repository now contains a guarded real Consul plus Nacos3 SDK gate, but
-the current local run is `NOT VERIFIED` because no real endpoints and scratch
-write guards are configured. A guarded live run with preserved report and
-cleanup evidence is still required for the final release claim.
+The repository contains a guarded real Consul plus Nacos3 SDK gate, and the
+local ARM64 scratch run passed with preserved report and cleanup evidence.
+External production deployment qualification (TLS/ACL/HA/namespace policy) is
+still outside this Spotter gate.
 
 #### P1-6 — Multiple logical Consul sources are not a single-process model yet
 

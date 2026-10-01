@@ -1,5 +1,5 @@
-//go:build nacos_real || nacos_sdk_eval
-// +build nacos_real nacos_sdk_eval
+//go:build nacos_real || nacos_sdk_eval || consul_real
+// +build nacos_real nacos_sdk_eval consul_real
 
 package e2e
 

@@ -250,6 +250,25 @@ go test -v -vet=off -tags=consul_real ./tests/e2e/... \
   -run '^TestConsulRealToNacos3Qualification$' -count=1
 ```
 
+For a disposable local ARM64 qualification, prefer the Makefile-owned
+lifecycle. It pins the Consul 1.22.0 and Nacos 3.2.4-slim image digests,
+creates uniquely labelled loopback containers, performs readiness and
+`healthCheckEnabled=false` preflight checks, runs the tagged gate, validates
+all six operation reports, and removes only containers carrying its ownership
+labels:
+
+```bash
+make test-consul-real-config       # offline parser and lifecycle failure matrix
+make test-consul-real-local        # default: two real samples per operation
+CONSUL_REAL_LOCAL_SAMPLES=5 make test-consul-real-local
+```
+
+Artifacts are written to `build/consul-real/<run-id>/` and include the redacted
+JSON report, image architecture/digest records, test output, container logs,
+cleanup status, and final exit metadata. The local target refuses preconfigured
+remote `CONSUL_SERVER`/`NACOS_SERVER` values and does not participate in
+`make test-all`.
+
 Both real endpoints and both write guards are required. `CONSUL_SERVER` is a
 comma-separated Consul HTTP(S) endpoint list (all entries must use the same
 scheme) and must not contain credentials, paths, or query parameters.
@@ -263,7 +282,7 @@ isolated Consul/Nacos scratch namespace and ACL policy.
 CONSUL_SERVER='https://consul-a:8501,https://consul-b:8501' \
 CONSUL_REAL_SCRATCH=1 CONSUL_REAL_ALLOW_WRITE=1 \
 NACOS_SERVER='https://nacos-a:8848,https://nacos-b:8848' \
-NACOS_REAL_SCRATCH=1 NACOS_REAL_ALLOW_WRITE=1 \
+NACOS_REAL_SCRATCH=1 NACOS_REAL_ALLOW_WRITE=1 NACOS_REAL_ALLOW_ADMIN=1 \
 CONSUL_SOURCE_ID='consul-scratch' CONSUL_REAL_SAMPLES=5 \
   go test -v -vet=off -tags=consul_real ./tests/e2e/... \
   -run '^TestConsulRealToNacos3Qualification$' -count=1

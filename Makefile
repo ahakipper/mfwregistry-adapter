@@ -167,6 +167,28 @@ test-observe-ladder:
 
 .PHONY: test-observe-ladder
 
+# Guarded local Consul -> Spotter -> Nacos 3 qualification. This target owns
+# only two disposable linux/arm64 containers, pins both image digests, refuses
+# preconfigured remote endpoints and occupied ports, and leaves the JSON
+# report/logs under build/consul-real/<run-id> for later comparison. It is
+# intentionally separate from test-all because it performs real writes and
+# takes up to the configured startup timeout plus the E2E run.
+#
+#   make test-consul-real-local
+#   CONSUL_REAL_LOCAL_SAMPLES=5 make test-consul-real-local
+#   make test-consul-real-config
+test-consul-real-local:
+	./scripts/consul-real-local.sh
+
+# Offline parser/percentile and lifecycle-contract checks. No Docker daemon,
+# Consul, Nacos, or network write is contacted by this target.
+test-consul-real-config:
+	go test -tags=consul_real ./tests/e2e -run '^Test(ParseConsulRealConfig|ParseNacosRealConfig|Percentile)' -count=1
+	bash -n scripts/consul-real-local.sh scripts/consul-real-fake.sh scripts/consul-real-lifecycle-test.sh
+	bash scripts/consul-real-lifecycle-test.sh
+
+.PHONY: test-consul-real-local test-consul-real-config
+
 # Aggregate: everything, in tier order. Budget ~3 min on a dev machine.
 test-all: test-unit test-blackbox test-smoke test-e2e
 
