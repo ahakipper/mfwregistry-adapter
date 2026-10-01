@@ -181,8 +181,9 @@ type ConsulMetricsRecorder interface {
 	// advancement. Outcome is "pending" until the confirmation threshold is
 	// reached, then "confirmed".
 	IncConsulHealthyEmptyConfirmation(source, outcome string)
-	// ObserveConsulWatchToSyncDuration records a duration only when the source
-	// supplies the actual blocking-watch return timestamp. Callers must not
-	// synthesize an origin from handler execution time.
+	// ObserveConsulWatchToSyncDuration records source watch-return to provider
+	// sync completion. Outcomes are bounded source states such as sync_ok or
+	// sync_error; this is not the Nacos SDK acknowledgement outcome, which is
+	// measured by the per-sink event-to-store metric.
 	ObserveConsulWatchToSyncDuration(source, outcome string, d time.Duration)
 }

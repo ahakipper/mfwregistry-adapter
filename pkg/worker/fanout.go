@@ -572,10 +572,14 @@ func (s *recordingSink) Close() error {
 }
 
 func (s *recordingSink) PushAllOperation(op ports.RetryOperation) error {
+	var err error
 	if metadata, ok := s.inner.(ports.FullOperationSink); ok {
-		return metadata.PushAllOperation(op)
+		err = metadata.PushAllOperation(op)
+	} else {
+		err = s.inner.PushAll(op.Trigger, op.Instances)
 	}
-	return s.inner.PushAll(op.Trigger, op.Instances)
+	s.observe(op.Trigger, err)
+	return err
 }
 
 // observe records one e2e observation for this sink with the outcome

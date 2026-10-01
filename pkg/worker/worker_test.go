@@ -40,6 +40,33 @@ func (s *fullOperationFailingSink) PushAllOperation(operation ports.RetryOperati
 	return s.err
 }
 
+// TestWorkerPreservesWatchOriginTriggerToSink pins the worker half of the
+// Consul watch-origin timing boundary. Providers own the origin timestamp;
+// Worker must pass it unchanged to the sink/recording decorator so the
+// measured latency starts at the actual source watch return.
+func TestWorkerPreservesWatchOriginTriggerToSink(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sink := &fakes.FakeInstanceSink{}
+	w, err := NewResourceWorker(ctx, sink, &fakes.FakeLogger{}, fakes.NewFakeMetricsRecorder())
+	if err != nil {
+		t.Fatalf("NewResourceWorker() error = %v", err)
+	}
+	const watchOrigin = int64(1_700_000_000_123_456_789)
+	w.Handle(&Event{
+		Trigger: watchOrigin,
+		Data:    []*instance.Instance{{InstanceId: "consul-watch-origin"}},
+		Operate: OperateTypeSync,
+	})
+	calls := sink.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("sink Push calls = %d, want one", len(calls))
+	}
+	if calls[0].TriggerTime != watchOrigin {
+		t.Fatalf("sink trigger = %d, want watch origin %d", calls[0].TriggerTime, watchOrigin)
+	}
+}
+
 func TestWorkerSyncAllPreservesScopeAndEmptyConfirmation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

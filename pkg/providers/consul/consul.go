@@ -305,7 +305,12 @@ func newConsulProvider(ctx context.Context, worker worker.Worker, pushInterval i
 		AppendTimestampedInstanceChangeHandler(TimestampedInstanceChangeHandler)
 	}); ok {
 		timestampedMonitor.AppendTimestampedInstanceChangeHandler(func(watchAt time.Time) error {
-			err := consulProvider.syncInstance()
+			// Preserve the real blocking-watch return instant through the
+			// provider event.  The worker's recording sink reconstructs
+			// Event.Trigger as the source origin, so replacing it with a fresh
+			// time.Now here would measure only provider/worker work and hide
+			// watch-to-sink latency.
+			err := consulProvider.syncInstanceAt(watchAt)
 			consulProvider.recordWatchToSync(watchAt, err)
 			return err
 		})
@@ -331,9 +336,9 @@ func (c *consul) recordWatchToSync(watchAt time.Time, syncErr error) {
 	if duration < 0 {
 		duration = 0
 	}
-	outcome := "ok"
+	outcome := "sync_ok"
 	if syncErr != nil {
-		outcome = "error"
+		outcome = "sync_error"
 	}
 	c.Lock()
 	recorder := c.consulMetricsLocked()
@@ -483,6 +488,15 @@ func (c *consul) scheduleEmptyRetryLocked() {
 // Then compare the new instances list with the instances we cached before so that we can generate the instances which are
 // added, updated and deleted.
 func (c *consul) syncInstance() (err error) {
+	return c.syncInstanceAt(time.Time{})
+}
+
+// syncInstanceAt is the timestamp-aware watch path. A non-zero origin is the
+// instant at which Consul's blocking health query returned a changed index;
+// it is carried unchanged into incremental events and a recovered full push.
+// The zero-origin wrapper above intentionally retains the legacy/manual
+// behavior, where each emitted event uses its local time.Now timestamp.
+func (c *consul) syncInstanceAt(origin time.Time) (err error) {
 	c.Lock()
 	recovered := false
 	if c.stopped {
@@ -557,12 +571,12 @@ func (c *consul) syncInstance() (err error) {
 	// their full-operation gate and invoke Revalidate, which reads this
 	// provider snapshot and therefore needs c.Lock; dispatching under the lock
 	// would invert that order during an incremental/full-push race.
-	c.EventsSync(addEvents, updateEvents, deleteEvents)
+	c.eventsSyncAt(addEvents, updateEvents, deleteEvents, origin)
 	if recovered {
 		// An incremental recovery with the same revision can be rejected by
 		// the sink's delete tombstone. Emit a trusted complete snapshot after
 		// releasing the provider lock so the sink can validate and heal it.
-		c.emitSyncAll()
+		c.emitSyncAllAt(origin)
 	}
 	return err
 }
@@ -783,25 +797,39 @@ func (c *consul) VerifyInstance(ins *sv.Instance) error {
 
 // EventsSync sync the event to the finder
 func (c *consul) EventsSync(add, update, del []*sv.Instance) {
+	c.eventsSyncAt(add, update, del, time.Time{})
+}
+
+// eventsSyncAt emits incremental events using origin when it represents a
+// real source watch return. A zero origin deliberately falls back to the
+// legacy per-event time.Now behavior; it must not fabricate a source time for
+// periodic/manual callers.
+func (c *consul) eventsSyncAt(add, update, del []*sv.Instance, origin time.Time) {
 	// time.Now per slice so each event carries its own emission instant.
 	// UnixNano, not Unix: dsca-2 §3 Option (b) widens Trigger to
 	// ns-since-epoch at every producer site (the consul sites are REQUIRED,
 	// not optional: the sink-side e2e decorator cannot tell which provider
 	// emitted an Event, and a seconds-valued Trigger would observe ~57
 	// years — dsca-2 §6 row 2).
+	trigger := func() int64 {
+		if !origin.IsZero() {
+			return origin.UnixNano()
+		}
+		return time.Now().UnixNano()
+	}
 	if len(add) > 0 {
 		for _, ins := range add {
-			c.eventSync(ins, time.Now().UnixNano())
+			c.eventSync(ins, trigger())
 		}
 	}
 	if len(update) > 0 {
 		for _, ins := range update {
-			c.eventSync(ins, time.Now().UnixNano())
+			c.eventSync(ins, trigger())
 		}
 	}
 	if len(del) > 0 {
 		for _, ins := range del {
-			c.eventSync(ins, time.Now().UnixNano())
+			c.eventSync(ins, trigger())
 		}
 	}
 }
@@ -906,6 +934,13 @@ func (c *consul) ProcessIntervalFullPush() {
 // because ordered sinks hold their full-operation gate while Revalidate reads
 // this provider snapshot.
 func (c *consul) emitSyncAll() {
+	c.emitSyncAllAt(time.Time{})
+}
+
+// emitSyncAllAt is the timestamp-aware full-push path used only when a
+// watch-triggered sync recovered from a previously confirmed empty snapshot.
+// Periodic/manual callers use emitSyncAll above and retain tick-time origins.
+func (c *consul) emitSyncAllAt(origin time.Time) {
 	all, generation, valid, emptyConfirmed := c.snapshotForFullPush()
 	if !valid {
 		return
@@ -915,8 +950,12 @@ func (c *consul) emitSyncAll() {
 		scope = providers.ProviderEcs
 	}
 	// Tick-time origin + ns unit (dsca-2 §3 Option (b), §6 origin semantics).
+	trigger := time.Now().UnixNano()
+	if !origin.IsZero() {
+		trigger = origin.UnixNano()
+	}
 	c.worker.Handle(&worker.Event{
-		Trigger:        time.Now().UnixNano(),
+		Trigger:        trigger,
 		Data:           all,
 		Operate:        worker.OperateTypeSyncAll,
 		Scope:          scope,

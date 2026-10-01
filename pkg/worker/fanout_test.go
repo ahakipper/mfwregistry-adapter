@@ -1152,6 +1152,35 @@ func TestFanoutDecoratorCoversRetryPathThroughPushTo(t *testing.T) {
 	}
 }
 
+func TestFanoutDecoratorObservesFullOperationSinkAcknowledgement(t *testing.T) {
+	recorder := fakes.NewFakeMetricsRecorder()
+	inner := &fullOperationRecordingSink{FakeInstanceSink: &fakes.FakeInstanceSink{}}
+	fanout, err := NewFanoutSinkWithMetrics(nil, recorder, NamedSink{Name: stubSinkNacos, Sink: inner})
+	if err != nil {
+		t.Fatalf("NewFanoutSinkWithMetrics() error = %v", err)
+	}
+	trigger := time.Now().Add(-500 * time.Millisecond).UnixNano()
+	err = fanout.PushAllOperation(ports.RetryOperation{
+		Sink:      stubSinkNacos,
+		Operate:   ports.OperateTypeSyncAll,
+		Trigger:   trigger,
+		Instances: []*instance.Instance{{InstanceId: "pod-full-operation"}},
+	})
+	if err != nil {
+		t.Fatalf("PushAllOperation() error = %v", err)
+	}
+	obs := recorder.EventToStoreObservations()
+	if len(obs) != 1 || obs[0].Sink != stubSinkNacos || obs[0].Outcome != "ok" {
+		t.Fatalf("full-operation observations = %#v, want one successful Nacos observation", obs)
+	}
+	if obs[0].Duration < 400*time.Millisecond {
+		t.Fatalf("full-operation duration = %v, want to include the source trigger age", obs[0].Duration)
+	}
+	if len(inner.operations) != 1 || inner.operations[0].Trigger != trigger {
+		t.Fatalf("full-operation trigger = %#v, want %d", inner.operations, trigger)
+	}
+}
+
 // TestFanoutDecoratorPassesTriggerThroughUnchanged pins the pass-through:
 // the decorator must not mangle the trigger the inner sink receives (the
 // retry queue's origin carry and every pass-through pin depends on it).

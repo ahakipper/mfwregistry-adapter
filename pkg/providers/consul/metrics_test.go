@@ -135,10 +135,10 @@ func TestConsulWatchToSyncMetricsUseRealOriginAndOutcome(t *testing.T) {
 	if len(observations) != 2 {
 		t.Fatalf("watch-to-sync observations = %#v, want 2", observations)
 	}
-	if observations[0].Source != "catalog-a" || observations[0].Outcome != "ok" || observations[0].Duration <= 0 {
+	if observations[0].Source != "catalog-a" || observations[0].Outcome != "sync_ok" || observations[0].Duration <= 0 {
 		t.Fatalf("success watch-to-sync observation = %#v", observations[0])
 	}
-	if observations[1].Outcome != "error" || observations[1].Duration <= 0 {
+	if observations[1].Outcome != "sync_error" || observations[1].Duration <= 0 {
 		t.Fatalf("error watch-to-sync observation = %#v", observations[1])
 	}
 	c.recordWatchToSync(time.Time{}, nil)

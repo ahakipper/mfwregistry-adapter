@@ -83,10 +83,12 @@ embedded configuration can provide multiple descriptors.
 Stage 7 adds an optional `ConsulMetricsRecorder` seam and Prometheus/Fake
 implementations for catalog-read duration, conversion skips, source errors,
 healthy-empty confirmation advancements, and the real blocking-watch-return to
-sync-completion duration. Labels use only normalized logical source IDs and
+sync-completion duration (`sync_ok`/`sync_error`). Labels use only normalized logical source IDs and
 bounded outcomes; legacy/manual handlers without a watch origin emit no timing
-sample. End-to-end latency percentiles from worker admission through Nacos SDK
-acknowledgement and Subscribe visibility remain open.
+sample. The same non-zero origin is now carried into provider `Event.Trigger`
+and the per-sink event-to-store metric, including full-operation replay, so
+worker-to-Nacos SDK acknowledgement is observable. Nacos Subscribe visibility
+and a live per-stage percentile report remain open.
 
 Stage 8 adds source-scoped Consul Token/TokenFile, TLS, datacenter, and
 namespace options. Every endpoint receives a fresh API config; secrets stay
@@ -196,13 +198,15 @@ Nacos update is emitted.
 #### P1-4 — Watch-to-Nacos latency measurement is only partially staged
 
 The provider now records an accurately timestamped Consul blocking-watch return
-to sync-completion metric. The guarded `consul_real` gate still records source
-mutation start to Nacos catalog visibility for create, update, health-down,
-health-recovery, delete, and recovery, with P50/P90/P95/P99 output. The local
-ARM64 run is preserved, but its two samples per operation are diagnostic
-evidence rather than a production percentile/SLO claim. Worker admission,
-Nacos SDK acknowledgement, and Nacos Subscribe visibility remain separate
-observation stages and are not yet measured by the real gate.
+to sync-completion metric and carries the same origin through incremental and
+recovery-full `Event.Trigger` values. The worker's per-sink event-to-store
+metric therefore measures the origin through Nacos SDK acknowledgement,
+including the `PushAllOperation` path. The guarded `consul_real` gate still
+records source mutation start to Nacos catalog visibility for create, update,
+health-down, health-recovery, delete, and recovery, with P50/P90/P95/P99
+output. The local ARM64 run is preserved, but its two samples per operation are
+diagnostic evidence rather than a production percentile/SLO claim. Nacos
+Subscribe visibility and a live per-stage percentile report remain open.
 
 #### P1-5 — Real Consul + Nacos 3 qualification is absent
 

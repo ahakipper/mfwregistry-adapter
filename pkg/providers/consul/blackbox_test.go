@@ -988,6 +988,27 @@ func TestConsulEventsSyncEmitsNsEpochTrigger(t *testing.T) {
 	}
 }
 
+func TestConsulEventsSyncAtPreservesWatchOrigin(t *testing.T) {
+	server := consulmock.Start()
+	defer server.Close()
+
+	w := &fakeWorker{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := newBlackboxConsulProvider(t, server, w, 0, ctx)
+	origin := time.Unix(1234, 5678)
+	ins := &sv.Instance{InstanceId: "srv-watch-origin", Status: 1, Reversion: 9}
+
+	c.eventsSyncAt([]*sv.Instance{ins}, nil, nil, origin)
+	events := w.handleSnapshot()
+	if len(events) != 1 {
+		t.Fatalf("worker.Handle calls = %d, want 1; events = %#v", len(events), events)
+	}
+	if events[0].Trigger != origin.UnixNano() {
+		t.Fatalf("event trigger = %d, want watch origin %d", events[0].Trigger, origin.UnixNano())
+	}
+}
+
 // -----------------------------------------------------------------------------
 // The nacos-authoritative reconcile compare (dsca-3 §3.3 / §3.5)
 // -----------------------------------------------------------------------------
