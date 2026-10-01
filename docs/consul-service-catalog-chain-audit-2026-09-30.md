@@ -64,18 +64,17 @@ delay instead of attributing the entire tail to one component.
 The first freshness-remediation scale run confirms the 15-second tail was
 removed: one instance reached Catalog in about 169ms and Subscribe in about
 580ms; 100 instances reached Catalog P99 in about 690ms and Subscribe P99 in
-about 683ms. The 1000-instance gate did not qualify because the local Nacos 3
-scratch server returned `429 Too Many Requests` under the concurrent write
-wave; Consul still reported all 1000 source instances. This is now a Nacos
-write-rate/connection-capacity finding, separate from the Watch freshness
-path. The scale fixture also extends Consul TTL to one hour so source health
-expiry cannot contaminate a long Nacos observation.
+about 683ms. The 1000-instance gate did not qualify because the local scratch
+run surfaced the Consul HTTP `429 Too Many Requests` response under the
+concurrent source/write wave; Consul still reported all 1000 source instances.
+This is a Consul source connection-capacity finding, separate from the Watch
+freshness path. The scale fixture also extends Consul TTL to one hour so source
+health expiry cannot contaminate a long Nacos observation.
 
 An A/B rerun with Nacos Sink write concurrency reduced from 8 to 2 still
-returned the same local `429 Too Many Requests` response and observed only
-948/1000 instances. Lowering the Spotter worker concurrency alone therefore
-does not remove this local Nacos/Colima connection-rate limit; it needs a
-separate Nacos transport/server-capacity investigation.
+returned the same local Consul HTTP `429 Too Many Requests` response and
+observed only 948/1000 instances. Lowering the Spotter worker concurrency alone
+therefore does not remove the source-side connection limit.
 
 The local Consul fixture now raises `limits.http_max_conns_per_client` to
 10000. With that limit, the 429 disappeared and the 1000-instance diagnostic

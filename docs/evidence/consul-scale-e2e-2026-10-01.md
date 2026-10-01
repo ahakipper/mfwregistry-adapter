@@ -46,12 +46,12 @@ The completed scales were:
 
 The 1000-instance freshness rerun was **NOT QUALIFIED**: Consul reported
 `source_count=1000`, while Nacos Catalog reached 961/1000 before the 5-minute
-observation deadline. The run emitted Nacos `429 Too Many Requests` responses
-with the message `too many concurrent connections`. It is evidence of the
-local Nacos write/connection capacity limit, not a Watch delay. No percentile
-is claimed for 1000 or 10000 in this current run. An A/B rerun with the Nacos
-Sink write concurrency reduced from 8 to 2 still produced the same 429 and
-reached 948/1000, so lowering Spotter write concurrency alone is insufficient.
+observation deadline. The run emitted the Consul HTTP `429 Too Many Requests`
+response with the message `too many concurrent connections`. It is evidence of
+the Consul source connection limit, not a Watch delay. No percentile is claimed
+for 1000 or 10000 in this current run. An A/B rerun with the Nacos Sink write
+concurrency reduced from 8 to 2 still produced the same Consul 429 and reached
+948/1000, so lowering Spotter write concurrency alone is insufficient.
 The 10000 gate was not started after the 1000 gate failed; it remains
 NOT QUALIFIED rather than receiving an inferred percentile.
 

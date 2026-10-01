@@ -40,6 +40,7 @@ cleanup_status=passed
 residual_unknown=false
 qualification_status=failed
 finished=false
+consul_http_429=false
 
 die() {
   if [[ $# -gt 1 && "$1" =~ ^[0-9]+$ ]]; then
@@ -121,6 +122,7 @@ finish() {
     printf 'cleanup_status=%s\n' "$cleanup_status"
     printf 'residual_unknown=%s\n' "$residual_unknown"
     printf 'final_exit_code=%s\n' "$run_rc"
+    printf 'consul_http_429=%s\n' "$consul_http_429"
     printf 'artifact=%s\n' "$artifact"
   } >"$artifact/exit-metadata"
   echo "CONSUL_REAL_LOCAL_ARTIFACTS=$artifact"
@@ -194,6 +196,9 @@ CONSUL_SERVER="http://127.0.0.1:$consul_port" CONSUL_REAL_SCRATCH=1 CONSUL_REAL_
 go_rc=${PIPESTATUS[0]}
 set -e
 run_rc=$go_rc
+if grep -Eqi '429 Too Many Requests|too many concurrent connections' "$artifact/test.log"; then
+  consul_http_429=true
+fi
 report_count=$(grep -c "$report_marker report=" "$artifact/test.log" || true)
 if [[ "$report_count" -ne 1 ]]; then
   qualification_status=failed

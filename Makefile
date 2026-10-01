@@ -185,8 +185,11 @@ test-consul-real-local:
 # mutation-start -> official SDK Subscribe sample; the report contains P80,
 # P90 and P99 per scale plus four stage summaries. CONSUL_SCALE_PUSH_CONCURRENCY
 # allows a controlled Nacos-capacity A/B without changing the Consul Watch
-# freshness path. This is a real-write, potentially long-running gate and is
-# deliberately excluded from test-all.
+# freshness path. The disposable Consul fixture explicitly sets
+# limits.http_max_conns_per_client=10000; production Consul limits are not
+# changed. The observation deadline is fixed at 5s by the E2E parser. This is
+# a real-write, potentially long-running gate and is deliberately excluded
+# from test-all.
 CONSUL_SCALE_TIMEOUT ?= 30m
 CONSUL_SCALE_LIST ?= 1,100,1000,10000
 CONSUL_SCALE_RUNS ?= 1
@@ -212,6 +215,7 @@ test-consul-real-scale:
 test-consul-real-config:
 	go test -tags=consul_real ./tests/e2e -run '^Test(ParseConsulRealConfig|ParseNacosRealConfig|Percentile)' -count=1
 	bash -n scripts/consul-real-local.sh scripts/consul-real-fake.sh scripts/consul-real-lifecycle-test.sh
+	grep -q 'http_max_conns_per_client = 10000' scripts/consul-real-limits.hcl
 	bash scripts/consul-real-lifecycle-test.sh
 
 .PHONY: test-consul-real-local test-consul-real-scale test-consul-real-config

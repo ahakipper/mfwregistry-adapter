@@ -42,3 +42,11 @@ Consul watch freshness is a correctness requirement. The watch path must
 
 An implementation that waits a fixed seconds-scale interval after a changed
 Consul index is a release-blocking defect, even if it reduces request volume.
+
+Consul HTTP `429 Too Many Requests` is a source-side capacity signal. The
+scale harness must classify and preserve it as a Consul source failure; it
+must never be hidden by adding delay to the Watch path or reported as a Nacos
+data inconsistency without identifying the responding endpoint. The local
+ARM64 fixture uses `limits.http_max_conns_per_client = 10000` only to separate
+the source connection-capacity failure from Spotter latency. Production
+Consul limits remain deployment-owned and must be observed and tuned there.
