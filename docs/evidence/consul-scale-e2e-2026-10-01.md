@@ -69,7 +69,7 @@ The strict 5-second rerun produced the following layer evidence for 1000:
 | Spotter Provider events | 1000/1000 | — | PASS |
 | Nacos write acknowledgement | 1000/1000 | — | PASS |
 | Official SDK Subscribe | 1000/1000 | 1.25s | PASS |
-| Nacos Catalog query | 970/1000 | incomplete | NOT QUALIFIED |
+| Nacos Catalog query | 970/1000 (run-dependent) | incomplete | NOT QUALIFIED |
 
 The missing Catalog entries were not missing from Provider or write
 acknowledgement, and Subscribe observed the complete set. This isolates the
@@ -84,7 +84,7 @@ same persistent service, the observed result was:
 Provider:             1000/1000
 Nacos write ack:      1000/1000
 SDK Subscribe:        1000/1000
-SDK gRPC query:       partial (956/1000 in this run)
+SDK gRPC query:       partial (956/1000 in the final diagnostic run)
 Nacos 3 OpenAPI:      HTTP 200, code=0, data=[]
 ```
 
