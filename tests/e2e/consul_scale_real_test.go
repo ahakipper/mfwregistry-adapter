@@ -45,6 +45,8 @@ type consulScaleResult struct {
 	Subscribe              consulScaleLatencySummary `json:"subscribe"`
 	CatalogComplete        bool                      `json:"catalog_complete"`
 	SubscribeComplete      bool                      `json:"subscribe_complete"`
+	CatalogStageComplete   bool                      `json:"catalog_stage_complete"`
+	SubscribeStageComplete bool                      `json:"subscribe_stage_complete"`
 	StageSamplesComplete   bool                      `json:"stage_samples_complete"`
 }
 
@@ -52,6 +54,7 @@ type consulScaleReport struct {
 	Boundary              string              `json:"latency_boundary"`
 	PushConcurrency       int                 `json:"push_concurrency"`
 	ObservationDeadlineMS int                 `json:"observation_deadline_ms"`
+	QueryGate             bool                `json:"query_gate"`
 	Scales                []consulScaleResult `json:"scales"`
 	LedgerComplete        bool                `json:"ledger_complete"`
 	CanonicalEquality     string              `json:"canonical_equality"`
@@ -164,23 +167,38 @@ func (w *scaleRecordingWorker) stageSamples(ids []string, catalogAt, subscribeAt
 		NacosAckToCatalog:      make([]time.Duration, 0, len(ids)),
 		NacosAckToSubscribe:    make([]time.Duration, 0, len(ids)),
 	}
-	complete := true
+	watchComplete := true
+	providerAckComplete := true
+	catalogComplete := true
+	subscribeComplete := true
 	for _, id := range ids {
 		watch, watchOK := w.watchAt[id]
 		provider, providerOK := w.providerAt[id]
 		ack, ackOK := w.writeAckAt[id]
 		catalog, catalogOK := catalogAt[id]
 		subscribe, subscribeOK := subscribeAt[id]
-		if !watchOK || !providerOK || !ackOK || !catalogOK || !subscribeOK {
-			complete = false
-			continue
+		if watchOK && providerOK {
+			result.WatchToProviderSync = append(result.WatchToProviderSync, provider.Sub(watch))
+		} else {
+			watchComplete = false
 		}
-		result.WatchToProviderSync = append(result.WatchToProviderSync, provider.Sub(watch))
-		result.ProviderSyncToNacosAck = append(result.ProviderSyncToNacosAck, ack.Sub(provider))
-		result.NacosAckToCatalog = append(result.NacosAckToCatalog, catalog.Sub(ack))
-		result.NacosAckToSubscribe = append(result.NacosAckToSubscribe, subscribe.Sub(ack))
+		if providerOK && ackOK {
+			result.ProviderSyncToNacosAck = append(result.ProviderSyncToNacosAck, ack.Sub(provider))
+		} else {
+			providerAckComplete = false
+		}
+		if ackOK && catalogOK {
+			result.NacosAckToCatalog = append(result.NacosAckToCatalog, catalog.Sub(ack))
+		} else {
+			catalogComplete = false
+		}
+		if ackOK && subscribeOK {
+			result.NacosAckToSubscribe = append(result.NacosAckToSubscribe, subscribe.Sub(ack))
+		} else {
+			subscribeComplete = false
+		}
 	}
-	return result, complete
+	return result, watchComplete && providerAckComplete && catalogComplete && subscribeComplete
 }
 
 func TestConsulRealScaleQualification(t *testing.T) {
@@ -206,6 +224,7 @@ func TestConsulRealScaleQualification(t *testing.T) {
 	runs := parseScaleRuns(t, os.Getenv("CONSUL_REAL_SCALE_RUNS"))
 	observeTimeout := parseScaleObserveTimeout(t, os.Getenv("CONSUL_REAL_SCALE_OBSERVE_TIMEOUT"))
 	pushConcurrency := parseScalePushConcurrency(t, os.Getenv("CONSUL_REAL_SCALE_PUSH_CONCURRENCY"))
+	queryGate := parseScaleQueryGate(t, os.Getenv("CONSUL_REAL_SCALE_QUERY_GATE"))
 	nacos.SetPushConcurrency(pushConcurrency)
 	defer nacos.SetPushConcurrency(nacos.DefaultPushConcurrency)
 	if err := nacos.CheckReadinessWithConfig(nacosCfg.client, nil); err != nil {
@@ -280,6 +299,7 @@ func TestConsulRealScaleQualification(t *testing.T) {
 		Boundary:              "Consul instance mutation start to Nacos catalog/official SDK Subscribe visibility",
 		PushConcurrency:       pushConcurrency,
 		ObservationDeadlineMS: int(observeTimeout / time.Millisecond),
+		QueryGate:             queryGate,
 		LedgerComplete:        true,
 		CanonicalEquality:     "wire_predicate_passed",
 		CleanupStatus:         "not_needed",
@@ -309,8 +329,10 @@ func TestConsulRealScaleQualification(t *testing.T) {
 					cleanupErrs = append(cleanupErrs, "unsubscribe:"+service)
 				}
 			}
-			if _, err := waitForNacosCatalogEmpty(verifyClient, service, source.ID, observeTimeout); err != nil {
-				cleanupErrs = append(cleanupErrs, "catalog_residual:"+service)
+			if queryGate {
+				if _, err := waitForNacosCatalogEmpty(verifyClient, service, source.ID, observeTimeout); err != nil {
+					cleanupErrs = append(cleanupErrs, "catalog_residual:"+service)
+				}
 			}
 		}
 		report.CleanupStatus = "passed"
@@ -410,26 +432,33 @@ func TestConsulRealScaleQualification(t *testing.T) {
 			catalogErr, subscribeErr := catalogResult.err, subscribeResult.err
 			catalogComplete := catalogErr == nil && len(catalogVisibility.Samples) == size
 			subscribeComplete := subscribeErr == nil && len(subscribeVisibility.Samples) == size
-			if !catalogComplete || !subscribeComplete {
+			stages, stageComplete := recordingWorker.stageSamples(ids, catalogVisibility.ObservedAt, subscribeVisibility.ObservedAt)
+			catalogStageComplete := len(stages.NacosAckToCatalog) == size
+			subscribeStageComplete := len(stages.NacosAckToSubscribe) == size
+			if !subscribeComplete || (queryGate && !catalogComplete) {
 				logScaleFailureDiagnostics(t, consulClient, sink, recordingWorker, verifyConfig.ServerURLs[0], verifyConfig.NamespaceID, group, service, source.ID, ids, catalogVisibility, subscribeVisibility, batchBefore, fullBefore)
 				report.Scales = append(report.Scales, consulScaleResult{
-					Instances:         size,
-					Runs:              runs,
-					Catalog:           summarizeConsulScale(catalogVisibility.Samples),
-					Subscribe:         summarizeConsulScale(subscribeVisibility.Samples),
-					CatalogComplete:   catalogComplete,
-					SubscribeComplete: subscribeComplete,
+					Instances:              size,
+					Runs:                   runs,
+					Catalog:                summarizeConsulScale(catalogVisibility.Samples),
+					Subscribe:              summarizeConsulScale(subscribeVisibility.Samples),
+					CatalogComplete:        catalogComplete,
+					SubscribeComplete:      subscribeComplete,
+					CatalogStageComplete:   catalogStageComplete,
+					SubscribeStageComplete: subscribeStageComplete,
+					WatchToProviderSync:    summarizeConsulScale(stages.WatchToProviderSync),
+					ProviderSyncToNacosAck: summarizeConsulScale(stages.ProviderSyncToNacosAck),
+					NacosAckToCatalog:      summarizeConsulScale(stages.NacosAckToCatalog),
+					NacosAckToSubscribe:    summarizeConsulScale(stages.NacosAckToSubscribe),
+					StageSamplesComplete:   stageComplete,
 				})
 				report.LedgerComplete = false
 				report.CanonicalEquality = "not_verified"
 				report.FailedScale = size
-				switch {
-				case !catalogComplete && !subscribeComplete:
-					report.FailureKind = "catalog_and_subscribe_visibility_timeout"
-				case !catalogComplete:
-					report.FailureKind = "catalog_visibility_timeout"
-				default:
+				if !subscribeComplete {
 					report.FailureKind = "subscribe_visibility_timeout"
+				} else {
+					report.FailureKind = "catalog_visibility_timeout"
 				}
 				if catalogErr != nil {
 					t.Errorf("catalog scale=%d run=%d: %v", size, run, catalogErr)
@@ -439,21 +468,25 @@ func TestConsulRealScaleQualification(t *testing.T) {
 				}
 				return
 			}
-			stages, stageComplete := recordingWorker.stageSamples(ids, catalogVisibility.ObservedAt, subscribeVisibility.ObservedAt)
+			if !catalogComplete {
+				t.Logf("CONSUL_REAL_SCALE query plane not qualified at scale=%d run=%d; Subscribe is complete and query_gate is off", size, run)
+			}
 			report.Scales = append(report.Scales, consulScaleResult{
 				Instances:              size,
 				Runs:                   runs,
 				Catalog:                summarizeConsulScale(catalogVisibility.Samples),
 				Subscribe:              summarizeConsulScale(subscribeVisibility.Samples),
-				CatalogComplete:        true,
-				SubscribeComplete:      true,
+				CatalogComplete:        catalogComplete,
+				SubscribeComplete:      subscribeComplete,
+				CatalogStageComplete:   catalogStageComplete,
+				SubscribeStageComplete: subscribeStageComplete,
 				WatchToProviderSync:    summarizeConsulScale(stages.WatchToProviderSync),
 				ProviderSyncToNacosAck: summarizeConsulScale(stages.ProviderSyncToNacosAck),
 				NacosAckToCatalog:      summarizeConsulScale(stages.NacosAckToCatalog),
 				NacosAckToSubscribe:    summarizeConsulScale(stages.NacosAckToSubscribe),
 				StageSamplesComplete:   stageComplete,
 			})
-			if len(catalogVisibility.Samples) != size || len(subscribeVisibility.Samples) != size || !stageComplete {
+			if !subscribeComplete || !subscribeStageComplete || len(stages.WatchToProviderSync) != size || len(stages.ProviderSyncToNacosAck) != size {
 				report.LedgerComplete = false
 			}
 			fullEvents := recordingWorker.fullEvents() - fullBefore
@@ -477,8 +510,10 @@ func TestConsulRealScaleQualification(t *testing.T) {
 			if err := verifyClient.Unsubscribe(service, group, []string{source.ID}, oracle.Callback()); err != nil {
 				t.Fatalf("scale cleanup unsubscribe %s: %v", service, err)
 			}
-			if _, err := waitForNacosCatalogEmpty(verifyClient, service, source.ID, observeTimeout); err != nil {
-				t.Fatalf("scale cleanup catalog %s: %v", service, err)
+			if queryGate {
+				if _, err := waitForNacosCatalogEmpty(verifyClient, service, source.ID, observeTimeout); err != nil {
+					t.Fatalf("scale cleanup catalog %s: %v", service, err)
+				}
 			}
 			delete(active, service)
 			delete(subscriptions, service)
@@ -537,6 +572,19 @@ func parseScalePushConcurrency(t *testing.T, raw string) int {
 		t.Fatalf("invalid CONSUL_REAL_SCALE_PUSH_CONCURRENCY value %q", raw)
 	}
 	return n
+}
+
+func parseScaleQueryGate(t *testing.T, raw string) bool {
+	t.Helper()
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "off", "false", "0":
+		return false
+	case "on", "true", "1":
+		return true
+	default:
+		t.Fatalf("invalid CONSUL_REAL_SCALE_QUERY_GATE value %q (want on or off)", raw)
+		return false
+	}
 }
 
 func summarizeConsulScale(samples []time.Duration) consulScaleLatencySummary {

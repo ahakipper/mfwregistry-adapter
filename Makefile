@@ -188,14 +188,17 @@ test-consul-real-local:
 # freshness path. The disposable Consul fixture explicitly sets
 # limits.http_max_conns_per_client=10000; production Consul limits are not
 # changed. The observation deadline is fixed at 5s by the E2E parser. This is
-# a real-write, potentially long-running gate and is deliberately excluded
-# from test-all.
+# a real-write, potentially long-running gate. CONSUL_SCALE_QUERY_GATE is off
+# by default because the Nacos gRPC Query cache defect is tracked separately;
+# Subscribe remains the service-discovery acceptance plane. The target is
+# deliberately excluded from test-all.
 CONSUL_SCALE_TIMEOUT ?= 30m
 CONSUL_SCALE_LIST ?= 1,100,1000,10000
 CONSUL_SCALE_RUNS ?= 1
 CONSUL_SCALE_OBSERVE_TIMEOUT ?= 5s
 CONSUL_SCALE_RPC_TIMEOUT ?= 30s
 CONSUL_SCALE_PUSH_CONCURRENCY ?= 8
+CONSUL_SCALE_QUERY_GATE ?= off
 
 test-consul-real-scale:
 	CONSUL_REAL_LOCAL_TEST_TAGS='consul_real,consul_scale_real' \
@@ -206,6 +209,7 @@ test-consul-real-scale:
 	CONSUL_REAL_LOCAL_SCALE_RUNS=$(CONSUL_SCALE_RUNS) \
 	CONSUL_REAL_LOCAL_SCALE_OBSERVE_TIMEOUT=$(CONSUL_SCALE_OBSERVE_TIMEOUT) \
 	CONSUL_REAL_LOCAL_SCALE_PUSH_CONCURRENCY=$(CONSUL_SCALE_PUSH_CONCURRENCY) \
+	CONSUL_REAL_LOCAL_SCALE_QUERY_GATE=$(CONSUL_SCALE_QUERY_GATE) \
 	CONSUL_REAL_LOCAL_RPC_TIMEOUT=$(CONSUL_SCALE_RPC_TIMEOUT) \
 	CONSUL_REAL_LOCAL_TIMEOUT=$(CONSUL_SCALE_TIMEOUT) \
 	./scripts/consul-real-local.sh

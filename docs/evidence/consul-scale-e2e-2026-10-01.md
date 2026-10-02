@@ -93,6 +93,36 @@ between Consul, Provider, or Nacos write acknowledgement. They belong to the
 Nacos persistent-instance query visibility plane. The OpenAPI read is retained
 as a read-only diagnostic oracle; it is not used for Spotter writes.
 
+## Query-gate-off service-discovery run
+
+The Query gate was explicitly disabled for the service-discovery qualification:
+
+```bash
+DOCKER_CONTEXT=colima make test-consul-real-scale \
+  CONSUL_SCALE_LIST=100,1000,10000 \
+  CONSUL_SCALE_OBSERVE_TIMEOUT=5s \
+  CONSUL_SCALE_QUERY_GATE=off
+```
+
+The 100 and 1000 scales passed the Provider → Nacos write acknowledgement →
+official SDK Subscribe gate. Query/Catalog metrics were still recorded but did
+not fail the run.
+
+| Scale | Subscribe P80/P90/P99 | Watch→Provider P99 | Provider→Nacos ack P99 | Nacos ack→Subscribe P99 | Catalog samples | Result |
+| ---: | --- | ---: | ---: | ---: | ---: | --- |
+| 100 | 702.48 / 838.07 / 964.83 ms | 314.91 ms | 53.85 ms | 611.18 ms | 100/100 | PASS |
+| 1000 | 793.25 / 889.00 / 1,216.96 ms | 383.56 ms | 44.32 ms | 654.54 ms | 981/1000 | PASS (Query diagnostic only) |
+
+The 1000 Catalog query remained incomplete, with Catalog P80/P90/P99 of
+9,673.98 / 10,871.59 / 12,002.53 ms for the observed 981 samples. This does
+not affect the Subscribe service-discovery result because Query gating was
+explicitly disabled.
+
+The 10000 scale was attempted in the same run but the local single-node
+Consul agent began returning `context deadline exceeded` for ServiceRegister
+and PassTTL around instance 8,000. The run was stopped after the bounded local
+resource failure and is `NOT QUALIFIED`; no 10000 percentile is inferred.
+
 ## 10,000-instance result
 
 The 10,000-instance run was attempted with a bounded test deadline. Consul accepted the registration wave, but the complete Spotter → Nacos visibility ledger did not converge before the test deadline. The run ended as a test timeout, not a PASS, and no P80/P90/P99 values were emitted for 10,000.

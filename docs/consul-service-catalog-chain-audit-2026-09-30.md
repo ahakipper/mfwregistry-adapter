@@ -106,6 +106,14 @@ remaining root cause is therefore the Nacos persistent-instance query plane
 write acknowledgement. The exact internal Nacos server component still needs
 server-side logs/source tracing if a server bug fix is required.
 
+With the Query gate explicitly disabled, the 100/1000 service-discovery E2E
+passed the five-second Subscribe/write gate. The latest report measured
+Subscribe P99 of 964.83ms at 100 instances and 1,216.96ms at 1000 instances;
+Catalog remained diagnostic-only and returned 981/1000 at the 1000 scale. The
+10000 attempt reached the local single-node Consul registration resource limit
+and produced `context deadline exceeded` during ServiceRegister/PassTTL around
+the 8000-instance range, so it has no valid percentile result.
+
 Consul does have a server-side streaming backend for some blocking-query
 endpoints, including selected `/health/service/:service` queries, but the
 current provider watches the broad `/health/state/any` endpoint and the pinned

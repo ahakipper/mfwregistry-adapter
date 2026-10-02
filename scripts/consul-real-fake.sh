@@ -52,13 +52,13 @@ case "$tool" in
   go)
     if [[ "$*" == *'^TestConsulRealScaleQualification$'* ]]; then
       [[ "${CONSUL_REAL_SCALE_LIST:-}" == "100,1000,10000" ]] || exit 70
-      report='{"latency_boundary":"fixture","push_concurrency":8,"observation_deadline_ms":5000,"ledger_complete":true,"canonical_equality":"wire_predicate_passed","cleanup_status":"passed","residual_unknown":false,"scales":['
+      report='{"latency_boundary":"fixture","push_concurrency":8,"observation_deadline_ms":5000,"query_gate":false,"ledger_complete":true,"canonical_equality":"wire_predicate_passed","cleanup_status":"passed","residual_unknown":false,"scales":['
       first=true
       IFS=',' read -r -a scale_values <<< "${CONSUL_REAL_SCALE_LIST}"
       for scale in "${scale_values[@]}"; do
         [[ "$first" == true ]] || report="$report,"
         first=false
-        report="$report{\"instances\":$scale,\"runs\":1,\"sync_all_events\":1,\"watch_to_provider_sync\":{\"samples\":$scale,\"p80_ms\":1,\"p90_ms\":1,\"p99_ms\":1},\"provider_sync_to_nacos_ack\":{\"samples\":$scale,\"p80_ms\":1,\"p90_ms\":1,\"p99_ms\":1},\"nacos_ack_to_catalog\":{\"samples\":$scale,\"p80_ms\":1,\"p90_ms\":1,\"p99_ms\":1},\"nacos_ack_to_subscribe\":{\"samples\":$scale,\"p80_ms\":1,\"p90_ms\":1,\"p99_ms\":1},\"catalog\":{\"samples\":$scale,\"p80_ms\":1,\"p90_ms\":1,\"p99_ms\":1},\"subscribe\":{\"samples\":$scale,\"p80_ms\":1,\"p90_ms\":1,\"p99_ms\":1},\"stage_samples_complete\":true}"
+        report="$report{\"instances\":$scale,\"runs\":1,\"sync_all_events\":1,\"watch_to_provider_sync\":{\"samples\":$scale,\"p80_ms\":1,\"p90_ms\":1,\"p99_ms\":1},\"provider_sync_to_nacos_ack\":{\"samples\":$scale,\"p80_ms\":1,\"p90_ms\":1,\"p99_ms\":1},\"nacos_ack_to_catalog\":{\"samples\":$scale,\"p80_ms\":1,\"p90_ms\":1,\"p99_ms\":1},\"nacos_ack_to_subscribe\":{\"samples\":$scale,\"p80_ms\":1,\"p90_ms\":1,\"p99_ms\":1},\"catalog\":{\"samples\":$scale,\"p80_ms\":1,\"p90_ms\":1,\"p99_ms\":1},\"subscribe\":{\"samples\":$scale,\"p80_ms\":1,\"p90_ms\":1,\"p99_ms\":1},\"catalog_complete\":true,\"subscribe_complete\":true,\"catalog_stage_complete\":true,\"subscribe_stage_complete\":true,\"stage_samples_complete\":true}"
       done
       report="$report]}"
       printf '    consul_scale_real_test.go:1: CONSUL_REAL_SCALE report=%s\n' "$report"
